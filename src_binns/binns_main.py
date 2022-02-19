@@ -146,7 +146,7 @@ sample_profile_id = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_sn
 sample_profile_id = sample_profile_id['sample_profile_id']
 
 
-profile_collection = np.reshape(sample_profile_id[:, 0:10], [1000, 1])
+profile_collection = np.reshape(sample_profile_id[:, 0:50], [5000, 1])
 
 profile_range = np.arange(0, len(profile_collection))
 
@@ -208,7 +208,8 @@ for iprofile_hat in profile_range:
 		interp_soc[interp_soc <= 0] = np.nan
 		interp_start_loc = np.where(abs(wosis_layer_depth[0] - zsoi) == min(abs(wosis_layer_depth[0] - zsoi)))[0]
 		interp_end_loc = np.where(abs(wosis_layer_depth[-1] - zsoi) == min(abs(wosis_layer_depth[-1] - zsoi)))[0]
-		obs_soc_matrix[iprofile_hat, interp_start_loc[0]:(interp_end_loc[0]+1)] = interp_soc[interp_start_loc[0]:(interp_end_loc[0]+1)]
+		if interp_start_loc < 19 & interp_end_loc < 19:
+			obs_soc_matrix[iprofile_hat, interp_start_loc[0]:(interp_end_loc[0]+1)] = interp_soc[interp_start_loc[0]:(interp_end_loc[0]+1)]
 	# end if num_layers > 3:
 
 	obs_lon_lat_loc[iprofile_hat, :] = [lon_loc, lat_loc]
@@ -239,37 +240,6 @@ for iprofile_hat in profile_range:
 ########################################################
 # neural network (BINNS)
 ########################################################
-nn_training_name = 'exp_pc_binns_1'
-
-#---------------------------------------------------
-# constants for NN
-#---------------------------------------------------
-nn_loss = 'joint_loss' # 'mean_squared_error'
-nn_optimizer = 'adadelta'
-nn_batch_size = 32
-nn_epochs = 12 # 1200*2
-early_stop_patience = 1200
-nn_layer_num = [256, 512, 512, 256]
-nn_drop_ratio = [0.0]*len(nn_layer_num) #[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-nn_l2_regularizer = [0.0]*len(nn_layer_num)
-
-nn_split_ratio = 0.1
-
-use_custom_activation = 0
-nn_activation = [None]*len(nn_layer_num)
-
-if use_custom_activation == 1:
-	# define activation function
-	def custom_activation(x):
-		custom_activation = tf.keras.activations.relu(x, alpha = 0.1)
-		return custom_activation
-	
-	for ilayer in range(len(nn_layer_num)):
-		get_custom_objects().update({'custom_activation_'+str(ilayer): Activation(custom_activation)})
-		nn_activation[ilayer] = 'custom_activation_'+str(ilayer)
-else:
-	nn_activation = ['relu', 'relu', 'relu', 'relu']
-
 #---------------------------------------------------
 # env info
 #---------------------------------------------------
@@ -394,7 +364,6 @@ train_x, val_x = random_split(current_data_x, [round(current_data_y.shape[0]*0.8
 train_x = torch.tensor(current_data_x[train_x.indices], dtype = torch.float32)
 val_x = torch.tensor(current_data_x[val_x.indices], dtype = torch.float32)
 
-
 train_y, val_y = random_split(current_data_y, [round(current_data_y.shape[0]*0.8), (current_data_y.shape[0] - round(current_data_y.shape[0]*0.8))])
 train_y = torch.tensor(current_data_y[train_y.indices], dtype = torch.float32)
 val_y = torch.tensor(current_data_y[val_y.indices], dtype = torch.float32)
@@ -424,7 +393,12 @@ val_loader = DataLoader([[val_x[i], val_y[i]] for i in range(val_y.shape[0])], s
 # 
 # modeling_inefficiency.backward(retain_graph=True)
 
+
 #---------------------------------------------------
+# constants for NN
+#---------------------------------------------------
+nn_training_name = 'exp_pc_binns_1'
+
 # define the loss function                          
 #---------------------------------------------------
 def binns_loss(y_pred, y_true):
@@ -468,7 +442,7 @@ model = nn.Sequential(
 # optimizer
 optimizer = torch.optim.Adadelta(model.parameters())
 # loss
-loss = binns_loss
+fun_loss = binns_loss
 
 # training and validation loop
 num_epoch = 50
@@ -485,7 +459,7 @@ for iepoch in range(num_epoch):
 		batch_y_hat = model(batch_x)
 		
 		# 2 compute the objective function
-		obj = loss(batch_y_hat, batch_y)
+		obj = fun_loss(batch_y_hat, batch_y)
 		
 		# 3 cleaning gradients
 		model.zero_grad()
