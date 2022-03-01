@@ -146,7 +146,7 @@ sample_profile_id = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_sn
 sample_profile_id = sample_profile_id['sample_profile_id']
 
 
-profile_collection = np.reshape(sample_profile_id[:, 0:50], [5000, 1])
+profile_collection = np.reshape(sample_profile_id[:, 0:20], [2000, 1])
 
 profile_range = np.arange(0, len(profile_collection))
 
@@ -473,7 +473,7 @@ for iepoch in range(num_epoch):
 		
 		loss_record.append(obj.item())
 
-		print(f'Epoch {iepoch + 1} batch, train loss: {obj.item():.2f}')
+		print(f'{datetime.now()} Epoch {iepoch + 1} batch, train loss: {obj.item():.2f}')
 	# end for ibatch in train_loader:
 
 	print(f'Epoch {iepoch + 1}, train loss: {torch.tensor(loss_record).nanmean():.2f}')
@@ -491,10 +491,10 @@ for iepoch in range(num_epoch):
 			batch_y_hat = model(batch_x)
 			
 		# 2 compute the objective function
-		obj = loss(batch_y_hat, batch_y)
+		obj = fun_loss(batch_y_hat, batch_y)
 		
 		loss_record.append(obj.item())
-		print(f'Epoch {iepoch + 1} batch, validation loss: {obj.item():.2f}')
+		print(f'{datetime.now()}, Epoch {iepoch + 1} batch, validation loss: {obj.item():.2f}')
 	# end for ibatch in val_loader: 
 	print(f'Epoch {iepoch + 1}, validation loss: {torch.tensor(loss_record).nanmean():.2f}')
 	
