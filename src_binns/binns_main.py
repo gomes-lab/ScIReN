@@ -1,5 +1,5 @@
 import sys
-sys.path.append(r'/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/BINNS/src_binns')
+sys.path.append(r'/User/homes/ftao/Projects/BINNS/src_binns')
 
 from datetime import datetime
 from pandas import DataFrame as df
@@ -19,10 +19,19 @@ from matplotlib import pyplot as plt
 
 from fun_matrix_clm5 import fun_model_simu
 
+if torch.cuda.is_available():
+	dev = 'cuda'
+else:
+	dev = 'cpu'
+dev = 'cuda'
+device = torch.device(dev) 
+print(datetime.now(), '------------device: ', device, '------------')
+
+print(datetime.now(), '------------all packages loaded------------')
 ################################################
 # input data
 ################################################
-cesm2_case_name = 'sasu_f05_g16_checked_step4'                                                            
+cesm2_case_name = 'sasu_f05_g16_checked_step4'
 start_year = 661
 end_year = 680
 
@@ -34,8 +43,8 @@ end_id = 5000
 is_resubmit = 0
 
 # pathway
-data_dir_input = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/ENSEMBLE/INPUT_DATA/'
-data_dir_output = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/BINNS/OUTPUT_DATA/'
+data_dir_input = '/Net/Groups/BGI/people/ftao/Projects/DATAHUB/ENSEMBLE/INPUT_DATA/'
+data_dir_output = '/Net/Groups/BGI/people/ftao/Projects/DATAHUB/ENSEMBLE/OUTPUT_DATA/'
 # constants
 month_num = 12 
 soil_cpool_num = 7
@@ -150,6 +159,7 @@ profile_collection = np.reshape(sample_profile_id[:, 0:20], [2000, 1])
 
 profile_range = np.arange(0, len(profile_collection))
 
+print(datetime.now(), '------------all input data loaded------------')
 #---------------------------------------------------
 # wrap up soc data for NN
 #---------------------------------------------------
@@ -181,24 +191,27 @@ for iprofile_hat in profile_range:
 	profile_id = wosis_profile_info[iprofile, 0]
 	# find currently using profile
 	loc_profile = np.where(wosis_soc_info[:, 0] == profile_id)[0]
-	# info of the node depth of profile, and change unit from cm to m  
-	wosis_layer_depth = wosis_soc_info[loc_profile, 4]/100
-	# observed C info (gC/m3)
-	wosis_layer_obs = wosis_soc_info[loc_profile, 6]
-	# exclude nan values
-	valid_soc_loc = np.where(np.isnan(wosis_layer_obs + wosis_layer_depth) == False)
-	wosis_layer_depth = wosis_layer_depth[valid_soc_loc]
-	wosis_layer_obs = wosis_layer_obs[valid_soc_loc]
-	# valid layer number
-	num_layers = len(wosis_layer_obs)
+	
 	# find the lon and lat info of soil profile
 	lon_profile = wosis_profile_info[iprofile, 3]
 	lat_profile = wosis_profile_info[iprofile, 4]
-
+	
 	lat_loc = np.where(abs(lat_profile - lat_grid) == min(abs(lat_profile - lat_grid)))[0][0]
 	lon_loc = np.where(abs(lon_profile - lon_grid) == min(abs(lon_profile - lon_grid)))[0][0]
+	
+	# info of the node depth of profile  
+	wosis_layer_depth = wosis_soc_info[loc_profile, 4]
+	# observed C info (gC/m3)
+	wosis_layer_obs = wosis_soc_info[loc_profile, 6]
+	# exclude nan values
+	valid_soc_loc = np.where((np.isnan(wosis_layer_obs) == False) & (np.isnan(wosis_layer_depth) == False))
+	# valid layer number
+	num_layers = len(valid_soc_loc[0])
 	# interpolation
-	if num_layers > 3:
+	if num_layers > 1:
+		wosis_layer_depth = wosis_layer_depth[valid_soc_loc]/100 # convert unit from cm to m
+		wosis_layer_obs = wosis_layer_obs[valid_soc_loc]
+		
 		wosis_layer_depth = wosis_layer_depth + (np.random.rand(num_layers)-0.5)*10**(-7)
 		sort_index = np.argsort(wosis_layer_depth)
 		wosis_layer_depth = wosis_layer_depth[sort_index]
@@ -208,8 +221,17 @@ for iprofile_hat in profile_range:
 		interp_soc[interp_soc <= 0] = np.nan
 		interp_start_loc = np.where(abs(wosis_layer_depth[0] - zsoi) == min(abs(wosis_layer_depth[0] - zsoi)))[0]
 		interp_end_loc = np.where(abs(wosis_layer_depth[-1] - zsoi) == min(abs(wosis_layer_depth[-1] - zsoi)))[0]
-		if interp_start_loc < 19 & interp_end_loc < 19:
-			obs_soc_matrix[iprofile_hat, interp_start_loc[0]:(interp_end_loc[0]+1)] = interp_soc[interp_start_loc[0]:(interp_end_loc[0]+1)]
+		if (interp_start_loc < 19) & (interp_end_loc < 19):
+			# print('multilayer profile: ', iprofile_hat)
+			obs_soc_matrix[iprofile_hat, interp_start_loc[0]:interp_end_loc[0]] = interp_soc[interp_start_loc[0]:interp_end_loc[0]]
+	elif num_layers == 1:
+		wosis_layer_depth = wosis_layer_depth[valid_soc_loc]/100 # convert unit from cm to m
+		wosis_layer_obs = wosis_layer_obs[valid_soc_loc]
+		
+		closest_loc = np.where(abs(wosis_layer_depth[0] - zsoi) == min(abs(wosis_layer_depth[0] - zsoi)))[0]
+		obs_soc_matrix[iprofile_hat, closest_loc] = wosis_layer_obs[0]
+	elif num_layers == 0:
+		print('invalid profile: ', iprofile_hat)
 	# end if num_layers > 3:
 
 	obs_lon_lat_loc[iprofile_hat, :] = [lon_loc, lat_loc]
@@ -236,7 +258,7 @@ for iprofile_hat in profile_range:
 	
 # end
 
-
+print(datetime.now(), '------------soc data prepared------------')
 ########################################################
 # neural network (BINNS)
 ########################################################
@@ -320,27 +342,29 @@ env_info_scaled.index = env_info_scaled.ProfileNum
 #---------------------------------------------------
 # training data
 #---------------------------------------------------
-current_data_x = np.array(env_info_scaled.loc[profile_collection[:, 0], var4nn])
-current_data_y = np.ones((len(profile_collection), 20, 12, 13))*np.nan
+current_data_x = np.ones((len(profile_collection), 60, 12, 13))*np.nan
+current_data_x[:, 0:60, 0, 0] = np.array(env_info_scaled.loc[profile_collection[:, 0], var4nn])
+current_data_x[:, 0:12, 0, 1] = model_force_input_vector_cwd
+current_data_x[:, 0:12, 0, 2] = model_force_input_vector_litter1
+current_data_x[:, 0:12, 0, 3] = model_force_input_vector_litter2
+current_data_x[:, 0:12, 0, 4] = model_force_input_vector_litter3
+current_data_x[:, 0:12, 0, 5] = model_force_altmax_lastyear_profile
+current_data_x[:, 0:12, 0, 6] = model_force_altmax_current_profile
+current_data_x[:, 0:12, 0, 7] = model_force_nbedrock
 
-current_data_y[:, 0:soil_decom_num, 0, 0] = obs_soc_matrix
-
-current_data_y[:, 0:12, 0, 1] = model_force_input_vector_cwd
-current_data_y[:, 0:12, 0, 2] = model_force_input_vector_litter1
-current_data_y[:, 0:12, 0, 3] = model_force_input_vector_litter2
-current_data_y[:, 0:12, 0, 4] = model_force_input_vector_litter3
-current_data_y[:, 0:12, 0, 5] = model_force_altmax_lastyear_profile
-current_data_y[:, 0:12, 0, 6] = model_force_altmax_current_profile
-current_data_y[:, 0:12, 0, 7] = model_force_nbedrock
-
-current_data_y[:, 0:20, 0:12, 8] = model_force_xio
-current_data_y[:, 0:20, 0:12, 9] = model_force_xin
-current_data_y[:, 0:20, 0:12, 10] = model_force_sand_vector
-current_data_y[:, 0:20, 0:12, 11] = model_force_soil_temp_profile
-current_data_y[:, 0:20, 0:12, 12] = model_force_soil_water_profile
+current_data_x[:, 0:20, 0:12, 8] = model_force_xio
+current_data_x[:, 0:20, 0:12, 9] = model_force_xin
+current_data_x[:, 0:20, 0:12, 10] = model_force_sand_vector
+current_data_x[:, 0:20, 0:12, 11] = model_force_soil_temp_profile
+current_data_x[:, 0:20, 0:12, 12] = model_force_soil_water_profile
 
 
-nan_loc = np.sum(current_data_x, axis = 1) + \
+current_data_y = np.ones((len(profile_collection), 20))*np.nan
+current_data_y[:, 0:soil_decom_num] = obs_soc_matrix
+
+
+nan_loc = np.nanmean(current_data_y, axis = 1) + \
+			np.sum(current_data_x[:, 0:60, 0, 0], axis = 1) + \
 			np.sum(model_force_input_vector_cwd, axis = 1) + \
 			np.sum(model_force_input_vector_litter1, axis = 1) + \
 			np.sum(model_force_input_vector_litter2, axis = 1) + \
@@ -356,17 +380,17 @@ nan_loc = np.sum(current_data_x, axis = 1) + \
 
 valid_profile_loc = np.where(np.isnan(nan_loc) == False)[0]
 
-current_data_x = current_data_x[valid_profile_loc, :]
-current_data_y = current_data_y[valid_profile_loc, :, :, :]
+current_data_y = current_data_y[valid_profile_loc, :]
+current_data_x = current_data_x[valid_profile_loc, :, :, :]
 
 # train and validation split
-train_x, val_x = random_split(current_data_x, [round(current_data_y.shape[0]*0.8), (current_data_y.shape[0] - round(current_data_y.shape[0]*0.8))])
-train_x = torch.tensor(current_data_x[train_x.indices], dtype = torch.float32)
-val_x = torch.tensor(current_data_x[val_x.indices], dtype = torch.float32)
-
-train_y, val_y = random_split(current_data_y, [round(current_data_y.shape[0]*0.8), (current_data_y.shape[0] - round(current_data_y.shape[0]*0.8))])
+train_y, val_y = random_split(current_data_y, [round(current_data_x.shape[0]*0.8), (current_data_x.shape[0] - round(current_data_x.shape[0]*0.8))])
 train_y = torch.tensor(current_data_y[train_y.indices], dtype = torch.float32)
 val_y = torch.tensor(current_data_y[val_y.indices], dtype = torch.float32)
+
+train_x, val_x = random_split(current_data_x, [round(current_data_x.shape[0]*0.8), (current_data_x.shape[0] - round(current_data_x.shape[0]*0.8))])
+train_x = torch.tensor(current_data_x[train_x.indices], dtype = torch.float32)
+val_x = torch.tensor(current_data_x[val_x.indices], dtype = torch.float32)
 
 # data loader
 train_loader = DataLoader([[train_x[i], train_y[i]] for i in range(train_y.shape[0])], shuffle = True, batch_size = 32)
@@ -393,7 +417,7 @@ val_loader = DataLoader([[val_x[i], val_y[i]] for i in range(val_y.shape[0])], s
 # 
 # modeling_inefficiency.backward(retain_graph=True)
 
-
+print(datetime.now(), '------------nn data prepared------------')
 #---------------------------------------------------
 # constants for NN
 #---------------------------------------------------
@@ -403,9 +427,9 @@ nn_training_name = 'exp_pc_binns_1'
 #---------------------------------------------------
 def binns_loss(y_pred, y_true):
 	# process modeling
-	soc_simu = fun_model_simu(y_pred, y_true)
+	soc_simu = y_pred
 	# observations
-	soc_true = y_true[:, :, 0, 0]
+	soc_true = y_true
 	# flatten simulation
 	soc_simu_vector = torch.reshape(soc_simu, [1, -1])
 	soc_true_vector = torch.reshape(soc_true, [1, -1])
@@ -414,7 +438,7 @@ def binns_loss(y_pred, y_true):
 	soc_simu_vector = soc_simu_vector[valid_loc]
 	soc_true_vector = soc_true_vector[valid_loc]
 	# modeling inefficiency
-	modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/torch.sum((soc_true_vector - torch.mean(soc_true_vector))**2)
+	modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/len(soc_true_vector)# /torch.sum((soc_true_vector - torch.mean(soc_true_vector))**2)
 	
 	# print(modeling_inefficiency)
 	
@@ -426,23 +450,49 @@ def binns_loss(y_pred, y_true):
 # NN by PyTorch
 #---------------------------------------------------
 # define model
-model = nn.Sequential(
-	nn.Linear(len(var4nn), 256),
-	nn.ReLU(),
-	nn.Linear(256, 512),
-	nn.ReLU(),
-	nn.Linear(512, 512),
-	nn.ReLU(),
-	nn.Linear(512, 256),
-	nn.ReLU(),
-	nn.Linear(256, 21),
-	nn.Hardtanh()
-)
+class nn_model(nn.Module):
+	def __init__(self):
+		super().__init__()
+		self.l1 = nn.Linear(len(var4nn), 256)
+		self.l2 = nn.Linear(256, 512)
+		self.l3 = nn.Linear(512, 512)
+		self.l4 = nn.Linear(512, 256)
+		self.l5 = nn.Linear(256, 21)
+	def forward(self, input_var):
+		predictor = input_var[:, :, 0, 0]
+		forcing = input_var[:, :, :, :]
+		h1 = nn.functional.relu(self.l1(predictor))
+		h2 = nn.functional.relu(self.l2(h1))
+		h3 = nn.functional.relu(self.l3(h2))
+		h4 = nn.functional.relu(self.l4(h3))
+		h5 = torch.sigmoid(self.l5(h4)) # hardtanh(self.l5(h4))
+		simu_soc = fun_model_simu(h5, forcing)
+		return simu_soc
+
+model = nn_model().to(device)
+
+
+# nn_model = nn.Sequential(
+#	nn.Linear(len(var4nn), 256),
+#	nn.ReLU(),
+#	nn.Linear(256, 512),
+#	nn.ReLU(),
+#	nn.Linear(512, 512),
+#	nn.ReLU(),
+#	nn.Linear(512, 256),
+#	nn.ReLU(),
+#	nn.Linear(256, 21),
+#	nn.Hardtanh()
+#)
+#
+#model = nn_model.to(device)
 
 # optimizer
 optimizer = torch.optim.Adadelta(model.parameters())
 # loss
 fun_loss = binns_loss
+
+print(datetime.now(), '------------neural network set, training started------------')
 
 # training and validation loop
 num_epoch = 50
@@ -452,15 +502,18 @@ for iepoch in range(num_epoch):
 	for ibatch in train_loader:
 		batch_x, batch_y = ibatch
 		
-		batch_size = batch_x.size(0)
-		batch_x = batch_x.view(batch_size, -1)
-		
+		# batch_size = batch_x.size(0)
+		# batch_x = batch_x.view(batch_size, -1).to(device)
+		batch_x = batch_x.to(device)
+		batch_y = batch_y.to(device)
 		# 1 forward
 		batch_y_hat = model(batch_x)
 		
 		# 2 compute the objective function
 		obj = fun_loss(batch_y_hat, batch_y)
 		
+		# print(batch_y_hat)
+		print(f'{datetime.now()} Epoch {iepoch + 1} batch, train loss: {obj.item():.2f}')
 		# 3 cleaning gradients
 		model.zero_grad()
 		
@@ -472,20 +525,20 @@ for iepoch in range(num_epoch):
 		optimizer.step()
 		
 		loss_record.append(obj.item())
-
-		print(f'{datetime.now()} Epoch {iepoch + 1} batch, train loss: {obj.item():.2f}')
+		
 	# end for ibatch in train_loader:
 
-	print(f'Epoch {iepoch + 1}, train loss: {torch.tensor(loss_record).nanmean():.2f}')
+	print(f'Epoch {iepoch + 1}, train loss: {torch.tensor(loss_record).mean():.2f}')
 	
 	# validation
 	loss_record = list()
 	for ibatch in val_loader:
 		batch_x, batch_y = ibatch
 		
-		batch_size = batch_x.size(0)
-		batch_x = batch_x.view(batch_size, -1)
-		
+		# batch_size = batch_x.size(0)
+		# batch_x = batch_x.view(batch_size, -1).to(device)
+		batch_x = batch_x.to(device)
+		batch_y = batch_y.to(device)
 		# 1 forward
 		with torch.no_grad():
 			batch_y_hat = model(batch_x)
@@ -496,7 +549,7 @@ for iepoch in range(num_epoch):
 		loss_record.append(obj.item())
 		print(f'{datetime.now()}, Epoch {iepoch + 1} batch, validation loss: {obj.item():.2f}')
 	# end for ibatch in val_loader: 
-	print(f'Epoch {iepoch + 1}, validation loss: {torch.tensor(loss_record).nanmean():.2f}')
+	print(f'Epoch {iepoch + 1}, validation loss: {torch.tensor(loss_record).mean():.2f}')
 	
 
 
