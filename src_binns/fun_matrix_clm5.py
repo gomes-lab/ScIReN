@@ -16,12 +16,12 @@ def fun_model_simu(tensor_para, tensor_frocing_steady_state):
 		profile_force_steady_state = frocing_steady_state[iprofile, :, :, :]
 		
 		if torch.isnan(torch.sum(profile_para)) == False and \
-			torch.isnan(torch.sum(profile_force_steady_state[0:12, 0, 2:9])) == False and \
-			torch.isnan(torch.sum(profile_force_steady_state[0:20, 0:12, 9:14])) == False:
+			torch.isnan(torch.sum(profile_force_steady_state[0:12, 0, 1:8])) == False and \
+			torch.isnan(torch.sum(profile_force_steady_state[0:20, 0:12, 8:13])) == False:
 			
 			# print(profile_para)
 			profile_simu_soc = fun_matrix_clm5(profile_para, profile_force_steady_state)
-			simu_ouput[iprofile, 0:len(profile_simu_soc)] = profile_simu_soc
+			simu_ouput[iprofile, :] = profile_simu_soc
 		# end if 
 	#end for iprofile
 	return simu_ouput
@@ -276,25 +276,25 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	matrix_in[80:140, 0] = 0
 	
 	# analytical solution of soc pools
-	# try:
+	try:
 		# torch 1.7
 		# cpool_steady_state = torch.solve((-matrix_in), (torch.matmul(a_ma, kk_ma)-tri_ma)).solution
 		# torch 1.11
-		# cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma)-tri_ma), (-matrix_in))
-	# except:
+		cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma)-tri_ma), (-matrix_in))
+	except:
 		# cpool_steady_state = torch.linalg.lstsq((torch.matmul(a_ma, kk_ma)-tri_ma), (-matrix_in)).solution 
-		# cpool_steady_state = (torch.ones([140, 1])*(-9999.)).to(device)*torch.sum(para)/torch.sum(para) 
+		cpool_steady_state = (torch.ones([140, 1])*(-9999.)).to(device)*torch.sum(para)/torch.sum(para)
 	# end try
-
-	cpool_steady_state = (torch.ones([140, 1])*(-9999.)).to(device)*torch.sum(para)/torch.sum(para) 
+	# cpool_steady_state = (torch.ones([140, 1])*(-9999.)).to(device)*torch.sum(para)/torch.sum(para) 
 	# end try
 	soc_layer = torch.cat((cpool_steady_state[80:100, :], cpool_steady_state[100:120, :], cpool_steady_state[120:140, :]), dim = 1)
 	soc_layer = torch.sum(soc_layer, axis = 1) # unit gC/m3
 	
-	if soc_layer[-1] > soc_layer[0]:
-		soc_layer =  (torch.ones([20, 1])*(-9999.*3))
+	
 	# if soc_layer[-1] > soc_layer[0]:
-
+	# 	soc_layer =  (torch.ones(20)*(-9999.*3))
+	# # end if soc_layer[-1] > soc_layer[0]:
+	
 	outcome = soc_layer
 	return outcome
 	

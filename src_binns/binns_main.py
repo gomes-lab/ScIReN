@@ -23,7 +23,7 @@ if torch.cuda.is_available():
 	dev = 'cuda'
 else:
 	dev = 'cpu'
-dev = 'cuda'
+dev = 'cpu'
 device = torch.device(dev) 
 print(datetime.now(), '------------device: ', device, '------------')
 
@@ -43,8 +43,8 @@ end_id = 5000
 is_resubmit = 0
 
 # pathway
-data_dir_input = '/Net/Groups/BGI/people/ftao/Projects/DATAHUB/ENSEMBLE/INPUT_DATA/'
-data_dir_output = '/Net/Groups/BGI/people/ftao/Projects/DATAHUB/ENSEMBLE/OUTPUT_DATA/'
+data_dir_input = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/ENSEMBLE/INPUT_DATA/'
+data_dir_output = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/ENSEMBLE/INPUT_DATA/'
 # constants
 month_num = 12 
 soil_cpool_num = 7
@@ -54,8 +54,6 @@ soil_decom_num = 20
 # wosis data
 #-------------------------------
 # load wosis data
-env_info = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_env_info.mat')
-env_info = env_info['EnvInfo'] 
 
 # layer_info: "profile_id, date, upper_depth, lower_depth, node_depth, soc_layer_weight, soc_stock, bulk_denstiy, is_pedo"
 nc_data_middle = ncread.Dataset(data_dir_input + 'wosis_2019_snap_shot/soc_profile_wosis_2019_snapshot_hugelius_mishra.nc') # wosis profile info
@@ -153,7 +151,8 @@ del cesm2_simu_input_vector_litter1, cesm2_simu_input_vector_litter2, cesm2_simu
 # representative points 
 sample_profile_id = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_representative_profiles.mat')
 sample_profile_id = sample_profile_id['sample_profile_id']
-
+# convert the number to be starting from 0 ni python world
+sample_profile_id = sample_profile_id - 1
 
 profile_collection = np.reshape(sample_profile_id[:, 0:20], [2000, 1])
 
@@ -266,8 +265,18 @@ print(datetime.now(), '------------soc data prepared------------')
 # env info
 #---------------------------------------------------
 # environmental info of soil profiles
-env_info_scaled = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_env_info_' + model_name  + '_' + time_domain + '_maxmin_scaled.mat')
-env_info_scaled  = df(env_info_scaled['profile_env_info'])
+env_info = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_env_info.mat')
+
+env_info = env_info['EnvInfo']
+
+col_max_min = loadmat(data_dir_input + 'data4nn/world_grid_envinfo_present_cesm2_clm5_cen_vr_v2_whole_time_col_max_min.mat')
+col_max_min = col_max_min['col_max_min']
+for ivar in np.arange(3, len(col_max_min[:, 0])):
+	env_info[:, ivar] = (env_info[:, ivar] - col_max_min[ivar, 0])/(col_max_min[ivar, 1] - col_max_min[ivar, 0])
+	env_info[(env_info[:, ivar] > 1), ivar] = 1
+	env_info[(env_info[:, ivar] < 0), ivar] = 0
+
+env_info = df(env_info)
 
 env_info_names = ['ProfileNum', 'ProfileID', 'LayerNum', 'Lon', 'Lat', 'Date', \
 'Rmean', 'Rmax', 'Rmin', \
@@ -300,6 +309,9 @@ env_info_names = ['ProfileNum', 'ProfileID', 'LayerNum', 'Lon', 'Lat', 'Date', \
 'cesm2_vegc', \
 'nbedrock', \
 'R_Squared']
+
+env_info.columns = env_info_names
+
 
 # variables used in training the NN
 var4nn = ['Lon', 'Lat', \
@@ -335,15 +347,12 @@ var4nn = ['Lon', 'Lat', \
 'nbedrock']
 
 
-env_info_scaled.columns = env_info_names
-env_info_scaled.index = env_info_scaled.ProfileNum
-
 
 #---------------------------------------------------
 # training data
 #---------------------------------------------------
 current_data_x = np.ones((len(profile_collection), 60, 12, 13))*np.nan
-current_data_x[:, 0:60, 0, 0] = np.array(env_info_scaled.loc[profile_collection[:, 0], var4nn])
+current_data_x[:, 0:60, 0, 0] = np.array(env_info.loc[profile_collection[:, 0], var4nn])
 current_data_x[:, 0:12, 0, 1] = model_force_input_vector_cwd
 current_data_x[:, 0:12, 0, 2] = model_force_input_vector_litter1
 current_data_x[:, 0:12, 0, 3] = model_force_input_vector_litter2
@@ -438,7 +447,8 @@ def binns_loss(y_pred, y_true):
 	soc_simu_vector = soc_simu_vector[valid_loc]
 	soc_true_vector = soc_true_vector[valid_loc]
 	# modeling inefficiency
-	modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/len(soc_true_vector)# /torch.sum((soc_true_vector - torch.mean(soc_true_vector))**2)
+	modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/torch.sum((soc_true_vector - torch.mean(soc_true_vector))**2)
+	# modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/len(soc_true_vector) 
 	
 	# print(modeling_inefficiency)
 	
@@ -499,9 +509,10 @@ num_epoch = 50
 for iepoch in range(num_epoch):
 	# training
 	loss_record = list()
-	for ibatch in train_loader:
-		batch_x, batch_y = ibatch
-		
+	ibatch = 0
+	for batch_info in train_loader:
+		batch_x, batch_y = batch_info
+		ibatch = ibatch + 1
 		# batch_size = batch_x.size(0)
 		# batch_x = batch_x.view(batch_size, -1).to(device)
 		batch_x = batch_x.to(device)
@@ -513,7 +524,7 @@ for iepoch in range(num_epoch):
 		obj = fun_loss(batch_y_hat, batch_y)
 		
 		# print(batch_y_hat)
-		print(f'{datetime.now()} Epoch {iepoch + 1} batch, train loss: {obj.item():.2f}')
+		print(f'{datetime.now()} Epoch {iepoch + 1} batch {ibatch}, train loss: {obj.item():.2f}')
 		# 3 cleaning gradients
 		model.zero_grad()
 		
@@ -526,15 +537,16 @@ for iepoch in range(num_epoch):
 		
 		loss_record.append(obj.item())
 		
-	# end for ibatch in train_loader:
+	# end for batch_info in train_loader:
 
 	print(f'Epoch {iepoch + 1}, train loss: {torch.tensor(loss_record).mean():.2f}')
 	
 	# validation
 	loss_record = list()
-	for ibatch in val_loader:
-		batch_x, batch_y = ibatch
-		
+	ibatch = 0
+	for batch_info in val_loader:
+		batch_x, batch_y = batch_info
+		ibatch = ibatch + 1
 		# batch_size = batch_x.size(0)
 		# batch_x = batch_x.view(batch_size, -1).to(device)
 		batch_x = batch_x.to(device)
@@ -547,8 +559,8 @@ for iepoch in range(num_epoch):
 		obj = fun_loss(batch_y_hat, batch_y)
 		
 		loss_record.append(obj.item())
-		print(f'{datetime.now()}, Epoch {iepoch + 1} batch, validation loss: {obj.item():.2f}')
-	# end for ibatch in val_loader: 
+		print(f'{datetime.now()}, Epoch {iepoch + 1} batch {ibatch}, validation loss: {obj.item():.2f}')
+	# end for batch_info in val_loader: 
 	print(f'Epoch {iepoch + 1}, validation loss: {torch.tensor(loss_record).mean():.2f}')
 	
 
