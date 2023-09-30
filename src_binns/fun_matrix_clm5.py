@@ -1,27 +1,71 @@
 import numpy as np
 import torch
 
-def fun_model_simu(tensor_para, tensor_frocing_steady_state):
+def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_depth):
 	device = tensor_para.device
 	# convert tensor to numpy
 	para = tensor_para
 	# para = (tensor_para - (-1)) /(1 - (-1)) # conversion from Hardttanh [-1, 1] to [0, 1]
 	frocing_steady_state = tensor_frocing_steady_state 
+	obs_layer_depth = tensor_obs_layer_depth
+
+	# depth of the node                                                   
+	zsoi = torch.tensor([1.000000000000000E-002, 4.000000000000000E-002, 9.000000000000000E-002, \
+		0.160000000000000, 0.260000000000000, 0.400000000000000, \
+		0.580000000000000, 0.800000000000000, 1.06000000000000, \
+		1.36000000000000, 1.70000000000000, 2.08000000000000, \
+		2.50000000000000, 2.99000000000000, 3.58000000000000, \
+		4.27000000000000, 5.06000000000000, 5.95000000000000, \
+		6.94000000000000, 8.03000000000000, 9.79500000000000, \
+		13.3277669529664, 19.4831291701244, 28.8707244343160, \
+		41.9984368640029]).to(device)
+	n_soil_layer = 20
+
 	# final ouputs of simulation
 	profile_num = para.shape[0]
-	simu_ouput = (torch.ones((profile_num, 20))*np.nan).to(device)
+	simu_ouput = (torch.ones((profile_num, 200))*np.nan).to(device)
 	# calculate soc solution for each profile
 	for iprofile in range(0, profile_num):
 		profile_para = para[iprofile, :]
 		profile_force_steady_state = frocing_steady_state[iprofile, :, :, :]
-		
+		profile_obs_layer_depth = obs_layer_depth[iprofile, :]
+		valid_layer_loc = torch.where(torch.isnan(profile_obs_layer_depth) == False)[0]
+
 		if torch.isnan(torch.sum(profile_para)) == False and \
 			torch.isnan(torch.sum(profile_force_steady_state[0:12, 0, 1:8])) == False and \
 			torch.isnan(torch.sum(profile_force_steady_state[0:20, 0:12, 8:13])) == False:
 			
 			# print(profile_para)
+			# model simulation
 			profile_simu_soc = fun_matrix_clm5(profile_para, profile_force_steady_state)
-			simu_ouput[iprofile, :] = profile_simu_soc
+			
+			for ilayer in range(0, len(valid_layer_loc)):
+				layer_depth = profile_obs_layer_depth[valid_layer_loc[ilayer]]
+				depth_diff = zsoi[0:n_soil_layer] - layer_depth
+				if len(torch.where(depth_diff == 0)[0]) == 0:
+					if depth_diff[0] > 0:
+						node_depth_upper_loc = 0
+						node_depth_lower_loc = 0
+					elif depth_diff[-1] < 0:
+						node_depth_upper_loc = n_soil_layer - 1
+						node_depth_lower_loc = n_soil_layer - 1
+					else:
+						node_depth_upper_loc = torch.where(depth_diff[:-1]*depth_diff[1:]<0)[0]
+						node_depth_lower_loc = node_depth_upper_loc + 1
+					# end if depth_diff[0] > 0:
+				else:
+					node_depth_upper_loc = torch.where(depth_diff == 0)
+					node_depth_lower_loc = node_depth_upper_loc
+				#end if len(torch.where(depth_diff == 0)[0]) == 0:
+				if node_depth_lower_loc == node_depth_upper_loc:
+					simu_ouput[iprofile, valid_layer_loc[ilayer]] = profile_simu_soc[node_depth_lower_loc]
+				else:
+					simu_ouput[iprofile, valid_layer_loc[ilayer]] = \
+					profile_simu_soc[node_depth_lower_loc] \
+					+ (profile_simu_soc[node_depth_upper_loc] - profile_simu_soc[node_depth_lower_loc]) \
+					/(zsoi[node_depth_upper_loc] - zsoi[node_depth_lower_loc]) \
+					*(layer_depth - zsoi[node_depth_lower_loc])
+			# end for
 		# end if 
 	#end for iprofile
 	return simu_ouput

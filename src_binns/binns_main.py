@@ -162,7 +162,9 @@ print(datetime.now(), '------------all input data loaded------------')
 #---------------------------------------------------
 # wrap up soc data for NN
 #---------------------------------------------------
-obs_soc_matrix = np.ones([len(profile_collection), soil_decom_num])*np.nan
+obs_soc_matrix = np.ones([len(profile_collection), 200])*np.nan
+obs_depth_matrix = np.ones([len(profile_collection), 200])*np.nan
+
 obs_lon_lat_loc = np.ones([len(profile_collection), 2])*np.nan
 
 model_force_input_vector_cwd = np.ones([len(profile_collection), month_num])*np.nan
@@ -206,32 +208,41 @@ for iprofile_hat in profile_range:
 	valid_soc_loc = np.where((np.isnan(wosis_layer_obs) == False) & (np.isnan(wosis_layer_depth) == False))
 	# valid layer number
 	num_layers = len(valid_soc_loc[0])
+	
+	if num_layers > 0:
+		wosis_layer_depth = wosis_layer_depth[valid_soc_loc]/100 # convert unit from cm to m
+		wosis_layer_obs = wosis_layer_obs[valid_soc_loc]
+		
+		obs_depth_matrix[iprofile_hat, 0:num_layers] = wosis_layer_depth
+		obs_soc_matrix[iprofile_hat, 0:num_layers] = wosis_layer_obs
+	# end if num_layers > 0:
+	
 	# interpolation
-	if num_layers > 1:
-		wosis_layer_depth = wosis_layer_depth[valid_soc_loc]/100 # convert unit from cm to m
-		wosis_layer_obs = wosis_layer_obs[valid_soc_loc]
-		
-		wosis_layer_depth = wosis_layer_depth + (np.random.rand(num_layers)-0.5)*10**(-7)
-		sort_index = np.argsort(wosis_layer_depth)
-		wosis_layer_depth = wosis_layer_depth[sort_index]
-		wosis_layer_obs = wosis_layer_obs[sort_index]
-		
-		interp_soc = pchip_interpolate(wosis_layer_depth, wosis_layer_obs, zsoi)
-		interp_soc[interp_soc <= 0] = np.nan
-		interp_start_loc = np.where(abs(wosis_layer_depth[0] - zsoi) == min(abs(wosis_layer_depth[0] - zsoi)))[0]
-		interp_end_loc = np.where(abs(wosis_layer_depth[-1] - zsoi) == min(abs(wosis_layer_depth[-1] - zsoi)))[0]
-		if (interp_start_loc < 19) & (interp_end_loc < 19):
-			# print('multilayer profile: ', iprofile_hat)
-			obs_soc_matrix[iprofile_hat, interp_start_loc[0]:interp_end_loc[0]] = interp_soc[interp_start_loc[0]:interp_end_loc[0]]
-	elif num_layers == 1:
-		wosis_layer_depth = wosis_layer_depth[valid_soc_loc]/100 # convert unit from cm to m
-		wosis_layer_obs = wosis_layer_obs[valid_soc_loc]
-		
-		closest_loc = np.where(abs(wosis_layer_depth[0] - zsoi) == min(abs(wosis_layer_depth[0] - zsoi)))[0]
-		obs_soc_matrix[iprofile_hat, closest_loc] = wosis_layer_obs[0]
-	elif num_layers == 0:
-		print('invalid profile: ', iprofile_hat)
-	# end if num_layers > 3:
+	# if num_layers > 1:
+	# 	wosis_layer_depth = wosis_layer_depth[valid_soc_loc]/100 # convert unit from cm to m
+	# 	wosis_layer_obs = wosis_layer_obs[valid_soc_loc]
+	# 	
+	# 	wosis_layer_depth = wosis_layer_depth + (np.random.rand(num_layers)-0.5)*10**(-7)
+	# 	sort_index = np.argsort(wosis_layer_depth)
+	# 	wosis_layer_depth = wosis_layer_depth[sort_index]
+	# 	wosis_layer_obs = wosis_layer_obs[sort_index]
+	# 	
+	# 	interp_soc = pchip_interpolate(wosis_layer_depth, wosis_layer_obs, zsoi)
+	# 	interp_soc[interp_soc <= 0] = np.nan
+	# 	interp_start_loc = np.where(abs(wosis_layer_depth[0] - zsoi) == min(abs(wosis_layer_depth[0] - zsoi)))[0]
+	# 	interp_end_loc = np.where(abs(wosis_layer_depth[-1] - zsoi) == min(abs(wosis_layer_depth[-1] - zsoi)))[0]
+	# 	if (interp_start_loc < 19) & (interp_end_loc < 19):
+	# 		# print('multilayer profile: ', iprofile_hat)
+	# 		obs_soc_matrix[iprofile_hat, interp_start_loc[0]:interp_end_loc[0]] = interp_soc[interp_start_loc[0]:interp_end_loc[0]]
+	# elif num_layers == 1:
+	# 	wosis_layer_depth = wosis_layer_depth[valid_soc_loc]/100 # convert unit from cm to m
+	# 	wosis_layer_obs = wosis_layer_obs[valid_soc_loc]
+	# 	
+	# 	closest_loc = np.where(abs(wosis_layer_depth[0] - zsoi) == min(abs(wosis_layer_depth[0] - zsoi)))[0]
+	# 	obs_soc_matrix[iprofile_hat, closest_loc] = wosis_layer_obs[0]
+	# elif num_layers == 0:
+	# 	print('invalid profile: ', iprofile_hat)
+	# # end if num_layers > 3:
 
 	obs_lon_lat_loc[iprofile_hat, :] = [lon_loc, lat_loc]
 	
@@ -262,6 +273,7 @@ print(datetime.now(), '------------soc data prepared------------')
 # neural network (BINNS)
 ########################################################
 batch_size = 32
+nn_split_ratio = 0.2
 #---------------------------------------------------
 # env info
 #---------------------------------------------------
@@ -369,9 +381,8 @@ current_data_x[:, 0:20, 0:12, 11] = model_force_soil_temp_profile
 current_data_x[:, 0:20, 0:12, 12] = model_force_soil_water_profile
 
 
-current_data_y = np.ones((len(profile_collection), 20))*np.nan
-current_data_y[:, 0:soil_decom_num] = obs_soc_matrix
-
+current_data_y = obs_soc_matrix
+current_data_z = obs_depth_matrix
 
 nan_loc = np.nanmean(current_data_y, axis = 1) + \
 			np.sum(current_data_x[:, 0:60, 0, 0], axis = 1) + \
@@ -391,21 +402,34 @@ nan_loc = np.nanmean(current_data_y, axis = 1) + \
 valid_profile_loc = np.where(np.isnan(nan_loc) == False)[0]
 
 current_data_y = current_data_y[valid_profile_loc, :]
+current_data_z = current_data_z[valid_profile_loc, :]
 current_data_x = current_data_x[valid_profile_loc, :, :, :]
 
 # train and validation split
-train_y, val_y = random_split(current_data_y, [round(current_data_x.shape[0]*0.8), (current_data_x.shape[0] - round(current_data_x.shape[0]*0.8))])
-train_y = torch.tensor(current_data_y[train_y.indices], dtype = torch.float32)
-val_y = torch.tensor(current_data_y[val_y.indices], dtype = torch.float32)
+train_loc = np.random.choice(np.arange(0, len(current_data_x[:, 0])), size = round((1-nn_split_ratio)*len(current_data_x[:, 0])), replace = False)
+val_loc = np.setdiff1d(np.arange(0, len(current_data_x[:, 0])), train_loc)
 
-train_x, val_x = random_split(current_data_x, [round(current_data_x.shape[0]*0.8), (current_data_x.shape[0] - round(current_data_x.shape[0]*0.8))])
-train_x = torch.tensor(current_data_x[train_x.indices], dtype = torch.float32)
-val_x = torch.tensor(current_data_x[val_x.indices], dtype = torch.float32)
+train_y = torch.tensor(current_data_y[train_loc, :], dtype = torch.float32)
+val_y = torch.tensor(current_data_y[val_loc, :], dtype = torch.float32)
+
+train_z = torch.tensor(current_data_z[train_loc, :], dtype = torch.float32)
+val_z = torch.tensor(current_data_z[val_loc, :], dtype = torch.float32)
+
+train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype = torch.float32)
+val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype = torch.float32)
+
+# train_y, val_y = random_split(current_data_y, [round(current_data_x.shape[0]*0.8), (current_data_x.shape[0] - round(current_data_x.shape[0]*0.8))], generator=torch.Generator().manual_seed(42))
+# train_y = torch.tensor(current_data_y[train_y.indices], dtype = torch.float32)
+# val_y = torch.tensor(current_data_y[val_y.indices], dtype = torch.float32)
+
+# train_x, val_x = random_split(current_data_x, [round(current_data_x.shape[0]*0.8), (current_data_x.shape[0] - round(current_data_x.shape[0]*0.8))], generator=torch.Generator().manual_seed(42))
+# train_x = torch.tensor(current_data_x[train_x.indices], dtype = torch.float32)
+# val_x = torch.tensor(current_data_x[val_x.indices], dtype = torch.float32)
 
 # data loader
-train_loader = DataLoader([[train_x[i], train_y[i]] for i in range(train_y.shape[0])], shuffle = True, batch_size = 32)
+train_loader = DataLoader([[train_x[i], train_y[i], train_z[i]] for i in range(train_y.shape[0])], shuffle = True, batch_size = 32)
 
-val_loader = DataLoader([[val_x[i], val_y[i]] for i in range(val_y.shape[0])], shuffle = True, batch_size = batch_size)
+val_loader = DataLoader([[val_x[i], val_y[i], val_z[i]] for i in range(val_y.shape[0])], shuffle = True, batch_size = batch_size)
 
 # test
 # torch.autograd.set_detect_anomaly(True)
@@ -469,15 +493,18 @@ class nn_model(nn.Module):
 		self.l3 = nn.Linear(512, 512)
 		self.l4 = nn.Linear(512, 256)
 		self.l5 = nn.Linear(256, 21)
-	def forward(self, input_var):
+	def forward(self, input_var, wosis_depth):
 		predictor = input_var[:, :, 0, 0]
 		forcing = input_var[:, :, :, :]
+		obs_depth = wosis_depth
+		# hidden layers
 		h1 = nn.functional.relu(self.l1(predictor))
 		h2 = nn.functional.relu(self.l2(h1))
 		h3 = nn.functional.relu(self.l3(h2))
 		h4 = nn.functional.relu(self.l4(h3))
 		h5 = torch.sigmoid(self.l5(h4)) # hardtanh(self.l5(h4))
-		simu_soc = fun_model_simu(h5, forcing)
+		# biogeochemical model
+		simu_soc = fun_model_simu(h5, forcing, obs_depth)
 		return simu_soc
 
 model = nn_model().to(device)
@@ -515,14 +542,14 @@ for iepoch in range(num_epoch):
 	loss_record_train = list()
 	ibatch = 0
 	for batch_info in train_loader:
-		batch_x, batch_y = batch_info
+		batch_x, batch_y, batch_z = batch_info
 		ibatch = ibatch + 1
 		# batch_size = batch_x.size(0)
 		# batch_x = batch_x.view(batch_size, -1).to(device)
 		batch_x = batch_x.to(device)
 		batch_y = batch_y.to(device)
 		# 1 forward
-		batch_y_hat = model(batch_x)
+		batch_y_hat = model(batch_x, batch_z)
 		
 		# 2 compute the objective function
 		obj = fun_loss(batch_y_hat, batch_y)
@@ -550,7 +577,7 @@ for iepoch in range(num_epoch):
 	loss_record_val = list()
 	ibatch = 0
 	for batch_info in val_loader:
-		batch_x, batch_y = batch_info
+		batch_x, batch_y, batch_z = batch_info
 		ibatch = ibatch + 1
 		# batch_size = batch_x.size(0)
 		# batch_x = batch_x.view(batch_size, -1).to(device)
@@ -558,7 +585,7 @@ for iepoch in range(num_epoch):
 		batch_y = batch_y.to(device)
 		# 1 forward
 		with torch.no_grad():
-			batch_y_hat = model(batch_x)
+			batch_y_hat = model(batch_x, batch_z)
 			
 		# 2 compute the objective function
 		obj = fun_loss(batch_y_hat, batch_y)
