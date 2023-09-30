@@ -283,7 +283,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma)-tri_ma), (-matrix_in))
 	except:
 		# cpool_steady_state = torch.linalg.lstsq((torch.matmul(a_ma, kk_ma)-tri_ma), (-matrix_in)).solution 
-		cpool_steady_state = (torch.ones([140, 1])*(-9999.)).to(device)*torch.sum(para)/torch.sum(para)
+		cpool_steady_state = (torch.ones([140, 1])*(-1.0)).to(device)*torch.sum(para)/torch.sum(para)
 	# end try
 	# cpool_steady_state = (torch.ones([140, 1])*(-9999.)).to(device)*torch.sum(para)/torch.sum(para) 
 	# end try

@@ -261,6 +261,7 @@ print(datetime.now(), '------------soc data prepared------------')
 ########################################################
 # neural network (BINNS)
 ########################################################
+batch_size = 32
 #---------------------------------------------------
 # env info
 #---------------------------------------------------
@@ -404,7 +405,7 @@ val_x = torch.tensor(current_data_x[val_x.indices], dtype = torch.float32)
 # data loader
 train_loader = DataLoader([[train_x[i], train_y[i]] for i in range(train_y.shape[0])], shuffle = True, batch_size = 32)
 
-val_loader = DataLoader([[val_x[i], val_y[i]] for i in range(val_y.shape[0])], shuffle = True, batch_size = 32)
+val_loader = DataLoader([[val_x[i], val_y[i]] for i in range(val_y.shape[0])], shuffle = True, batch_size = batch_size)
 
 # test
 # torch.autograd.set_detect_anomaly(True)
@@ -506,9 +507,12 @@ print(datetime.now(), '------------neural network set, training started---------
 
 # training and validation loop
 num_epoch = 50
+
+train_loss_history = np.ones((num_epoch, int(np.ceil(train_y.shape[0]/batch_size))))*np.nan
+val_loss_history = np.ones((num_epoch, int(np.ceil(val_y.shape[0]/batch_size))))*np.nan   
 for iepoch in range(num_epoch):
 	# training
-	loss_record = list()
+	loss_record_train = list()
 	ibatch = 0
 	for batch_info in train_loader:
 		batch_x, batch_y = batch_info
@@ -535,14 +539,15 @@ for iepoch in range(num_epoch):
 		# with torch.no_grad(): para = pata - eta*para.grad # eta is learning rate
 		optimizer.step()
 		
-		loss_record.append(obj.item())
+		loss_record_train.append(obj.item())
 		
 	# end for batch_info in train_loader:
-
-	print(f'Epoch {iepoch + 1}, train loss: {torch.tensor(loss_record).mean():.2f}')
+	
+	train_loss_history[iepoch, :] = loss_record_train
+	print(f'Epoch {iepoch + 1}, train loss: {torch.tensor(loss_record_train).mean():.2f}')
 	
 	# validation
-	loss_record = list()
+	loss_record_val = list()
 	ibatch = 0
 	for batch_info in val_loader:
 		batch_x, batch_y = batch_info
@@ -558,10 +563,12 @@ for iepoch in range(num_epoch):
 		# 2 compute the objective function
 		obj = fun_loss(batch_y_hat, batch_y)
 		
-		loss_record.append(obj.item())
+		loss_record_val.append(obj.item())
 		print(f'{datetime.now()}, Epoch {iepoch + 1} batch {ibatch}, validation loss: {obj.item():.2f}')
 	# end for batch_info in val_loader: 
-	print(f'Epoch {iepoch + 1}, validation loss: {torch.tensor(loss_record).mean():.2f}')
+
+	val_loss_history[iepoch, :] = loss_record_val
+	print(f'Epoch {iepoch + 1}, validation loss: {torch.tensor(loss_record_val).mean():.2f}')
 	
 
 
