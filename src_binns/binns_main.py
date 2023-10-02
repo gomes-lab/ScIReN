@@ -28,6 +28,8 @@ device = torch.device(dev)
 print(datetime.now(), '------------device: ', device, '------------')
 
 print(datetime.now(), '------------all packages loaded------------')
+
+time_stamp = f'{datetime.date(datetime.now())}'
 ################################################
 # input data
 ################################################
@@ -44,7 +46,7 @@ is_resubmit = 0
 
 # pathway
 data_dir_input = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/ENSEMBLE/INPUT_DATA/'
-data_dir_output = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/ENSEMBLE/INPUT_DATA/'
+data_dir_output = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/BINNS/OUTPUT_DATA/'
 # constants
 month_num = 12 
 soil_cpool_num = 7
@@ -404,6 +406,7 @@ valid_profile_loc = np.where(np.isnan(nan_loc) == False)[0]
 current_data_y = current_data_y[valid_profile_loc, :]
 current_data_z = current_data_z[valid_profile_loc, :]
 current_data_x = current_data_x[valid_profile_loc, :, :, :]
+current_data_profile_id = profile_collection[valid_profile_loc, 0]
 
 # train and validation split
 train_loc = np.random.choice(np.arange(0, len(current_data_x[:, 0])), size = round((1-nn_split_ratio)*len(current_data_x[:, 0])), replace = False)
@@ -418,6 +421,8 @@ val_z = torch.tensor(current_data_z[val_loc, :], dtype = torch.float32)
 train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype = torch.float32)
 val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype = torch.float32)
 
+train_profile_id = torch.tensor(current_data_profile_id[train_loc], dtype = torch.long)
+val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype = torch.long)
 # train_y, val_y = random_split(current_data_y, [round(current_data_x.shape[0]*0.8), (current_data_x.shape[0] - round(current_data_x.shape[0]*0.8))], generator=torch.Generator().manual_seed(42))
 # train_y = torch.tensor(current_data_y[train_y.indices], dtype = torch.float32)
 # val_y = torch.tensor(current_data_y[val_y.indices], dtype = torch.float32)
@@ -427,9 +432,9 @@ val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype = torch.float32)
 # val_x = torch.tensor(current_data_x[val_x.indices], dtype = torch.float32)
 
 # data loader
-train_loader = DataLoader([[train_x[i], train_y[i], train_z[i]] for i in range(train_y.shape[0])], shuffle = True, batch_size = 32)
+train_loader = DataLoader([[train_x[i], train_y[i], train_z[i], train_profile_id[i]] for i in range(train_y.shape[0])], shuffle = True, batch_size = 32)
 
-val_loader = DataLoader([[val_x[i], val_y[i], val_z[i]] for i in range(val_y.shape[0])], shuffle = True, batch_size = batch_size)
+val_loader = DataLoader([[val_x[i], val_y[i], val_z[i], val_profile_id[i]] for i in range(val_y.shape[0])], shuffle = True, batch_size = batch_size)
 
 # test
 # torch.autograd.set_detect_anomaly(True)
@@ -505,7 +510,7 @@ class nn_model(nn.Module):
 		h5 = torch.sigmoid(self.l5(h4)) # hardtanh(self.l5(h4))
 		# biogeochemical model
 		simu_soc = fun_model_simu(h5, forcing, obs_depth)
-		return simu_soc
+		return simu_soc, h5
 
 model = nn_model().to(device)
 
@@ -535,49 +540,59 @@ print(datetime.now(), '------------neural network set, training started---------
 # training and validation loop
 num_epoch = 50
 
+best_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32)
+best_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32)
+middle_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32)
+middle_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32)
+
 train_loss_history = np.ones((num_epoch, int(np.ceil(train_y.shape[0]/batch_size))))*np.nan
 val_loss_history = np.ones((num_epoch, int(np.ceil(val_y.shape[0]/batch_size))))*np.nan   
 for iepoch in range(num_epoch):
-	# training
+	# -------------------------------------training
 	loss_record_train = list()
 	ibatch = 0
 	for batch_info in train_loader:
-		batch_x, batch_y, batch_z = batch_info
+		batch_x, batch_y, batch_z, batch_profile_id = batch_info
 		ibatch = ibatch + 1
 		# batch_size = batch_x.size(0)
 		# batch_x = batch_x.view(batch_size, -1).to(device)
 		batch_x = batch_x.to(device)
 		batch_y = batch_y.to(device)
-		# 1 forward
-		batch_y_hat = model(batch_x, batch_z)
+		#------------ 1 forward
+		batch_y_hat, batch_pred_para = model(batch_x, batch_z)
 		
-		# 2 compute the objective function
+		# record the predicted para and modelled soc
+		middle_simu_soc[batch_profile_id, :] = batch_y_hat
+		middle_pred_para[batch_profile_id, :] = batch_pred_para
+		#------------ 2 compute the objective function
 		obj = fun_loss(batch_y_hat, batch_y)
 		
 		# print(batch_y_hat)
 		print(f'{datetime.now()} Epoch {iepoch + 1} batch {ibatch}, train loss: {obj.item():.2f}')
-		# 3 cleaning gradients
+		#------------ 3 cleaning gradients
 		model.zero_grad()
 		
-		# 4 accumulate partical derivatives of objective respect to parameters
+		#------------ 4 accumulate partical derivatives of objective respect to parameters
 		obj.backward()
 		
-		# 5 step in the opposite direction of the gradient
+		#------------ 5 step in the opposite direction of the gradient
 		# with torch.no_grad(): para = pata - eta*para.grad # eta is learning rate
 		optimizer.step()
 		
 		loss_record_train.append(obj.item())
-		
+		# record prediction
 	# end for batch_info in train_loader:
 	
+	# record the loss history
 	train_loss_history[iepoch, :] = loss_record_train
-	print(f'Epoch {iepoch + 1}, train loss: {torch.tensor(loss_record_train).mean():.2f}')
 	
-	# validation
+	print(f'Epoch {iepoch + 1}, train loss: {torch.tensor(loss_record_train).mean():.1f}')
+	
+	# -------------------------------------validation
 	loss_record_val = list()
 	ibatch = 0
 	for batch_info in val_loader:
-		batch_x, batch_y, batch_z = batch_info
+		batch_x, batch_y, batch_z, batch_profile_id = batch_info
 		ibatch = ibatch + 1
 		# batch_size = batch_x.size(0)
 		# batch_x = batch_x.view(batch_size, -1).to(device)
@@ -585,9 +600,12 @@ for iepoch in range(num_epoch):
 		batch_y = batch_y.to(device)
 		# 1 forward
 		with torch.no_grad():
-			batch_y_hat = model(batch_x, batch_z)
-			
+			batch_y_hat, batch_pred_para = model(batch_x, batch_z)
+			# record the predicted para and modelled soc
+			middle_simu_soc[batch_profile_id, :] = batch_y_hat
+			middle_pred_para[batch_profile_id, :] = batch_pred_para
 		# 2 compute the objective function
+		
 		obj = fun_loss(batch_y_hat, batch_y)
 		
 		loss_record_val.append(obj.item())
@@ -597,10 +615,22 @@ for iepoch in range(num_epoch):
 	val_loss_history[iepoch, :] = loss_record_val
 	print(f'Epoch {iepoch + 1}, validation loss: {torch.tensor(loss_record_val).mean():.2f}')
 	
-
-
-
-
+	#----------------------------------- find the best prediction
+	if iepoch == 0:
+		best_simu_soc = middle_simu_soc
+		best_pred_para = middle_pred_para
+		print(f'Best model updated at epoch {iepoch + 1}')
+	elif train_loss_history[iepoch, :].mean() <= train_loss_history[(iepoch-1), :].mean():
+		best_simu_soc = middle_simu_soc
+		best_pred_para = middle_pred_para
+		print(f'Best model updated at epoch {iepoch + 1}')
+		# save prediction and model
+		np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().numpy(), delimiter = ',')
+		np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().numpy(), delimiter = ',')
+		
+		np.savetxt(data_dir_output + 'neural_network/val_loss_history_' + time_stamp + '.csv', val_loss_history, delimiter = ',')
+		np.savetxt(data_dir_output + 'neural_network/train_loss_history_' + time_stamp + '.csv', val_loss_history, delimiter = ',')
+		torch.save(model, data_dir_output + 'neural_network/opt_nn_' + time_stamp + '.pt')
 
 
 
