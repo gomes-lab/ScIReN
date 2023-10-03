@@ -17,8 +17,8 @@ data_path = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/BINNS/OUT
 
 date_stamp = '2023-10-02'
 
-train_loss_history = read.csv(paste(data_path, 'neural_network/train_loss_history_', date_stamp, '.csv', sep = ''), header = TRUE, sep = ',')
-val_loss_history = read.csv(paste(data_path, 'neural_network/val_loss_history_', date_stamp, '.csv', sep = ''), header = TRUE, sep = ',')
+train_loss_history = read.csv(paste(data_path, 'neural_network/train_loss_history_', date_stamp, '.csv', sep = ''), header = FALSE, sep = ',')
+val_loss_history = read.csv(paste(data_path, 'neural_network/val_loss_history_', date_stamp, '.csv', sep = ''), header = FALSE, sep = ',')
 
 ############################
 # plot figure
@@ -34,6 +34,7 @@ current_data = data.frame(current_data)
 color_scheme = c('#005AB5', '#DC3220')
 line_label = c('Training', 'Validation')
 
+jpeg(paste('./figures/training_loss.jpeg', sep = ''), width = 10, height = 10, units = 'in', res = 300)
 
 ggplot(data = current_data) +
   geom_ribbon(aes(x = epoch, ymin = loss - sd, ymax = loss + sd, fill = as.factor(set)), alpha = 0.15) +
@@ -51,12 +52,13 @@ ggplot(data = current_data) +
   theme(legend.text = element_text(size = 30), legend.title = element_text(size = 30))  +
   theme(legend.key = element_rect(color = NA, fill = NA), legend.key.size = unit(0.8, 'inch')) +
   # add title
-  labs(y = 'Epoch', x = paste('Loss')) +
+  labs(x = 'Epoch', y = paste('Loss')) +
   # modify the position of title
   # modify the font sizea
   theme(plot.margin = unit(c(0.2, 0.2, 0.2, 0.2), 'inch'), plot.background = element_rect(fill = 'transparent', color = NULL)) +
   theme(axis.text=element_text(size = 30, color = 'black'), axis.title = element_text(size = 35), axis.line = element_line(size = 1), axis.ticks = element_line(size = 1, color = 'black'), axis.ticks.length = unit(0.12, 'inch'))
 
+dev.off()
 
 
 

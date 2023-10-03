@@ -432,7 +432,7 @@ val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype = torch.lo
 # val_x = torch.tensor(current_data_x[val_x.indices], dtype = torch.float32)
 
 # data loader
-train_loader = DataLoader([[train_x[i], train_y[i], train_z[i], train_profile_id[i]] for i in range(train_y.shape[0])], shuffle = True, batch_size = 32)
+train_loader = DataLoader([[train_x[i], train_y[i], train_z[i], train_profile_id[i]] for i in range(train_y.shape[0])], shuffle = True, batch_size = batch_size)
 
 val_loader = DataLoader([[val_x[i], val_y[i], val_z[i], val_profile_id[i]] for i in range(val_y.shape[0])], shuffle = True, batch_size = batch_size)
 
@@ -541,9 +541,9 @@ print(datetime.now(), '------------neural network set, training started---------
 num_epoch = 50
 
 # best_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32)
-best_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32)
+# best_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32)
 # middle_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32)
-middle_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32)
+# middle_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32)
 
 train_loss_history = np.ones((num_epoch, int(np.ceil(train_y.shape[0]/batch_size))))*np.nan
 val_loss_history = np.ones((num_epoch, int(np.ceil(val_y.shape[0]/batch_size))))*np.nan   
@@ -563,7 +563,8 @@ for iepoch in range(num_epoch):
 		
 		# record the predicted para and modelled soc
 		# middle_simu_soc[batch_profile_id, :] = batch_y_hat
-		middle_pred_para[batch_profile_id, :] = batch_pred_para
+		# middle_pred_para[batch_profile_id, :] = batch_pred_para
+		
 		#------------ 2 compute the objective function
 		obj = fun_loss(batch_y_hat, batch_y)
 		
@@ -603,7 +604,7 @@ for iepoch in range(num_epoch):
 			batch_y_hat, batch_pred_para = model(batch_x, batch_z)
 			# record the predicted para and modelled soc
 			# middle_simu_soc[batch_profile_id, :] = batch_y_hat
-			middle_pred_para[batch_profile_id, :] = batch_pred_para
+			# middle_pred_para[batch_profile_id, :] = batch_pred_para
 		# 2 compute the objective function
 		
 		obj = fun_loss(batch_y_hat, batch_y)
@@ -618,15 +619,17 @@ for iepoch in range(num_epoch):
 	#----------------------------------- find the best prediction
 	if iepoch == 0:
 		# best_simu_soc = middle_simu_soc
-		best_pred_para = middle_pred_para
+		# best_pred_para = middle_pred_para
+		
 		print(f'Best model updated at epoch {iepoch + 1}')
 	elif train_loss_history[iepoch, :].mean() <= train_loss_history[(iepoch-1), :].mean():
 		# best_simu_soc = middle_simu_soc
-		best_pred_para = middle_pred_para
+		# best_pred_para = middle_pred_para
+		
 		print(f'Best model updated at epoch {iepoch + 1}')
 		
 		# save prediction and model
-		np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().numpy(), delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().numpy(), delimiter = ',')
 		# np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().numpy(), delimiter = ',')
 		torch.save(model, data_dir_output + 'neural_network/opt_nn_' + time_stamp + '.pt')
 		
@@ -638,6 +641,39 @@ for iepoch in range(num_epoch):
 np.savetxt(data_dir_output + 'neural_network/val_loss_history_' + time_stamp + '.csv', val_loss_history, delimiter = ',')
 np.savetxt(data_dir_output + 'neural_network/train_loss_history_' + time_stamp + '.csv', train_loss_history, delimiter = ',')
 	
+##################################################
+# prediction bv best trained model
+##################################################
+best_guess_model = torch.load(data_dir_output + 'neural_network/opt_nn_' + time_stamp + '.pt')
+best_guess_model.eval()
+
+with torch.no_grad():
+	best_guess_val_y_hat, best_guess_val_pred_para = best_guess_model(val_x, val_z)
+	best_guess_train_y_hat, best_guess_train_pred_para = best_guess_model(train_x, train_z)
+# end with torch.no_grad():
+
+# write prediction results
+binn_obs_soc = np.ones((wosis_profile_info.shape[0], 200))*np.nan
+best_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32)
+best_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32)
+
+binn_obs_soc[current_data_profile_id, :] = current_data_y
+
+best_simu_soc[val_profile_id, :] = best_guess_val_y_hat
+best_simu_soc[train_profile_id, :] = best_guess_train_y_hat
+
+best_pred_para[val_profile_id, :] = best_guess_val_pred_para
+best_pred_para[train_profile_id, :] = best_guess_train_pred_para
+
+# save data
+np.savetxt(data_dir_output + 'neural_network/nn_obs_soc_' + time_stamp + '.csv', binn_obs_soc, delimiter = ',')
+np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().numpy(), delimiter = ',')
+np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().numpy(), delimiter = ',')
+
+
+
+
+
 
 
 
