@@ -1,11 +1,16 @@
 import sys
-sys.path.append(r'/User/homes/ftao/Projects/BINNS/src_binns')
+import time
+import warnings
+# @joshuafan changed
+sys.path.append('/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/src_binns')
+# sys.path.append(r'/User/homes/ftao/Projects/BINNS/src_binns')
 
 from datetime import datetime
 from pandas import DataFrame as df
 import numpy as np
 from scipy.interpolate import pchip_interpolate
 
+import os
 import torch
 from torch import nn
 from torch.utils.data import random_split, DataLoader
@@ -18,12 +23,14 @@ import mat73
 from matplotlib import pyplot as plt
 
 from fun_matrix_clm5 import fun_model_simu
+import visualization_utils
 
 if torch.cuda.is_available():
 	dev = 'cuda'
 else:
 	dev = 'cpu'
-dev = 'cpu'
+# @joshuafan changed
+# dev = 'cpu'
 device = torch.device(dev) 
 print(datetime.now(), '------------device: ', device, '------------')
 
@@ -44,9 +51,16 @@ start_id = 1
 end_id = 5000
 is_resubmit = 0
 
+# @joshuafan changed
 # pathway
-data_dir_input = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/BINNS/INPUT_DATA/'
-data_dir_output = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/BINNS/OUTPUT_DATA/'
+# data_dir_input = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/ENSEMBLE/INPUT_DATA/'
+# data_dir_output = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/BINNS/OUTPUT_DATA/'
+data_dir_input = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/INPUT_DATA/'
+data_dir_output = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/'
+os.makedirs(os.path.join(data_dir_output, "neural_network"), exist_ok=True)
+PLOT_DIR = os.path.join(data_dir_output, "visualizations")
+os.makedirs(PLOT_DIR, exist_ok=True)
+
 # constants
 month_num = 12 
 soil_cpool_num = 7
@@ -153,7 +167,7 @@ del cesm2_simu_input_vector_litter1, cesm2_simu_input_vector_litter2, cesm2_simu
 # representative points 
 sample_profile_id = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_representative_profiles.mat')
 sample_profile_id = sample_profile_id['sample_profile_id']
-# convert the number to be starting from 0 ni python world
+# convert the number to be starting from 0 in python world
 sample_profile_id = sample_profile_id - 1
 
 profile_collection = np.reshape(sample_profile_id[:, 0:20], [2000, 1])
@@ -167,8 +181,8 @@ print(datetime.now(), '------------all input data loaded------------')
 #---------------------------------------------------
 # wrap up soc data for NN
 #---------------------------------------------------
-obs_soc_matrix = np.ones([len(profile_collection), 200])*np.nan
-obs_depth_matrix = np.ones([len(profile_collection), 200])*np.nan
+obs_soc_matrix = np.ones([len(profile_collection), 200])*np.nan  # Each row is a profile. Each non-nan column is an SOC observation
+obs_depth_matrix = np.ones([len(profile_collection), 200])*np.nan  # Each row is a profile. Each column represents the depth of the corresponding SOC observation in "obs_soc_matrix"
 
 obs_lon_lat_loc = np.ones([len(profile_collection), 2])*np.nan
 
@@ -188,7 +202,6 @@ model_force_sand_vector = np.ones([len(profile_collection), soil_decom_num, mont
 
 model_force_soil_temp_profile = np.ones([len(profile_collection), soil_decom_num, month_num])*np.nan
 model_force_soil_water_profile = np.ones([len(profile_collection), soil_decom_num, month_num])*np.nan
-
 
 for iprofile_hat in profile_range:
 	# profile num
@@ -283,18 +296,6 @@ nn_split_ratio = 0.2
 # env info
 #---------------------------------------------------
 # environmental info of soil profiles
-env_info = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_env_info.mat')
-
-env_info = env_info['EnvInfo']
-
-col_max_min = loadmat(data_dir_input + 'data4nn/world_grid_envinfo_present_cesm2_clm5_cen_vr_v2_whole_time_col_max_min.mat')
-col_max_min = col_max_min['col_max_min']
-for ivar in np.arange(3, len(col_max_min[:, 0])):
-	env_info[:, ivar] = (env_info[:, ivar] - col_max_min[ivar, 0])/(col_max_min[ivar, 1] - col_max_min[ivar, 0])
-	env_info[(env_info[:, ivar] > 1), ivar] = 1
-	env_info[(env_info[:, ivar] < 0), ivar] = 0
-
-env_info = df(env_info)
 
 env_info_names = ['ProfileNum', 'ProfileID', 'LayerNum', 'Lon', 'Lat', 'Date', \
 'Rmean', 'Rmax', 'Rmin', \
@@ -328,8 +329,53 @@ env_info_names = ['ProfileNum', 'ProfileID', 'LayerNum', 'Lon', 'Lat', 'Date', \
 'nbedrock', \
 'R_Squared']
 
-env_info.columns = env_info_names
+categorical_vars = [['ESA_Land_Cover'], ['Texture_USDA_0cm', 'Texture_USDA_30cm', 'Texture_USDA_100cm'], 
+					['USDA_Suborder'], ['WRB_Subgroup'], ['Koppen_Climate_2018']]
 
+env_info = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_env_info.mat')
+env_info = env_info['EnvInfo']
+original_lons = env_info[:, 3].copy()
+original_lats = env_info[:, 4].copy()
+
+col_max_min = loadmat(data_dir_input + 'data4nn/world_grid_envinfo_present_cesm2_clm5_cen_vr_v2_whole_time_col_max_min.mat')
+col_max_min = col_max_min['col_max_min']
+
+# Don't want to transform categorical variables, so set max/min to nan
+for group in categorical_vars:
+	for var in group:
+		idx = env_info_names.index(var)
+		print("Var {} Nans {}".format(var, np.count_nonzero(np.isnan(env_info[:, idx]))))
+		col_max_min[idx, :] = np.nan
+
+# warnings.filterwarnings("error")
+for ivar in np.arange(3, len(col_max_min[:, 0])):
+	if np.isnan(col_max_min[ivar, :]).any():
+		pass
+	else:
+		env_info[:, ivar] = (env_info[:, ivar] - col_max_min[ivar, 0])/(col_max_min[ivar, 1] - col_max_min[ivar, 0])
+		env_info[(env_info[:, ivar] > 1), ivar] = 1
+		env_info[(env_info[:, ivar] < 0), ivar] = 0
+	# except:
+	# 	print('error in variable: ', ivar)
+# warnings.resetwarnings()
+
+env_info = df(env_info)
+
+# env_info_scaled = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_env_info_' + model_name  + '_' + time_domain + '_maxmin_scaled.mat')
+# env_info_scaled = df(env_info_scaled['profile_env_info'])
+# env_info = env_info_scaled
+
+
+
+env_info.columns = env_info_names
+env_info["original_lon"] = original_lons
+env_info["original_lat"] = original_lats
+
+# # @joshuafan added temporarily
+# env_info.index = env_info.ProfileNum
+# print("Env info old shape", env_info.shape)
+# print("Env info", env_info.head())
+# print(profile_collection[0:5, 0])
 
 # variables used in training the NN
 var4nn = ['Lon', 'Lat', \
@@ -365,6 +411,20 @@ var4nn = ['Lon', 'Lat', \
 'nbedrock']
 
 
+var_idx_to_emb = dict()
+for group in categorical_vars:
+	n_categories = int(np.nanmax(env_info[group]) + 1)
+	print("Variable {}: num categories {}".format(group, n_categories))
+	print("Unique values", env_info[group].value_counts(sort=True))
+	emb = nn.Embedding(num_embeddings=n_categories, embedding_dim=5).to(device)
+	for var in group:
+		idx = var4nn.index(var)
+		var_idx_to_emb[idx] = emb
+
+
+# For each embedding layer, extract which variables are passed through it,
+# and the number of classes for each variable
+
 
 #---------------------------------------------------
 # training data
@@ -388,6 +448,41 @@ current_data_x[:, 0:20, 0:12, 12] = model_force_soil_water_profile
 
 current_data_y = obs_soc_matrix
 current_data_z = obs_depth_matrix
+
+lons = np.array(env_info.loc[profile_collection[:, 0], "original_lon"])
+lats = np.array(env_info.loc[profile_collection[:, 0], "original_lat"])
+for col_idx, col_name in enumerate(var4nn):
+	envir_var_values = current_data_x[:, col_idx, 0, 0]
+	visualization_utils.plot_observations_world_map(lons, lats, envir_var_values, PLOT_DIR, col_name)
+
+# Plot SOC observation labels within each layer. If a profile has multiple observations 
+# in a layer, pick the first one
+layer_top = 0
+for layer_idx in range(len(zisoi)):
+	layer_bottom = zisoi[layer_idx]
+	this_layer_y = np.ones((current_data_y.shape[0])) * np.nan
+
+	# Loop through all profiles
+	for j in range(current_data_y.shape[0]):
+		# Get depth of each SOC observation
+		depths = current_data_z[j]
+
+		# Select SOC observations whose depth falls within the current layer
+		this_layer_this_profile_y = current_data_y[j, (~np.isnan(depths)) & (depths >= layer_top) & (depths < layer_bottom)]
+		if len(this_layer_this_profile_y) > 1:
+			continue
+			print("Oddly enough this profile had more than 2 observations in the same soil layer")
+			print("Layer", layer_top, "to", layer_bottom)
+			print("Observation depths", depths)
+		elif len(this_layer_this_profile_y) == 0:
+			continue
+		else:
+			this_layer_y[j] = this_layer_this_profile_y[0]
+	layer_name = "Layer {} ({:.2f}-{:.2f} m)".format(layer_idx, layer_top, layer_bottom)
+	col_name = "soc_layer{}_{:.2f}-{:.2f}m".format(layer_idx, layer_top, layer_bottom)
+	visualization_utils.plot_observations_world_map(lons, lats, this_layer_y, PLOT_DIR, col_name)
+	layer_top = layer_bottom
+
 
 nan_loc = np.nanmean(current_data_y, axis = 1) + \
 			np.sum(current_data_x[:, 0:60, 0, 0], axis = 1) + \
@@ -494,19 +589,42 @@ def binns_loss(y_pred, y_true):
 #---------------------------------------------------
 # define model
 class nn_model(nn.Module):
-	def __init__(self):
+	def __init__(self, var_idx_to_emb):
 		super().__init__()
-		self.l1 = nn.Linear(len(var4nn), 256)
+
+		# Dict from categorical variable index -> Embedding layer we use
+		self.var_idx_to_emb = var_idx_to_emb
+
+		# List of non-categorical variable indices
+		self.non_categorical_indices = list(set(list(range(len(var4nn)))).difference(var_idx_to_emb.keys()))
+		print("Categorical indices", var_idx_to_emb.keys())
+		print("Noncategorical indices", self.non_categorical_indices)
+		new_input_size = len(self.non_categorical_indices)
+		for idx, emb in self.var_idx_to_emb.items():
+			new_input_size += emb.embedding_dim
+
+		# Neural network layers
+		self.l1 = nn.Linear(new_input_size, 256)
 		self.l2 = nn.Linear(256, 512)
 		self.l3 = nn.Linear(512, 512)
 		self.l4 = nn.Linear(512, 256)
 		self.l5 = nn.Linear(256, 21)
+
 	def forward(self, input_var, wosis_depth):
 		predictor = input_var[:, :, 0, 0]
 		forcing = input_var[:, :, :, :]
 		obs_depth = wosis_depth
+
+		# Compute embeddings for all categorical variables
+		embs = []
+		for idx, embedding_layer in self.var_idx_to_emb.items():
+			emb = embedding_layer(predictor[:, idx].int())
+			embs.append(emb)
+		all_embs = torch.concatenate(embs, dim=1)
+		new_input = torch.concatenate([predictor[:, self.non_categorical_indices], all_embs], dim=1)
+
 		# hidden layers
-		h1 = nn.functional.relu(self.l1(predictor))
+		h1 = nn.functional.relu(self.l1(new_input))
 		h2 = nn.functional.relu(self.l2(h1))
 		h3 = nn.functional.relu(self.l3(h2))
 		h4 = nn.functional.relu(self.l4(h3))
@@ -515,7 +633,7 @@ class nn_model(nn.Module):
 		simu_soc = fun_model_simu(h5, forcing, obs_depth)
 		return simu_soc, h5
 
-model = nn_model().to(device)
+model = nn_model(var_idx_to_emb).to(device)
 
 
 # nn_model = nn.Sequential(
@@ -533,8 +651,9 @@ model = nn_model().to(device)
 #
 #model = nn_model.to(device)
 
-# optimizer
+# optimizer - @joshuafan changed
 optimizer = torch.optim.Adadelta(model.parameters())
+# optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
 # loss
 fun_loss = binns_loss
 
@@ -554,6 +673,7 @@ for iepoch in range(num_epoch):
 	# -------------------------------------training
 	loss_record_train = list()
 	ibatch = 0
+	epoch_start = time.time()
 	for batch_info in train_loader:
 		batch_x, batch_y, batch_z, batch_profile_id = batch_info
 		ibatch = ibatch + 1
@@ -563,7 +683,7 @@ for iepoch in range(num_epoch):
 		batch_y = batch_y.to(device)
 		#------------ 1 forward
 		batch_y_hat, batch_pred_para = model(batch_x, batch_z)
-		
+
 		# record the predicted para and modelled soc
 		# middle_simu_soc[batch_profile_id, :] = batch_y_hat
 		# middle_pred_para[batch_profile_id, :] = batch_pred_para
@@ -573,6 +693,7 @@ for iepoch in range(num_epoch):
 		
 		# print(batch_y_hat)
 		print(f'{datetime.now()} Epoch {iepoch + 1} batch {ibatch}, train loss: {obj.item():.2f}')
+
 		#------------ 3 cleaning gradients
 		model.zero_grad()
 		
@@ -590,8 +711,8 @@ for iepoch in range(num_epoch):
 	# record the loss history
 	train_loss_history[iepoch, :] = loss_record_train
 	
-	print(f'Epoch {iepoch + 1}, train loss: {torch.tensor(loss_record_train).mean():.1f}')
-	
+	print(f'Epoch {iepoch + 1}, train loss: {torch.tensor(loss_record_train).mean():.1f}, time: {(time.time()-epoch_start):.2f}')
+
 	# -------------------------------------validation
 	loss_record_val = list()
 	ibatch = 0
