@@ -170,6 +170,9 @@ sample_profile_id = sample_profile_id - 1
 
 profile_collection = np.reshape(sample_profile_id[:, 0:20], [2000, 1])
 
+# if use the whole dataset
+# profile_collection = np.range(0, wosis_profile_info.shape[0])
+
 profile_range = np.arange(0, len(profile_collection))
 
 print(datetime.now(), '------------all input data loaded------------')
@@ -566,8 +569,7 @@ class nn_model(nn.Module):
 		h2 = nn.functional.relu(self.l2(h1))
 		h3 = nn.functional.relu(self.l3(h2))
 		h4 = nn.functional.relu(self.l4(h3))
-		h5 = torch.sigmoid(self.l5(h4)) # hardtanh(self.l5(h4))
-		print("params", h5)
+		h5 = torch.sigmoid(self.l5(h4)/100) # hardtanh(self.l5(h4))
 		# biogeochemical model
 		simu_soc = fun_model_simu(h5, forcing, obs_depth)
 		return simu_soc, h5
