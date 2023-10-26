@@ -430,13 +430,13 @@ def tri_matrix_alternative(slope, intercept):
 	tri_ma_middle = torch.zeros(n_soil_layer, n_soil_layer)
 	for ilayer in range(n_soil_layer):
 		if ilayer == 0:
-			tri_ma_middle[ilayer, ilayer] = transport_rate[ilayer] + rate_to_atmos # at the surface, part of the CO2 should be released to atmos
+			tri_ma_middle[ilayer, ilayer] = -1*transport_rate[ilayer] + rate_to_atmos # at the surface, part of the CO2 should be released to atmos
 			tri_ma_middle[ilayer, (ilayer+1)] = transport_rate[ilayer]
 		elif ilayer == (n_soil_layer-1):
-			tri_ma_middle[ilayer, ilayer] = transport_rate[ilayer]
+			tri_ma_middle[ilayer, ilayer] = -1*transport_rate[ilayer]
 			tri_ma_middle[ilayer, (ilayer-1)] = transport_rate[ilayer]
 		else:
-			tri_ma_middle[ilayer, ilayer] = 2*transport_rate[ilayer]
+			tri_ma_middle[ilayer, ilayer] = -2*transport_rate[ilayer]
 			tri_ma_middle[ilayer, (ilayer-1)] = transport_rate[ilayer]
 			tri_ma_middle[ilayer, (ilayer+1)] = transport_rate[ilayer]
 	#end for ilayer in range(n_soil_layer):
