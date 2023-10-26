@@ -280,7 +280,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		timesteply_nbedrock = nbedrock_steady_state[itimestep]
 		timesteply_altmax_current_profile = altmax_current_profile_steady_state[itimestep]
 		timesteply_altmax_lastyear_profile = altmax_lastyear_profile_steady_state[itimestep]
-		tri_ma_middle[:, :, itimestep] = tri_matrix_alternative(slope, intercept)
+		tri_ma_middle[:, :, itimestep] = tri_matrix_alternative(timesteply_nbedrock[0], slope, intercept)
 		# tri_ma_middle[:, :, itimestep] = tri_matrix(timesteply_nbedrock, timesteply_altmax_current_profile, timesteply_altmax_lastyear_profile, bio, adv, cryo)
 	# end for itimestep
 	tri_ma = torch.mean(tri_ma_middle, axis = 2)
@@ -422,15 +422,16 @@ def kk_matrix(xit, xiw, xio, xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau
 # end def kk_matrix
 
 # only diffusion
-def tri_matrix_alternative(slope, intercept):
+def tri_matrix_alternative(nbedrock, slope, intercept):
 	# slope = -1.2
 	# intercept = -4
 	rate_to_atmos = -0. # # at the surface, part of the CO2 should be released to atmos
 	transport_rate = -10**(intercept + slope*torch.log10(zsoi[0:20]))
+	transport_rate[nbedrock:] = -10**(-30)
 	tri_ma_middle = torch.zeros(n_soil_layer, n_soil_layer)
 	for ilayer in range(n_soil_layer):
 		if ilayer == 0:
-			tri_ma_middle[ilayer, ilayer] = -1*transport_rate[ilayer] + rate_to_atmos # at the surface, part of the CO2 should be released to atmos
+			tri_ma_middle[ilayer, ilayer] = -1*(transport_rate[ilayer] + rate_to_atmos) # at the surface, part of the CO2 should be released to atmos
 			tri_ma_middle[ilayer, (ilayer+1)] = transport_rate[ilayer]
 		elif ilayer == (n_soil_layer-1):
 			tri_ma_middle[ilayer, ilayer] = -1*transport_rate[ilayer]
