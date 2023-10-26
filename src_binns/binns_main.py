@@ -2,7 +2,7 @@ import sys
 import time
 import warnings
 # @joshuafan changed
-sys.path.append('/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/src_binns')
+# sys.path.append('/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/src_binns')
 # sys.path.append(r'/User/homes/ftao/Projects/BINNS/src_binns')
 
 from datetime import datetime
@@ -30,8 +30,10 @@ if torch.cuda.is_available():
 else:
 	dev = 'cpu'
 # @joshuafan changed
-# dev = 'cpu'
+dev = 'cpu'
+
 device = torch.device(dev) 
+
 print(datetime.now(), '------------device: ', device, '------------')
 
 print(datetime.now(), '------------all packages loaded------------')
@@ -53,10 +55,10 @@ is_resubmit = 0
 
 # @joshuafan changed
 # pathway
-# data_dir_input = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/ENSEMBLE/INPUT_DATA/'
-# data_dir_output = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/BINNS/OUTPUT_DATA/'
-data_dir_input = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/INPUT_DATA/'
-data_dir_output = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/'
+data_dir_input = '/Users/ft254/DATAHUB/ENSEMBLE/INPUT_DATA/'
+data_dir_output = '/Users/ft254/DATAHUB/BINNS/OUTPUT_DATA/'
+# data_dir_input = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/INPUT_DATA/'
+# data_dir_output = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/'
 os.makedirs(os.path.join(data_dir_output, "neural_network"), exist_ok=True)
 PLOT_DIR = os.path.join(data_dir_output, "visualizations")
 os.makedirs(PLOT_DIR, exist_ok=True)
@@ -451,9 +453,9 @@ current_data_z = obs_depth_matrix
 
 lons = np.array(env_info.loc[profile_collection[:, 0], "original_lon"])
 lats = np.array(env_info.loc[profile_collection[:, 0], "original_lat"])
-for col_idx, col_name in enumerate(var4nn):
-	envir_var_values = current_data_x[:, col_idx, 0, 0]
-	visualization_utils.plot_observations_world_map(lons, lats, envir_var_values, PLOT_DIR, col_name)
+# for col_idx, col_name in enumerate(var4nn):
+# 	envir_var_values = current_data_x[:, col_idx, 0, 0]
+# 	visualization_utils.plot_observations_world_map(lons, lats, envir_var_values, PLOT_DIR, col_name)
 
 # Plot SOC observation labels within each layer. If a profile has multiple observations 
 # in a layer, pick the first one
@@ -480,7 +482,7 @@ for layer_idx in range(len(zisoi)):
 			this_layer_y[j] = this_layer_this_profile_y[0]
 	layer_name = "Layer {} ({:.2f}-{:.2f} m)".format(layer_idx, layer_top, layer_bottom)
 	col_name = "soc_layer{}_{:.2f}-{:.2f}m".format(layer_idx, layer_top, layer_bottom)
-	visualization_utils.plot_observations_world_map(lons, lats, this_layer_y, PLOT_DIR, col_name)
+	# visualization_utils.plot_observations_world_map(lons, lats, this_layer_y, PLOT_DIR, col_name)
 	layer_top = layer_bottom
 
 
