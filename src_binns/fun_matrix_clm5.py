@@ -280,7 +280,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		timesteply_nbedrock = nbedrock_steady_state[itimestep]
 		timesteply_altmax_current_profile = altmax_current_profile_steady_state[itimestep]
 		timesteply_altmax_lastyear_profile = altmax_lastyear_profile_steady_state[itimestep]
-		tri_ma_middle[:, :, itimestep] = tri_matrix_alternative(timesteply_nbedrock[0], slope, intercept)
+		tri_ma_middle[:, :, itimestep] = tri_matrix_alternative(timesteply_nbedrock, slope, intercept)
 		# tri_ma_middle[:, :, itimestep] = tri_matrix(timesteply_nbedrock, timesteply_altmax_current_profile, timesteply_altmax_lastyear_profile, bio, adv, cryo)
 	# end for itimestep
 	tri_ma = torch.mean(tri_ma_middle, axis = 2)
