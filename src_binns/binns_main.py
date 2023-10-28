@@ -654,8 +654,8 @@ model = nn_model(var_idx_to_emb).to(device)
 #model = nn_model.to(device)
 
 # optimizer - @joshuafan changed
-optimizer = torch.optim.Adadelta(model.parameters())
-# optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+# optimizer = torch.optim.Adadelta(model.parameters())
+optimizer = torch.optim.AdamW(model.parameters(), lr = 0.001, weight_decay = 0.01)
 # loss
 fun_loss = binns_loss
 

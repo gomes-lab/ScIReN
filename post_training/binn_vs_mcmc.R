@@ -2,7 +2,6 @@
 library(R.matlab)
 library(ggplot2)
 library(cowplot)
-library(jcolors)
 library(viridis)
 library(scales)
 library(ncdf4)
@@ -10,19 +9,19 @@ library(ncdf4)
 ##
 rm(list = ls())
 
-setwd('/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/BINNS')
+setwd('/Users/ft254/Github/BINNS')
 
 ############################
 # load data
 ############################
-data_path = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/BINNS/OUTPUT_DATA/'
+data_path = '/Users/ft254/DATAHUB/BINNS/OUTPUT_DATA/'
 
 date_stamp = '2023-10-02'
 
 binn_para = read.csv(paste(data_path, 'neural_network/nn_best_pred_para_', date_stamp, '.csv', sep = ''), header = FALSE, sep = ',')
 binn_para = data.matrix(binn_para)
 
-mcmc_para = readMat('/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/ENSEMBLE/OUTPUT_DATA/mcmc_summary_cesm2_clm5_cen_vr_v2/cesm2_clm5_cen_vr_v2_para_mean.mat')
+mcmc_para = readMat('/Users/ft254/DATAHUB/ENSEMBLE/OUTPUT_DATA/mcmc_summary_cesm2_clm5_cen_vr_v2/cesm2_clm5_cen_vr_v2_para_mean.mat')
 mcmc_para = mcmc_para$para.mean
 
 binn_simu_soc = read.csv(paste(data_path, 'neural_network/nn_best_simu_soc_', date_stamp, '.csv', sep = ''), header = FALSE, sep = ',')
@@ -32,7 +31,7 @@ binn_obs_soc = read.csv(paste(data_path, 'neural_network/nn_obs_soc_', date_stam
 binn_obs_soc = data.matrix(binn_obs_soc)
 
 
-ncfname = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/ENSEMBLE/INPUT_DATA/wosis_2019_snap_shot/soc_profile_wosis_2019_snapshot_hugelius_mishra.nc'
+ncfname = '/Users/ft254/DATAHUB/ENSEMBLE/INPUT_DATA/wosis_2019_snap_shot/soc_profile_wosis_2019_snapshot_hugelius_mishra.nc'
 profile_info = nc_open(ncfname)
 profile_info = ncvar_get(profile_info)
 
@@ -110,7 +109,7 @@ colnames(current_data) = c('binn', 'obs')
 
 explain_var = 1 - sum((current_data$binn - current_data$obs)^2)/
   sum((mean(current_data$obs) - current_data$obs)^2)
-
+explain_var
 jpeg(paste('./figures/soc_obs_vs_binn.jpeg', sep = ''), width = 10, height = 10, units = 'in', res = 300)
 ggplot(data = current_data) + 
   stat_bin_hex(aes(x = obs, y = binn), bins = 100) +
@@ -139,42 +138,42 @@ dev.off()
 ########################################
 # profile distribution
 #########################################
-# can be changed to state or world to have US and world map
-world_coastline = rgdal::readOGR(dsn='/Users/phoenix/Google_Drive/Tsinghua_Luo/World_Vector_Shape/ne110m/ne_110m_land.shp',layer = 'ne_110m_land')
-world_coastline <- fortify(world_coastline)
-Map.Using = world_coastline
-
-
-current_data = cbind(profile_info[valid_profile_loc, 4], profile_info[valid_profile_loc, 5])
-current_data = data.frame(current_data)
-colnames(current_data) = c('lon', 'lat')
-
-jpeg(paste('./figures/profile_distribution.jpeg', sep = ''), width = 12, height = 6, units = 'in', res = 300)
-
-ggplot(data = current_data) +
-  geom_point(aes(x = lon, y = lat), color = 'black', shape = 16, size = 1, alpha = 1) + 
-  geom_polygon(data = Map.Using, aes(x = long, y = lat, group = group), fill = NA, color = 'black', size = 0.3) +
-  ylim(c(-56, 80)) +
-  # change the background to black and white
-  theme_bw() +
-  # change the legend properties
-  # theme(legend.position = 'none') +
-  theme(legend.justification = c(0, 0), legend.position = c(0, 0), legend.background = element_rect(fill = NA), legend.text.align = 0) +
-  theme(legend.text = element_text(size = 35), legend.title = element_text(size = 35))  +
-  guides(colour = guide_legend(override.aes = list(size = 5))) +
-  theme(legend.text = element_text(size = 15), legend.title = element_text(size = 20)) +
-  # add title
-  labs(x = '', y = '') + 
-  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank()) + 
-  # modify the position of title
-  theme(plot.title = element_text(hjust = 0.5, size = 40)) + 
-  # modify the font size
-  theme(axis.title = element_text(size = 20)) + 
-  # modify the margin
-  theme(plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), 'inch')) +
-  theme(axis.text=element_text(size = 30))
-
-dev.off()
+# # can be changed to state or world to have US and world map
+# world_coastline = rgdal::readOGR(dsn='/Users/phoenix/Google_Drive/Tsinghua_Luo/World_Vector_Shape/ne110m/ne_110m_land.shp',layer = 'ne_110m_land')
+# world_coastline <- fortify(world_coastline)
+# Map.Using = world_coastline
+# 
+# 
+# current_data = cbind(profile_info[valid_profile_loc, 4], profile_info[valid_profile_loc, 5])
+# current_data = data.frame(current_data)
+# colnames(current_data) = c('lon', 'lat')
+# 
+# jpeg(paste('./figures/profile_distribution.jpeg', sep = ''), width = 12, height = 6, units = 'in', res = 300)
+# 
+# ggplot(data = current_data) +
+#   geom_point(aes(x = lon, y = lat), color = 'black', shape = 16, size = 1, alpha = 1) + 
+#   geom_polygon(data = Map.Using, aes(x = long, y = lat, group = group), fill = NA, color = 'black', size = 0.3) +
+#   ylim(c(-56, 80)) +
+#   # change the background to black and white
+#   theme_bw() +
+#   # change the legend properties
+#   # theme(legend.position = 'none') +
+#   theme(legend.justification = c(0, 0), legend.position = c(0, 0), legend.background = element_rect(fill = NA), legend.text.align = 0) +
+#   theme(legend.text = element_text(size = 35), legend.title = element_text(size = 35))  +
+#   guides(colour = guide_legend(override.aes = list(size = 5))) +
+#   theme(legend.text = element_text(size = 15), legend.title = element_text(size = 20)) +
+#   # add title
+#   labs(x = '', y = '') + 
+#   theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank()) + 
+#   # modify the position of title
+#   theme(plot.title = element_text(hjust = 0.5, size = 40)) + 
+#   # modify the font size
+#   theme(axis.title = element_text(size = 20)) + 
+#   # modify the margin
+#   theme(plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), 'inch')) +
+#   theme(axis.text=element_text(size = 30))
+# 
+# dev.off()
 
 
 
