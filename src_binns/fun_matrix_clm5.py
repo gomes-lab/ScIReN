@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import torch
 
@@ -228,32 +229,52 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	#---------------------------------------------------
 	# steady state env scalar
 	#---------------------------------------------------
-	xit = (torch.ones(n_soil_layer, timestep_num)*np.nan).to(device)
 	xiw = (torch.ones(n_soil_layer, timestep_num)*np.nan).to(device)
 	xio = xio_steady_state
 	xin = xin_steady_state
 
-	for itimestep in range(timestep_num):
-		# temperature related function xit
-		# calculate rate constant scalar for soil temperature
-		# assuming that the base rate constants are assigned for non-moisture
-		# limiting conditions at 25 C.
-		for ilayer in range(n_soil_layer):
-			if soil_temp_profile_steady_state[ilayer, itimestep] >= (0 + kelvin_to_celsius):
-				xit[ilayer, itimestep] = q10**((soil_temp_profile_steady_state[ilayer, itimestep] - (kelvin_to_celsius + 25))/10)
-			else:
-				xit[ilayer, itimestep] = q10**((273.15 - 298.15)/10)*(fq10**((soil_temp_profile_steady_state[ilayer, itimestep] - (0 + kelvin_to_celsius))/10))
-			# end if soil_temp_profile[ilayer, itimestep] >= 0 + kelvin_to_celsius:
-		# end for layer
+	# # Old way of calculating xit
+	# start = time.time()
+	# xit_old = (torch.ones(n_soil_layer, timestep_num)*np.nan).to(device)
+	# for itimestep in range(timestep_num):
+	# 	# temperature related function xit
+	# 	# calculate rate constant scalar for soil temperature
+	# 	# assuming that the base rate constants are assigned for non-moisture
+	# 	# limiting conditions at 25 C.
+	# 	for ilayer in range(n_soil_layer):
+	# 		if soil_temp_profile_steady_state[ilayer, itimestep] >= (0 + kelvin_to_celsius):
+	# 			xit_old[ilayer, itimestep] = q10**((soil_temp_profile_steady_state[ilayer, itimestep] - (kelvin_to_celsius + 25))/10)
+	# 		else:
+	# 			xit_old[ilayer, itimestep] = q10**((273.15 - 298.15)/10)*(fq10**((soil_temp_profile_steady_state[ilayer, itimestep] - (0 + kelvin_to_celsius))/10))
+	# 		# end if soil_temp_profile[ilayer, itimestep] >= 0 + kelvin_to_celsius:
+	# 	# end for layer
 		
-		catanf_30 = catanf(torch.tensor(30.0).to(device))
-		normalization_tref = torch.tensor(15).to(device)
-		if normalize_q10_to_century_tfunc == True:
-			# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
-			normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
-			xit[:, itimestep] = xit[:, itimestep]*normalization_factor
-		# end if normalize_q10_to_century_tfunc == True:
-	# end for itimestep
+	# 	catanf_30 = catanf(torch.tensor(30.0).to(device))
+	# 	normalization_tref = torch.tensor(15).to(device)
+	# 	if normalize_q10_to_century_tfunc == True:
+	# 		# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
+	# 		normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
+	# 		xit_old[:, itimestep] = xit_old[:, itimestep]*normalization_factor
+	# 	# end if normalize_q10_to_century_tfunc == True:
+	# # end for itimestep
+	# # # print("XIT old", time.time()-start)
+	# # # start = time.time()
+
+	# New way to calculate xit (vectorized))
+	xit_above_freezing = torch.pow(q10, ((soil_temp_profile_steady_state - (kelvin_to_celsius + 25))/10))  # Above freezing case first
+	xit_below_freezing = torch.pow(q10, ((273.15 - 298.15)/10)) * torch.pow(fq10, ((soil_temp_profile_steady_state - (0 + kelvin_to_celsius))/10))	
+	freezing_mask = (soil_temp_profile_steady_state < (0 + kelvin_to_celsius)).int()  # Create a mask which is True when the soil temperatue is below freezing
+	xit = xit_above_freezing * (1-freezing_mask) + xit_below_freezing * freezing_mask  # [freezing_mask] = xit_below_freezing[freezing_mask].clone()
+	catanf_30 = catanf(torch.tensor(30.0).to(device))
+	normalization_tref = torch.tensor(15).to(device)
+	if normalize_q10_to_century_tfunc == True:
+		# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
+		normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
+		xit = xit * normalization_factor
+	# print("XIT new", time.time() - start)
+	# assert(torch.equal(xit_old, xit))
+
+
 	xiw = soil_water_profile_steady_state*w_scaling
 	xiw[xiw > 1] = 1
 
@@ -261,9 +282,16 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	# steady state tridiagnal matrix, A matrix, K matrix, fire matrix
 	#---------------------------------------------------
 	sand_vector = torch.mean(sand_vector_steady_state, axis = 1)
+
 	# allocation matrix
-	a_ma = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
-	
+	# start = time.time()
+	# a_ma_old = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
+	# print("a_matrix old", time.time()-start)
+	# start = time.time()
+	a_ma = a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
+	# print("a_matrix_vectorized", time.time()-start)
+	# assert torch.equal(a_ma_old, a_ma)
+
 	kk_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device) 
 	tri_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device) 
 	
@@ -275,12 +303,28 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		timesteply_xin = xin[:, itimestep]
 
 		# K matrix
-		kk_ma_middle[:, :, itimestep] = kk_matrix(timesteply_xit, timesteply_xiw, timesteply_xio, timesteply_xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3)
-		# tri matrix
+		# start = time.time()
+		# kk_ma_old = kk_matrix(timesteply_xit, timesteply_xiw, timesteply_xio, timesteply_xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3)
+		# print("kk_ma old", time.time() - start)
+		# start = time.time()
+		kk_ma = kk_matrix_vectorized(timesteply_xit, timesteply_xiw, timesteply_xio, timesteply_xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3)
+		# print("kk_ma_vectorized", time.time() - start)
+		# assert torch.equal(kk_ma_old, kk_ma)
+		kk_ma_middle[:, :, itimestep] = kk_ma
+
+		# tri matrix	
 		timesteply_nbedrock = nbedrock_steady_state[itimestep]
 		timesteply_altmax_current_profile = altmax_current_profile_steady_state[itimestep]
 		timesteply_altmax_lastyear_profile = altmax_lastyear_profile_steady_state[itimestep]
-		tri_ma_middle[:, :, itimestep] = tri_matrix_alternative(timesteply_nbedrock, slope, intercept)
+
+		# start = time.time()
+		# tri_ma_alternative_old = tri_matrix_alternative(timesteply_nbedrock, slope, intercept, device)
+		# print("tri_ma_alt", time.time()-start)
+		# start = time.time()
+		tri_ma_alternative = tri_matrix_alternative_vectorized(timesteply_nbedrock, slope, intercept, device)
+		# print("tri_ma_alt_vectorized", time.time()-start)
+		# assert torch.equal(tri_ma_alternative_old[20:140, 20:140], tri_ma_alternative[20:140, 20:140])
+		tri_ma_middle[:, :, itimestep] = tri_ma_alternative
 		# tri_ma_middle[:, :, itimestep] = tri_matrix(timesteply_nbedrock, timesteply_altmax_current_profile, timesteply_altmax_lastyear_profile, bio, adv, cryo)
 	# end for itimestep
 	tri_ma = torch.mean(tri_ma_middle, axis = 2)
@@ -291,19 +335,30 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	#---------------------------------------------------
 	# in the original beta model in Jackson et al 1996, the unit for the depth of the soil is cm (dmax*100)
 	m_to_cm = 100
+
 	vertical_prof = (torch.ones(n_soil_layer)*np.nan).to(device) 
 	if torch.mean(altmax_lastyear_profile_steady_state) > 0:
-		for j in range(n_soil_layer): #1:n_soil_layer
-			if j == 0: # first layer
-				vertical_prof[j] = (beta**((zisoi_0)*m_to_cm) - beta**(zisoi[j]*m_to_cm))/dz[j]
-			else:
-				vertical_prof[j] = (beta**((zisoi[j - 1])*m_to_cm) - beta**(zisoi[j]*m_to_cm))/dz[j]
-			# end j == 0:
-		# end for j in range(n_soil_layer):
+		# # Old way of calculating vertical_prof
+		# vertical_prof_old = (torch.ones(n_soil_layer)*np.nan).to(device) 
+		# for j in range(n_soil_layer): #1:n_soil_layer
+		# 	if j == 0: # first layer
+		# 		vertical_prof_old[j] = (beta**((zisoi_0)*m_to_cm) - beta**(zisoi[j]*m_to_cm))/dz[j]
+		# 	else:
+		# 		vertical_prof_old[j] = (beta**((zisoi[j - 1])*m_to_cm) - beta**(zisoi[j]*m_to_cm))/dz[j]
+		# 	# end j == 0:
+		# # end for j in range(n_soil_layer):
+
+		# New way to calculate vertical_prof (vectorized)
+		vertical_prof = (torch.ones(n_soil_layer)*np.nan).to(device) 
+		vertical_prof[0] = (beta**((zisoi_0)*m_to_cm) - beta**(zisoi[0]*m_to_cm))/dz[0]
+		vertical_prof[1:n_soil_layer] = (beta**((zisoi[0:n_soil_layer-1])*m_to_cm) - beta**(zisoi[1:n_soil_layer]*m_to_cm))/dz[1:n_soil_layer]
+		# assert torch.equal(vertical_prof_old, vertical_prof)
+
 	else:
 		vertical_prof[0] = 1/dz[0]
 		vertical_prof[1:] = 0
 	# end if np.mean(altmax_lastyear_profile_steady_state) > 0:
+
 	vertical_input = dz[0:n_soil_layer]*vertical_prof/sum(vertical_prof*dz[0:n_soil_layer])
 	
 	#---------------------------------------------------
@@ -315,7 +370,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	input_tot_litter1 = torch.nansum(input_vector_litter1_steady_state)/days_per_year # (gc/m2/day)
 	input_tot_litter2 = torch.nansum(input_vector_litter2_steady_state)/days_per_year # (gc/m2/day)
 	input_tot_litter3 = torch.nansum(input_vector_litter3_steady_state)/days_per_year # (gc/m2/day)
-	
+
 	# redistribution by beta
 	matrix_in[0:20, 0] = input_tot_cwd*vertical_input/dz[0:n_soil_layer] # litter input gc/m3/day
 	matrix_in[20:40, 0] = input_tot_litter1*vertical_input/dz[0:n_soil_layer]
@@ -382,6 +437,39 @@ def a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, san
 	
 # end def a_matrix
 
+# If a_ma is a block matrix where each A_{ij} is (nlevdecomp x nlevdecomp),
+# returns a VIEW of relevant block A_{ij}.
+# The returned tensor shares the same memory as a_ma!!!
+# For consistency with the paper (Lu et al. 2020), i and j are indexed from 1. 
+def get_view(a_ma, nlevdecomp, i, j):
+	return a_ma[(i-1)*nlevdecomp:i*nlevdecomp, (j-1)*nlevdecomp:j*nlevdecomp]
+
+
+def a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector):
+	device = fl1s1.device
+	nlevdecomp = n_soil_layer
+	nspools = npool
+	nspools_vr = npool_vr
+
+	# a diagonal matrix
+	a_ma_vr = torch.diag(-1*torch.ones(nspools_vr, device=device))
+
+	fcwdl3 = 1 - fcwdl2
+	transfer_fraction = [fl1s1.item(), fl2s1.item(), fl3s2.item(), fs1s2.item(), fs1s3.item(), fs2s1.item(), fs2s3.item(), fs3s1.item(), fcwdl2.item(), fcwdl3.item()]
+	get_view(a_ma_vr, nlevdecomp, 3, 1).fill_diagonal_(transfer_fraction[8])
+	get_view(a_ma_vr, nlevdecomp, 4, 1).fill_diagonal_(transfer_fraction[9])
+	get_view(a_ma_vr, nlevdecomp, 5, 2).fill_diagonal_(transfer_fraction[0])
+	get_view(a_ma_vr, nlevdecomp, 5, 3).fill_diagonal_(transfer_fraction[1])
+	get_view(a_ma_vr, nlevdecomp, 5, 6).fill_diagonal_(transfer_fraction[5])
+	get_view(a_ma_vr, nlevdecomp, 5, 7).fill_diagonal_(transfer_fraction[7])
+	get_view(a_ma_vr, nlevdecomp, 6, 4).fill_diagonal_(transfer_fraction[2])
+	get_view(a_ma_vr, nlevdecomp, 6, 5).fill_diagonal_(transfer_fraction[3])
+	get_view(a_ma_vr, nlevdecomp, 7, 5).fill_diagonal_(transfer_fraction[4])
+	get_view(a_ma_vr, nlevdecomp, 7, 6).fill_diagonal_(transfer_fraction[6])
+	return a_ma_vr
+
+
+
 def kk_matrix(xit, xiw, xio, xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3):
 	device = xit.device
 	
@@ -417,18 +505,58 @@ def kk_matrix(xit, xiw, xio, xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau
 		kk_ma_vr[5*n_soil_layer+j, 5*n_soil_layer+j] = ks2 * xi_tw[j] * depth_scalar[j]
 		kk_ma_vr[6*n_soil_layer+j, 6*n_soil_layer+j] = ks3 * xi_tw[j] * depth_scalar[j]
 	# end for j
+	# torch.diag(kk_ma_vr)[0::n_soil_layer] = kcwd * xi_tw * depth_scalar
+
 	return kk_ma_vr
 
 # end def kk_matrix
 
+
+def kk_matrix_vectorized(xit, xiw, xio, xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3):
+	device = xit.device
+	
+	n_soil_layer = 20
+	days_per_year = 365
+	# env scalars
+	n_scalar = xin[:n_soil_layer] # nitrogen 
+	t_scalar = xit[:n_soil_layer] # temperature
+	w_scalar = xiw[:n_soil_layer] # water
+	o_scalar = xio[:n_soil_layer] # oxygen
+	
+	# decomposition rate
+	kl1 = 1/(days_per_year * tau4l1)
+	kl2 = 1/(days_per_year  * tau4l2)
+	kl3 = 1/(days_per_year  * tau4l3)
+	ks1 = 1/(days_per_year  * tau4s1)
+	ks2 = 1/(days_per_year  * tau4s2)
+	ks3 = 1/(days_per_year  * tau4s3)
+	kcwd = 1/(days_per_year  * tau4cwd)
+
+	decomp_depth_efolding = efolding
+
+	depth_scalar = torch.exp(-zsoi/decomp_depth_efolding)[:n_soil_layer]  # NOTE added the [:n_soil_layer]
+	xi_tw = t_scalar*w_scalar*o_scalar
+
+	diagonal_vector = torch.concatenate([kcwd * xi_tw * depth_scalar,
+									     kl1 * xi_tw * depth_scalar * n_scalar,
+										 kl2 * xi_tw * depth_scalar * n_scalar,
+										 kl3 * xi_tw * depth_scalar * n_scalar,
+										 ks1 * xi_tw * depth_scalar,
+										 ks2 * xi_tw * depth_scalar,
+										 ks3 * xi_tw * depth_scalar], dim=0).to(device)
+	assert diagonal_vector.shape == (140, )
+	return torch.diag(diagonal_vector)
+	# return kk_ma_vr
+
+						
 # only diffusion
-def tri_matrix_alternative(nbedrock, slope, intercept):
+def tri_matrix_alternative(nbedrock, slope, intercept, device):
 	# slope = -1.2
 	# intercept = -4
 	rate_to_atmos = -0. # # at the surface, part of the CO2 should be released to atmos
 	transport_rate = -10**(intercept + slope*torch.log10(zsoi[0:20]))
 	transport_rate[nbedrock:] = -10**(-30)
-	tri_ma_middle = torch.zeros(n_soil_layer, n_soil_layer)
+	tri_ma_middle = torch.zeros(n_soil_layer, n_soil_layer, device=device)
 	for ilayer in range(n_soil_layer):
 		if ilayer == 0:
 			tri_ma_middle[ilayer, ilayer] = -1*(transport_rate[ilayer] + rate_to_atmos) # at the surface, part of the CO2 should be released to atmos
@@ -441,12 +569,36 @@ def tri_matrix_alternative(nbedrock, slope, intercept):
 			tri_ma_middle[ilayer, (ilayer-1)] = transport_rate[ilayer]
 			tri_ma_middle[ilayer, (ilayer+1)] = transport_rate[ilayer]
 	#end for ilayer in range(n_soil_layer):
-	tri_ma = torch.zeros([npool_vr, npool_vr])
-	for ipool in range(npool):
+	tri_ma = torch.zeros([npool_vr, npool_vr], device=device)
+	for ipool in range(1, npool):  # Changed so that the first pool (coarse woody debris) is all zeroes
 		tri_ma[(ipool*n_soil_layer):((ipool+1)*n_soil_layer), (ipool*n_soil_layer):((ipool+1)*n_soil_layer)] = tri_ma_middle
 	# end for ipool in range(npool):
 	return tri_ma
 # end  def tri_matrix_gas()
+
+
+def tri_matrix_alternative_vectorized(nbedrock, slope, intercept, device):
+	# Use torch.diag with offset
+	# slope = -1.2
+	# intercept = -4
+	rate_to_atmos = -0. # # at the surface, part of the CO2 should be released to atmos
+	transport_rate = -10**(intercept + slope*torch.log10(zsoi[0:20]))
+	transport_rate[nbedrock:] = -10**(-30)
+
+	# Create a tridiagonal matrix for each pool type
+	tri_ma_middle = torch.zeros(n_soil_layer, n_soil_layer, device=device)
+	tri_ma_middle = torch.diagonal_scatter(tri_ma_middle, -2*transport_rate[0:n_soil_layer], offset=0)
+	tri_ma_middle = torch.diagonal_scatter(tri_ma_middle, transport_rate[0:n_soil_layer-1], offset=1)  # 1 above the main diagonal
+	tri_ma_middle = torch.diagonal_scatter(tri_ma_middle, transport_rate[1:n_soil_layer], offset=-1)  # 1 below the main diagonal
+	tri_ma_middle[0, 0] = -1*(transport_rate[0] + rate_to_atmos)
+	tri_ma_middle[n_soil_layer-1, n_soil_layer-1] = -1*transport_rate[n_soil_layer-1]
+	zero_matrix = torch.zeros(n_soil_layer, n_soil_layer, device=device)
+
+	tri_ma = torch.block_diag(zero_matrix, tri_ma_middle, tri_ma_middle, tri_ma_middle,
+				              tri_ma_middle, tri_ma_middle, tri_ma_middle)  # First is zero matrix since CWD vertical mixing is not allowed
+	return tri_ma
+
+
 
 def tri_matrix(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, cryoturb_diffusion_k):
 	device = nbedrock.device

@@ -29,8 +29,6 @@ if torch.cuda.is_available():
 	dev = 'cuda'
 else:
 	dev = 'cpu'
-# @joshuafan changed
-dev = 'cpu'
 
 device = torch.device(dev) 
 
@@ -417,7 +415,7 @@ var_idx_to_emb = dict()
 for group in categorical_vars:
 	n_categories = int(np.nanmax(env_info[group]) + 1)
 	print("Variable {}: num categories {}".format(group, n_categories))
-	print("Unique values", env_info[group].value_counts(sort=True))
+	print("Unique values", env_info[group].value_counts().sort_index())
 	emb = nn.Embedding(num_embeddings=n_categories, embedding_dim=5).to(device)
 	for var in group:
 		idx = var4nn.index(var)
