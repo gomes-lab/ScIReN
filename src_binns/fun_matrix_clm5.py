@@ -324,8 +324,8 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		tri_ma_alternative = tri_matrix_alternative_vectorized(timesteply_nbedrock, slope, intercept, device)
 		# print("tri_ma_alt_vectorized", time.time()-start)
 		# assert torch.equal(tri_ma_alternative_old[20:140, 20:140], tri_ma_alternative[20:140, 20:140])
-		# tri_ma_middle[:, :, itimestep] = tri_matrix(timesteply_nbedrock, timesteply_altmax_current_profile, timesteply_altmax_lastyear_profile, bio, adv, cryo)
 		tri_ma_middle[:, :, itimestep] = tri_ma_alternative
+		# tri_ma_middle[:, :, itimestep] = tri_matrix(timesteply_nbedrock, timesteply_altmax_current_profile, timesteply_altmax_lastyear_profile, bio, adv, cryo)
 	# end for itimestep
 	tri_ma = torch.mean(tri_ma_middle, axis = 2)
 	kk_ma = torch.mean(kk_ma_middle, axis = 2)
@@ -358,9 +358,6 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		vertical_prof[0] = 1/dz[0]
 		vertical_prof[1:] = 0
 	# end if np.mean(altmax_lastyear_profile_steady_state) > 0:
-
-	if torch.mean(altmax_lastyear_profile_steady_state) > 0:
-		vertical_prof
 
 	vertical_input = dz[0:n_soil_layer]*vertical_prof/sum(vertical_prof*dz[0:n_soil_layer])
 	
