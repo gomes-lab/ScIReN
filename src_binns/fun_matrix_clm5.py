@@ -19,12 +19,12 @@ def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_de
 		4.27000000000000, 5.06000000000000, 5.95000000000000, \
 		6.94000000000000, 8.03000000000000, 9.79500000000000, \
 		13.3277669529664, 19.4831291701244, 28.8707244343160, \
-		41.9984368640029]).to(device)
+		41.9984368640029], device=device)
 	n_soil_layer = 20
 
 	# final ouputs of simulation
 	profile_num = para.shape[0]
-	simu_ouput = (torch.ones((profile_num, 200))*np.nan).to(device)
+	simu_ouput = (torch.ones((profile_num, 200), device=device)*np.nan)  # .to(device)
 	# calculate soc solution for each profile
 	for iprofile in range(0, profile_num):
 		profile_para = para[iprofile, :]
@@ -96,8 +96,8 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	n_soil_layer = 20
 	days_per_year = 365
 	secspday = 24*60*60
-	days_per_month = torch.tensor([[31, 30, 31, 28, 31, 30, 31, 31, 30, 31, 30, 31]]).transpose(0, 1).to(device)
-	days_per_season = torch.tensor([[92, 89, 92, 92]]).transpose(0, 1).to(device)
+	days_per_month = torch.tensor([[31, 30, 31, 28, 31, 30, 31, 31, 30, 31, 30, 31]], device=device).transpose(0, 1)  # .to(device)
+	days_per_season = torch.tensor([[92, 89, 92, 92]], device=device).transpose(0, 1)  # .to(device)
 	
 	timestep_num = month_num
 	days_per_timestep = days_per_season
@@ -116,7 +116,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		0.740000000000000, 0.840000000000000, 0.940000000000000, \
 		1.04000000000000, 1.14000000000000, 2.39000000000000, \
 		4.67553390593274, 7.63519052838329, 11.1400000000000, \
-		15.1154248593737]).to(device)
+		15.1154248593737], device=device)  # .to(device)
 	
 	# depth of the interface
 	zisoi = torch.tensor([2.000000000000000E-002, 6.000000000000000E-002, \
@@ -127,7 +127,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		3.90000000000000, 4.64000000000000, 5.48000000000000, \
 		6.42000000000000, 7.46000000000000, 8.60000000000000, \
 		10.9900000000000, 15.6655339059327, 23.3007244343160, \
-		34.4407244343160, 49.5561492936897]).to(device)
+		34.4407244343160, 49.5561492936897], device=device)  # .to(device)
 
 	zisoi_0 = 0;
 
@@ -140,10 +140,10 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		4.27000000000000, 5.06000000000000, 5.95000000000000, \
 		6.94000000000000, 8.03000000000000, 9.79500000000000, \
 		13.3277669529664, 19.4831291701244, 28.8707244343160, \
-		41.9984368640029]).to(device)
+		41.9984368640029], device=device)  # .to(device)
 
 	# depth between two node
-	dz_node = zsoi - torch.cat((torch.tensor([0.0]).to(device), zsoi[:-1]), axis = 0)
+	dz_node = zsoi - torch.cat((torch.tensor([0.0], device=device), zsoi[:-1]), axis = 0)
 	
 	#---------------------------------------------------
 	# steady state forcing
@@ -229,7 +229,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	#---------------------------------------------------
 	# steady state env scalar
 	#---------------------------------------------------
-	xiw = (torch.ones(n_soil_layer, timestep_num)*np.nan).to(device)
+	xiw = (torch.ones(n_soil_layer, timestep_num, device=device)*np.nan) # .to(device)
 	xio = xio_steady_state
 	xin = xin_steady_state
 
@@ -265,8 +265,8 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	xit_below_freezing = torch.pow(q10, ((273.15 - 298.15)/10)) * torch.pow(fq10, ((soil_temp_profile_steady_state - (0 + kelvin_to_celsius))/10))	
 	freezing_mask = (soil_temp_profile_steady_state < (0 + kelvin_to_celsius)).int()  # Create a mask which is True when the soil temperatue is below freezing
 	xit = xit_above_freezing * (1-freezing_mask) + xit_below_freezing * freezing_mask  # [freezing_mask] = xit_below_freezing[freezing_mask].clone()
-	catanf_30 = catanf(torch.tensor(30.0).to(device))
-	normalization_tref = torch.tensor(15).to(device)
+	catanf_30 = catanf(torch.tensor(30.0, device=device))
+	normalization_tref = torch.tensor(15, device=device)  #.to(device)
 	if normalize_q10_to_century_tfunc == True:
 		# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
 		normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
@@ -292,8 +292,8 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	# print("a_matrix_vectorized", time.time()-start)
 	# assert torch.equal(a_ma_old, a_ma)
 
-	kk_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device) 
-	tri_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device) 
+	kk_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num], device=device)*np.nan)  #.to(device) 
+	tri_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num], device=device)*np.nan)  #.to(device) 
 	
 	for itimestep in range(timestep_num):
 		# decomposition matrix
@@ -336,7 +336,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	# in the original beta model in Jackson et al 1996, the unit for the depth of the soil is cm (dmax*100)
 	m_to_cm = 100
 
-	vertical_prof = (torch.ones(n_soil_layer)*np.nan).to(device) 
+	vertical_prof = (torch.ones(n_soil_layer, device=device)*np.nan)
 	if torch.mean(altmax_lastyear_profile_steady_state) > 0:
 		# # Old way of calculating vertical_prof
 		# vertical_prof_old = (torch.ones(n_soil_layer)*np.nan).to(device) 
@@ -349,7 +349,6 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		# # end for j in range(n_soil_layer):
 
 		# New way to calculate vertical_prof (vectorized)
-		vertical_prof = (torch.ones(n_soil_layer)*np.nan).to(device) 
 		vertical_prof[0] = (beta**((zisoi_0)*m_to_cm) - beta**(zisoi[0]*m_to_cm))/dz[0]
 		vertical_prof[1:n_soil_layer] = (beta**((zisoi[0:n_soil_layer-1])*m_to_cm) - beta**(zisoi[1:n_soil_layer]*m_to_cm))/dz[1:n_soil_layer]
 		# assert torch.equal(vertical_prof_old, vertical_prof)
@@ -364,7 +363,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	#---------------------------------------------------
 	# steady state analytical solution of soc
 	#---------------------------------------------------
-	matrix_in = (torch.ones([npool_vr, 1])*np.nan).to(device) 
+	matrix_in = (torch.ones([npool_vr, 1], device=device)*np.nan)
 	# total input amount
 	input_tot_cwd = torch.nansum(input_vector_cwd_steady_state)/days_per_year # (gc/m2/day)
 	input_tot_litter1 = torch.nansum(input_vector_litter1_steady_state)/days_per_year # (gc/m2/day)
@@ -388,7 +387,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		print("Solving failed")
 		
 		# cpool_steady_state = torch.linalg.lstsq((torch.matmul(a_ma, kk_ma)-tri_ma), (-matrix_in)).solution 
-		cpool_steady_state = (torch.ones([140, 1])*(-1.0)).to(device)*torch.sum(para)/torch.sum(para)
+		cpool_steady_state = (torch.ones([140, 1], device=device)*(-1.0))*torch.sum(para)/torch.sum(para)
 	# end try
 	# cpool_steady_state = (torch.ones([140, 1])*(-9999.)).to(device)*torch.sum(para)/torch.sum(para) 
 	# end try
@@ -416,7 +415,7 @@ def a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, san
 	nspools = npool
 	nspools_vr = npool_vr
 	# a diagnal matrix
-	a_ma_vr = torch.diag(-1*torch.ones(nspools_vr)).to(device)
+	a_ma_vr = torch.diag(-1*torch.ones(nspools_vr, device=device))
 
 	fcwdl3 = 1 - fcwdl2
 	
