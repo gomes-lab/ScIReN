@@ -16,7 +16,7 @@ setwd('/Users/ft254/Github/BINNS')
 ############################
 data_path = '/Users/ft254/DATAHUB/BINNS/OUTPUT_DATA/'
 
-date_stamp = '2023-10-02'
+date_stamp = '2023-11-02_08_26_18_340729'
 
 binn_para = read.csv(paste(data_path, 'neural_network/nn_best_pred_para_', date_stamp, '.csv', sep = ''), header = FALSE, sep = ',')
 binn_para = data.matrix(binn_para)
@@ -87,7 +87,7 @@ for (ipara in 1:length(para_names)) {
   
 }
 
-jpeg(paste('./figures/para_binn_vs_mcmc.jpeg', sep = ''), width = 42, height = 28, units = 'in', res = 300)
+jpeg(paste('./figures/', date_stamp, '_para_binn_vs_mcmc.jpeg', sep = ''), width = 42, height = 28, units = 'in', res = 300)
 plot_grid(p_corr1, p_corr2, p_corr3, p_corr4, p_corr5, p_corr6,
           p_corr7, p_corr8, p_corr9, p_corr10, p_corr11, p_corr12, 
           p_corr13, p_corr14, p_corr15, p_corr16, p_corr17, p_corr18,
@@ -110,10 +110,10 @@ colnames(current_data) = c('binn', 'obs')
 explain_var = 1 - sum((current_data$binn - current_data$obs)^2)/
   sum((mean(current_data$obs) - current_data$obs)^2)
 explain_var
-jpeg(paste('./figures/soc_obs_vs_binn.jpeg', sep = ''), width = 10, height = 10, units = 'in', res = 300)
+jpeg(paste('./figures/', date_stamp, '_soc_obs_vs_binn.jpeg', sep = ''), width = 10, height = 10, units = 'in', res = 300)
 ggplot(data = current_data) + 
   stat_bin_hex(aes(x = obs, y = binn), bins = 100) +
-  scale_fill_gradientn(name = 'Count', colors = viridis(7), trans = 'identity', limits = c(1, 20), oob = scales::squish) +
+  scale_fill_gradientn(name = 'Count', colors = viridis(7), trans = 'identity', limits = c(1, 50), oob = scales::squish) +
   scale_y_continuous(limits = c(0.1, 1000), trans = 'log10', labels = trans_format('log10', math_format(10^.x))) + 
   scale_x_continuous(limits = c(0.1, 1000), trans = 'log10', labels = trans_format('log10', math_format(10^.x))) + 
   geom_abline(slope = 1, intercept = 0, size = 1, color = 'black') +
