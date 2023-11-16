@@ -583,14 +583,19 @@ def tri_matrix_alternative_vectorized(nbedrock, slope, intercept, device):
 	rate_to_atmos = -0. # # at the surface, part of the CO2 should be released to atmos
 	transport_rate = -10**(intercept + slope*torch.log10(zsoi[0:20]))
 	transport_rate[nbedrock:] = -10**(-30)
+	
+	float_ratio = 1.0
+	leach_ratio = 1.0
+	transport_rate_float = transport_rate*float_ratio
+	transport_rate_leach = transport_rate*leach_ratio
 
 	# Create a tridiagonal matrix for each pool type
 	tri_ma_middle = torch.zeros(n_soil_layer, n_soil_layer, device=device)
-	tri_ma_middle = torch.diagonal_scatter(tri_ma_middle, -2*transport_rate[0:n_soil_layer], offset=0)
-	tri_ma_middle = torch.diagonal_scatter(tri_ma_middle, transport_rate[0:n_soil_layer-1], offset=1)  # 1 above the main diagonal
-	tri_ma_middle = torch.diagonal_scatter(tri_ma_middle, transport_rate[1:n_soil_layer], offset=-1)  # 1 below the main diagonal
-	tri_ma_middle[0, 0] = -1*(transport_rate[0] + rate_to_atmos)
-	tri_ma_middle[n_soil_layer-1, n_soil_layer-1] = -1*transport_rate[n_soil_layer-1]
+	tri_ma_middle = torch.diagonal_scatter(tri_ma_middle, -1*(transport_rate_float[0:n_soil_layer]+transport_rate_leach[0:n_soil_layer]), offset=0)
+	tri_ma_middle = torch.diagonal_scatter(tri_ma_middle, transport_rate_float[1:n_soil_layer], offset=1)  # 1 above the main diagonal
+	tri_ma_middle = torch.diagonal_scatter(tri_ma_middle, transport_rate_leach[0:(n_soil_layer-1)], offset=-1)  # 1 below the main diagonal
+	tri_ma_middle[0, 0] = -1*(transport_rate_leach[0] + rate_to_atmos)
+	tri_ma_middle[n_soil_layer-1, n_soil_layer-1] = -1*transport_rate_float[n_soil_layer-1]
 	zero_matrix = torch.zeros(n_soil_layer, n_soil_layer, device=device)
 
 	tri_ma = torch.block_diag(zero_matrix, tri_ma_middle, tri_ma_middle, tri_ma_middle,
