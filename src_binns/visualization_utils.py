@@ -135,20 +135,27 @@ def plot_true_vs_predicted(filename, y_hat, y):
 def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=None):
     if title is None:
         title = var_name
+    # Exclude NaNs and Infs
     df = pd.DataFrame({"lon": lons,
                        "lat": lats,
                         var_name: values})
+    df = df[~np.isnan(df[var_name])]
+    df = df[~np.isinf(df[var_name])]
 
     # Plot world map
     gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
     world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
-    gdf.plot(column=var_name, ax=world.boundary.plot(color='gray', figsize=(25, 18)), marker='o', markersize=10, legend=True, legend_kwds={'shrink': 0.7}, zorder=10)
+    gdf.plot(column=var_name, ax=world.boundary.plot(color='gray', figsize=(25, 18)), marker='o', markersize=2, legend=True, legend_kwds={'shrink': 0.7}, zorder=10)
     plt.title(title)
     plt.savefig(os.path.join(plot_dir, "map_{}.png".format(var_name)), bbox_inches='tight')
     plt.close()
 
     # Plot histograms of the raw values
-    plt.hist(values[~np.isnan(values)], bins=30)
+    # filtered_values = values[~np.isnan(values)]
+    # filtered_values = filtered_values[~np.isinf(filtered_values)]
+    values = values[~np.isnan(values)]
+    values = values[~np.isinf(values)]
+    plt.hist(values, bins=30)
     plt.title(title)
     plt.savefig(os.path.join(plot_dir, "histogram_{}.png".format(var_name)))
     plt.close()
