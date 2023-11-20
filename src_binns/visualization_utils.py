@@ -9,6 +9,13 @@ from matplotlib.colors import Normalize
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, euclidean_distances
 from scipy.interpolate import interpn
+import subprocess
+
+
+# Get the hash of the latest Git commit.
+# TODO - this is not a visualization method, but temporarily putting it here for convenience
+def get_git_revision_hash():
+    return subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
 
 
 def plot_losses(filename, train_losses, val_losses):
