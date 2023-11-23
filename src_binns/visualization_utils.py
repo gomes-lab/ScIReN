@@ -139,7 +139,7 @@ def plot_true_vs_predicted(filename, y_hat, y):
     plt.close()
 
 
-def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=None):
+def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=None, categorical=False):
     if title is None:
         title = var_name
     # Exclude NaNs and Infs
@@ -152,7 +152,7 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
     # Plot world map
     gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
     world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
-    gdf.plot(column=var_name, ax=world.boundary.plot(color='gray', figsize=(25, 18)), marker='o', markersize=2, legend=True, legend_kwds={'shrink': 0.7}, zorder=10)
+    gdf.plot(column=var_name, ax=world.boundary.plot(color='gray', figsize=(25, 18)), marker='o', markersize=2, legend=True, zorder=10)  # legend_kwds={'shrink': 0.7},
     plt.title(title)
     plt.savefig(os.path.join(plot_dir, "map_{}.png".format(var_name)), bbox_inches='tight')
     plt.close()

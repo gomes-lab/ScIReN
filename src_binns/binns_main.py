@@ -14,8 +14,11 @@ import os
 import torch
 from torch import nn
 from torch.utils.data import random_split, DataLoader
+from torch.nn.utils.parametrizations import spectral_norm
 
-
+import argparse
+import csv
+import random
 from scipy.io import loadmat
 import netCDF4 as ncread 
 import mat73
@@ -25,18 +28,40 @@ from matplotlib import pyplot as plt
 from fun_matrix_clm5 import fun_model_simu
 import visualization_utils
 
+# Set device
 if torch.cuda.is_available():
 	dev = 'cuda'
 else:
 	dev = 'cpu'
-
 device = torch.device(dev) 
-
 print(datetime.now(), '------------device: ', device, '------------')
 
 print(datetime.now(), '------------all packages loaded------------')
 
-time_stamp = f'{datetime.date(datetime.now())}'
+################################################
+# Command-line arguments
+################################################
+parser = argparse.ArgumentParser()
+parser.add_argument("--lr", type=float, default=1e-3)
+parser.add_argument("--weight_decay", type=float, default=1e-2)
+parser.add_argument("--seed", type=int, default=0, help="Random seed")
+parser.add_argument("--note", type=str, default="", help="Optional name to give to the model")
+args = parser.parse_args()
+
+# Set random seeds to try to ensure reproducibility
+random.seed(args.seed)
+np.random.seed(args.seed) # set the random seed of numpy
+torch.manual_seed(args.seed)
+if torch.cuda.is_available():
+	torch.cuda.manual_seed(args.seed)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = True
+
+# Current timestamp and model name
+run_name = time.strftime("%Y%m%d-%H%M%S")  # Convert datetime to string: https://stackoverflow.com/questions/10607688/how-to-create-a-file-name-with-the-current-date-time-in-python
+if args.note != "":
+	run_name += ("_" + args.note)
+
 ################################################
 # input data
 ################################################
@@ -53,10 +78,10 @@ is_resubmit = 0
 
 # @joshuafan changed
 # pathway
-data_dir_input = '/Users/ft254/DATAHUB/ENSEMBLE/INPUT_DATA/'
-data_dir_output = '/Users/ft254/DATAHUB/BINNS/OUTPUT_DATA/'
-# data_dir_input = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/INPUT_DATA/'
-# data_dir_output = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/'
+# data_dir_input = '/Users/ft254/DATAHUB/ENSEMBLE/INPUT_DATA/'
+# data_dir_output = '/Users/ft254/DATAHUB/BINNS/OUTPUT_DATA/'
+data_dir_input = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/INPUT_DATA/'
+data_dir_output = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/'
 os.makedirs(os.path.join(data_dir_output, "neural_network"), exist_ok=True)
 PLOT_DIR = os.path.join(data_dir_output, "visualizations")
 os.makedirs(PLOT_DIR, exist_ok=True)
@@ -371,12 +396,6 @@ env_info.columns = env_info_names
 env_info["original_lon"] = original_lons
 env_info["original_lat"] = original_lats
 
-# # @joshuafan added temporarily
-# env_info.index = env_info.ProfileNum
-# print("Env info old shape", env_info.shape)
-# print("Env info", env_info.head())
-# print(profile_collection[0:5, 0])
-
 # variables used in training the NN
 var4nn = ['Lon', 'Lat', \
 'ESA_Land_Cover', \
@@ -604,10 +623,10 @@ class nn_model(nn.Module):
 			new_input_size += emb.embedding_dim
 
 		# Neural network layers
-		self.l1 = nn.Linear(new_input_size, 256)
-		self.l2 = nn.Linear(256, 512)
-		self.l3 = nn.Linear(512, 512)
-		self.l4 = nn.Linear(512, 256)
+		self.l1 = spectral_norm(nn.Linear(new_input_size, 256))
+		self.l2 = spectral_norm(nn.Linear(256, 512))
+		self.l3 = spectral_norm(nn.Linear(512, 512))
+		self.l4 = spectral_norm(nn.Linear(512, 256))
 		self.l5 = nn.Linear(256, 21)
 
 	def forward(self, input_var, wosis_depth):
@@ -653,7 +672,7 @@ model = nn_model(var_idx_to_emb).to(device)
 
 # optimizer - @joshuafan changed
 # optimizer = torch.optim.Adadelta(model.parameters())
-optimizer = torch.optim.AdamW(model.parameters(), lr = 0.001, weight_decay = 0.01)
+optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 # loss
 fun_loss = binns_loss
 
@@ -668,7 +687,13 @@ num_epoch = 50
 # middle_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32)
 
 train_loss_history = np.ones((num_epoch, int(np.ceil(train_y.shape[0]/batch_size))))*np.nan
-val_loss_history = np.ones((num_epoch, int(np.ceil(val_y.shape[0]/batch_size))))*np.nan   
+val_loss_history = np.ones((num_epoch, int(np.ceil(val_y.shape[0]/batch_size))))*np.nan
+
+# Save best validation loss, best epoch, best model path
+best_val_loss = float('inf')
+best_epoch = -1
+best_model_path = data_dir_output + 'neural_network/opt_nn_' + run_name + '.pt'
+
 for iepoch in range(num_epoch):
 	# -------------------------------------training
 	loss_record_train = list()
@@ -679,8 +704,9 @@ for iepoch in range(num_epoch):
 		ibatch = ibatch + 1
 		# batch_size = batch_x.size(0)
 		# batch_x = batch_x.view(batch_size, -1).to(device)
-		batch_x = batch_x.to(device)
-		batch_y = batch_y.to(device)
+		batch_x = batch_x.to(device)  # [batch_size, 60, 12, 13]. 60 is number of environmental variables (?), 12 is number of months, 13 is number of monthly forcing variables.
+		batch_y = batch_y.to(device)  # [batch_size, 200]. 200 is max possible SOC observations per location (most have much fewer)
+
 		#------------ 1 forward
 		batch_y_hat, batch_pred_para = model(batch_x, batch_z)
 
@@ -739,47 +765,55 @@ for iepoch in range(num_epoch):
 
 	val_loss_history[iepoch, :] = loss_record_val
 	print(f'Epoch {iepoch + 1}, validation loss: {torch.tensor(loss_record_val).mean():.2f}')
-	
+
+	# Average validation loss across all batches
+	val_loss = val_loss_history[iepoch, :].mean()
+
 	#----------------------------------- find the best prediction
-	if iepoch == 0:
-		# best_simu_soc = middle_simu_soc
-		# best_pred_para = middle_pred_para
+	# if iepoch == 0:
+	# 	# best_simu_soc = middle_simu_soc
+	# 	# best_pred_para = middle_pred_para
 		
-		print(f'Best model updated at epoch {iepoch + 1}')
-	elif train_loss_history[iepoch, :].mean() <= train_loss_history[(iepoch-1), :].mean():
+	# 	print(f'Best model updated at epoch {iepoch + 1}')
+	if val_loss < best_val_loss:  # train_loss_history[iepoch, :].mean() <= train_loss_history[(iepoch-1), :].mean():
 		# best_simu_soc = middle_simu_soc
 		# best_pred_para = middle_pred_para
+		best_val_loss = val_loss
+		best_epoch = iepoch + 1
 		
 		print(f'Best model updated at epoch {iepoch + 1}')
 		
 		# save prediction and model
-		# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().numpy(), delimiter = ',')
-		# np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().numpy(), delimiter = ',')
-		torch.save(model, data_dir_output + 'neural_network/opt_nn_' + time_stamp + '.pt')
-		
-		np.savetxt(data_dir_output + 'neural_network/val_loss_history_' + time_stamp + '.csv', val_loss_history, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/train_loss_history_' + time_stamp + '.csv', train_loss_history, delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + run_name + '.csv', best_pred_para.detach().numpy(), delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + run_name + '.csv', best_simu_soc.detach().numpy(), delimiter = ',')
+		torch.save(model.state_dict(), best_model_path)
+		np.savetxt(data_dir_output + 'neural_network/val_loss_history_' + run_name + '.csv', val_loss_history, delimiter = ',')
+		np.savetxt(data_dir_output + 'neural_network/train_loss_history_' + run_name + '.csv', train_loss_history, delimiter = ',')
 	# end if iepoch == 0:
 
+
 # save loss history at the end
-np.savetxt(data_dir_output + 'neural_network/val_loss_history_' + time_stamp + '.csv', val_loss_history, delimiter = ',')
-np.savetxt(data_dir_output + 'neural_network/train_loss_history_' + time_stamp + '.csv', train_loss_history, delimiter = ',')
-	
+np.savetxt(data_dir_output + 'neural_network/val_loss_history_' + run_name + '.csv', val_loss_history, delimiter = ',')
+np.savetxt(data_dir_output + 'neural_network/train_loss_history_' + run_name + '.csv', train_loss_history, delimiter = ',')
+
+
 ##################################################
 # prediction bv best trained model
 ##################################################
-best_guess_model = torch.load(data_dir_output + 'neural_network/opt_nn_' + time_stamp + '.pt')
+print(f'Best validation loss: {best_val_loss:.3f} (epoch {best_epoch})')
+model.load_state_dict(torch.load(best_model_path, map_location=device))
+best_guess_model = model
 best_guess_model.eval()
 
 with torch.no_grad():
-	best_guess_val_y_hat, best_guess_val_pred_para = best_guess_model(val_x, val_z)
-	best_guess_train_y_hat, best_guess_train_pred_para = best_guess_model(train_x, train_z)
+	best_guess_val_y_hat, best_guess_val_pred_para = best_guess_model(val_x.to(device), val_z.to(device))
+	best_guess_train_y_hat, best_guess_train_pred_para = best_guess_model(train_x.to(device), train_z.to(device))
 # end with torch.no_grad():
 
 # write prediction results
 binn_obs_soc = np.ones((wosis_profile_info.shape[0], 200))*np.nan
-best_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32)
-best_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32)
+best_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
+best_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
 
 binn_obs_soc[current_data_profile_id, :] = current_data_y
 
@@ -790,10 +824,23 @@ best_pred_para[val_profile_id, :] = best_guess_val_pred_para
 best_pred_para[train_profile_id, :] = best_guess_train_pred_para
 
 # save data
-np.savetxt(data_dir_output + 'neural_network/nn_obs_soc_' + time_stamp + '.csv', binn_obs_soc, delimiter = ',')
-np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().numpy(), delimiter = ',')
-np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().numpy(), delimiter = ',')
+np.savetxt(data_dir_output + 'neural_network/nn_obs_soc_' + run_name + '.csv', binn_obs_soc, delimiter = ',')
+np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + run_name + '.csv', best_simu_soc.detach().cpu().numpy(), delimiter = ',')
+np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + run_name + '.csv', best_pred_para.detach().cpu().numpy(), delimiter = ',')
 
+# Summary csv file of all results. Create this if it doesn't exist
+results_summary_file = os.path.join(data_dir_output, "neural_network/results_summary.csv")
+if not os.path.isfile(results_summary_file):
+	with open(results_summary_file, mode='w') as f:
+		csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+		csv_writer.writerow(['run_name', 'git_commit', 'command', 'lr', 'weight_decay', 'seed', 'model_path', 'val_loss'])
+git_commit = visualization_utils.get_git_revision_hash()
+command_string = " ".join(sys.argv)
+
+# Add a row to the summary csv file
+with open(results_summary_file, mode='a+') as f:
+	csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+	csv_writer.writerow([run_name, git_commit, command_string, args.lr, args.weight_decay, args.seed, best_model_path, best_val_loss])
 
 
 
