@@ -71,7 +71,7 @@ parser.add_argument("--n_epochs", type=int, default=1500)
 parser.add_argument("--patience", type=int, default=500)
 parser.add_argument("--seed", type=int, default=0, help="Random seed")
 parser.add_argument("--note", type=str, default="", help="Optional name to give to the model")
-parser.add_argument("--param_constraint", type=str, options=['hard', 'soft', 'none'], help="How to encourage parameters to be between [0,1]. 'hard' means use sigmoid to explicitly enforce. 'soft' means a loss penalty. 'none' means do not enforce the constraint at all.")
+parser.add_argument("--param_constraint", type=str, default='hard', choices=['hard', 'soft', 'none'], help="How to encourage parameters to be between [0,1]. 'hard' means use sigmoid to explicitly enforce. 'soft' means a loss penalty. 'none' means do not enforce the constraint at all.")
 
 args = parser.parse_args()
 
