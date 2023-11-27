@@ -71,6 +71,8 @@ parser.add_argument("--n_epochs", type=int, default=1500)
 parser.add_argument("--patience", type=int, default=500)
 parser.add_argument("--seed", type=int, default=0, help="Random seed")
 parser.add_argument("--note", type=str, default="", help="Optional name to give to the model")
+parser.add_argument("--param_constraint", type=str, options=['hard', 'soft', 'none'], help="How to encourage parameters to be between [0,1]. 'hard' means use sigmoid to explicitly enforce. 'soft' means a loss penalty. 'none' means do not enforce the constraint at all.")
+
 args = parser.parse_args()
 
 # @joshuafan: Set random seeds to try to ensure reproducibility
@@ -273,6 +275,9 @@ profile_collection = np.where(
 )[0]
 profile_collection = np.reshape(profile_collection, [profile_collection.shape[0], 1])
 
+
+# TODO temporary test
+profile_collection = profile_collection[0:32]
 profile_range = np.arange(0, len(profile_collection))
 
 print(datetime.now(), '------------all input data loaded------------')
@@ -720,7 +725,7 @@ def binns_loss(y_pred, y_true):
 #---------------------------------------------------
 # define model
 class nn_model(nn.Module):
-	def __init__(self, var_idx_to_emb):
+	def __init__(self, var_idx_to_emb, sigmoid=True):
 		super().__init__()
 
 		# Dict from categorical variable index -> Embedding layer we use
@@ -735,11 +740,15 @@ class nn_model(nn.Module):
 			new_input_size += emb.embedding_dim
 
 		# Smaller neural network  @joshuafan
-		self.l1 = nn.Linear(new_input_size, 256)
-		self.l2 = nn.Linear(256, 256)
-		self.l3 = nn.Linear(256, 21)
+		self.l1 = nn.Linear(new_input_size, 512)
+		self.l2 = nn.Linear(512, 512)
+		self.l3 = nn.Linear(512, 21)
 		self.dropout = nn.Dropout(0.1)
-		self.temp = nn.Parameter(torch.ones((1)))
+
+		# @joshuafan: divide by exp(log_temp) instead of temp, to make sure we divide
+		# by a positive (nonzero) number
+		self.sigmoid = sigmoid
+		self.log_temp = nn.Parameter(torch.zeros((1)))
 
 		# # Neural network layers
 		# # first layer
@@ -795,8 +804,15 @@ class nn_model(nn.Module):
 
 		h1 = nn.functional.relu(self.l1(new_input))
 		# h1 = self.dropout(h1)
-		h2 = nn.functional.relu(self.l2(h1))
-		h5 = torch.sigmoid(self.l2(h2) / self.temp) * 3 - 1
+		h2 = nn.functional.relu(self.l2(h1) + h1)
+
+		unnormalized_params = self.l3(h2)
+		if self.sigmoid:
+			# @joshuafan: divide by exp(log_temp) instead of temp, to make sure we divide
+			# by a positive (nonzero) number
+			h5 = torch.sigmoid(unnormalized_params / torch.exp(self.log_temp))
+		else:
+			h5 = unnormalized_params
 
 		# # hidden layers
 		# h1 = nn.functional.relu(self.l1(new_input))
@@ -926,6 +942,8 @@ for iepoch in range(args.n_epochs):
 	loss_record_train = list()
 	ibatch = 0
 	epoch_start = time.time()
+	model.train()
+
 	for batch_info in train_loader:
 		batch_x, batch_y, batch_z, batch_profile_id = batch_info
 		ibatch = ibatch + 1
@@ -949,7 +967,22 @@ for iepoch in range(args.n_epochs):
 		
 		#------------ 2 compute the objective function
 		obj = fun_loss(batch_y_hat, batch_y)
+
+		# Secondary loss: penalize if parameters are outside 0, 1
+		if args.param_constraint == "soft":
+			print("Batch pred para", batch_pred_para.shape)
+			param_loss = torch.maximum(torch.maximum(0, batch_pred_para-1), -1*batch_pred_para)
+			print("Loss shape", param_loss.shape)
+			obj += torch.mean(torch.sum(param_loss, dim=1))
 		
+		# if ibatch == 1:
+		# 	print("Input", batch_x[0, :, 0, 0])
+		# 	print("Para_pred", batch_pred_para[0])
+		# 	non_nan = ~torch.isnan(batch_y[0])
+		# 	print("Y", batch_y.shape, batch_y[0, non_nan])
+		# 	print("Z", batch_z.shape, batch_z[0, non_nan])
+		# 	print("Y_pred", batch_y_hat.shape, batch_y_hat[0, non_nan])
+
 		# print(batch_y_hat)
 		# print(f'{datetime.now()} Epoch {iepoch + 1} batch {ibatch}, train loss: {obj.item():.2f}')
 
@@ -962,11 +995,18 @@ for iepoch in range(args.n_epochs):
 		#------------ 5 step in the opposite direction of the gradient
 		# with torch.no_grad(): para = pata - eta*para.grad # eta is learning rate
 		optimizer.step()
-		
+
 		loss_record_train.append(obj.item())
 
-		print('Epoch {} Batch {}, Loss {}'.format(iepoch, ibatch, obj.item()))
-		break
+		print(f'Epoch {iepoch+1} Batch {ibatch}, Loss {obj.item()}')
+		# if train loss is nan, print out the batch info
+		if np.isnan(obj.item()):
+			print("Train loss was nan")
+			print("Input", batch_x)
+			print("Predicted params", batch_pred_para)
+			print("Predicted SOC", batch_y_hat)
+			print("True SOC", batch_y)
+			exit(1)
 		# writer.add_scalar('training loss', obj.item(), iepoch)
 		# record prediction
 
@@ -987,6 +1027,8 @@ for iepoch in range(args.n_epochs):
 	# -------------------------------------validation
 	loss_record_val = list()
 	ibatch = 0
+	model.eval()
+
 	for batch_info in val_loader:
 		batch_x, batch_y, batch_z, batch_profile_id = batch_info
 		ibatch = ibatch + 1
@@ -1005,13 +1047,18 @@ for iepoch in range(args.n_epochs):
 		
 		obj = fun_loss(batch_y_hat, batch_y)
 
+		loss_record_val.append(obj.item())
+		# print(f'{datetime.now()}, Epoch {iepoch + 1}, Rank {rank}, batch {ibatch}, validation loss: {obj.item():.2f}')
+
 		# if validation loss is nan, print out the batch info
 		if np.isnan(obj.item()):
-			print(batch_y_hat)
-		
-		loss_record_val.append(obj.item())
-		break
-		# print(f'{datetime.now()}, Epoch {iepoch + 1}, Rank {rank}, batch {ibatch}, validation loss: {obj.item():.2f}')
+			print("Val loss was nan")
+			print("Input", batch_x)
+			print("Predicted params", batch_pred_para)
+			print("Predicted SOC", batch_y_hat)
+			print("True SOC", batch_y)
+
+
 	# end for batch_info in val_loader: 
 
 	# # Gather losses from all processes
@@ -1073,7 +1120,7 @@ for iepoch in range(args.n_epochs):
 		# np.savetxt(data_dir_output + 'neural_network/train_loss_history_' + time_stamp + '.csv', train_loss_history, delimiter = ',')
 	
 		# Add a early stopping condition
-		best_val_loss = val_loss_history[iepoch, :]
+		best_val_loss = val_loss_history[iepoch, :].item()
 		epochs_without_improvement = 0
 		# Optionally save the model here if it's the best one so far
 
@@ -1148,16 +1195,16 @@ with torch.no_grad():
 
 # write prediction results
 binn_obs_soc = np.ones((wosis_profile_info.shape[0], 200))*np.nan
-best_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
-best_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
+best_simu_soc = np.ones((wosis_profile_info.shape[0], 200))*np.nan  # @joshuafan: don't make this a Tensor   torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
+best_pred_para = np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan  # torch.tensor(, dtype = torch.float32, device=device)
 
 binn_obs_soc[current_data_profile_id, :] = current_data_y
 
-best_simu_soc[test_profile_id, :] = best_guess_test_y_hat
-best_pred_para[test_profile_id, :] = best_guess_test_pred_para
+best_simu_soc[test_profile_id, :] = best_guess_test_y_hat.detach().cpu().numpy()  # @joshuafan modified
+best_pred_para[test_profile_id, :] = best_guess_test_pred_para.detach().cpu().numpy()
 
 # save data
-np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_simu_soc_test_' + job_id + '.csv', best_simu_soc.cpu().detach().numpy(), delimiter = ',')
+np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_simu_soc_test_' + job_id + '.csv', best_simu_soc, delimiter = ',')
 
 # get the latitudes and longitudes of the test profiles by matching ProfileID in env_info with the test_profile_id
 test_lons = np.ones((wosis_profile_info.shape[0]))*np.nan
@@ -1199,22 +1246,22 @@ for i in range(binn_obs_soc.shape[0]):
 # Plot the scaled difference
 visualization_utils.plot_observations_world_map(test_lons, test_lats, scaled_diff, PLOT_DIR, "test_scaled_diff_" + job_id)
 
-best_simu_soc[val_profile_id, :] = best_guess_val_y_hat
-best_pred_para[val_profile_id, :] = best_guess_val_pred_para
+best_simu_soc[val_profile_id, :] = best_guess_val_y_hat.detach().cpu().numpy()  # @joshuafan modified
+best_pred_para[val_profile_id, :] = best_guess_val_pred_para.detach().cpu().numpy()
 
 # initialize a seperate array to store the prediction results for the validation profiles
-val_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32)
-val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32)
+val_simu_soc = np.ones((wosis_profile_info.shape[0], 200))*np.nan  # torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32)
+val_pred_para = np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan  # torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32)
 
-val_simu_soc[val_profile_id, :] = best_guess_val_y_hat
-val_pred_para[val_profile_id, :] = best_guess_val_pred_para
+val_simu_soc[val_profile_id, :] = best_guess_val_y_hat.detach().cpu().numpy()
+val_pred_para[val_profile_id, :] = best_guess_val_pred_para.detach().cpu().numpy()
 
 # save data
 np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_obs_soc_' + job_id + '.csv', binn_obs_soc, delimiter = ',')
-np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_simu_soc_test_val_' + job_id + '.csv', best_simu_soc.cpu().detach().numpy(), delimiter = ',')
-np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_pred_para_' + job_id + '.csv', best_pred_para.cpu().detach().numpy(), delimiter = ',')
+np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_simu_soc_test_val_' + job_id + '.csv', best_simu_soc, delimiter = ',')
+np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_pred_para_' + job_id + '.csv', best_pred_para, delimiter = ',')
 
-best_simu_soc[train_profile_id, :] = best_guess_train_y_hat
+best_simu_soc[train_profile_id, :] = best_guess_train_y_hat.detach().cpu().numpy() 
 # best_pred_para[train_profile_id, :] = best_guess_train_pred_para
 
 # @joshuafan: Summary csv file of all results. Create this if it doesn't exist
@@ -1233,7 +1280,7 @@ with open(results_summary_file, mode='a+') as f:
 
 
 # save data
-np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_simu_soc_all_' + job_id + '.csv', best_simu_soc.cpu().detach().numpy(), delimiter = ',')
+np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_simu_soc_all_' + job_id + '.csv', best_simu_soc, delimiter = ',')
 
 # get the latitudes and longitudes of the validation profiles by matching ProfileID in env_info with the val_profile_id
 val_lons = np.ones((wosis_profile_info.shape[0]))*np.nan
@@ -1244,12 +1291,18 @@ val_profile_id_num = val_profile_id.numpy().astype(int)
 val_lons[val_profile_id_num] = np.array(env_info.loc[val_profile_id_num, "original_lon"])
 val_lats[val_profile_id_num] = np.array(env_info.loc[val_profile_id_num, "original_lat"])
 
+# *** Validation profiles ***
 # Plot maps to show the scaled difference between the predicted and observed SOC values for validation profiles
 # convert nan to 0
 # binn_obs_soc[np.isnan(binn_obs_soc)] = 0
 # best_simu_soc[torch.isnan(best_simu_soc)] = 0
 # initialize the scaled difference
 scaled_diff = np.ones((wosis_profile_info.shape[0]))*np.nan
+all_val_pred_paras = np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan
+
+all_val_simu_soc = []
+all_val_obs_soc = []
+all_val_pred_paras = []
 
 # for each location, calculate the difference between the predicted and observed SOC values
 for i in range(val_simu_soc.shape[0]):
@@ -1273,14 +1326,27 @@ for i in range(val_simu_soc.shape[0]):
 				# Calculate the scaled difference
 				temp_simu += simu_soc[j] # * dz[j]
 				temp_obs_sum += obs_soc[j] # * dz[j]
+				all_val_simu_soc.append(simu_soc[j])
+				all_val_obs_soc.append(obs_soc[j])
+		pred_paras = val_pred_para[i, :]
+		if np.all(~np.isnan(pred_paras)):
+			all_val_pred_paras.append(pred_paras)
 		scaled_diff[i] = temp_obs_sum/temp_simu
 		# print outlier
 		if scaled_diff[i] > 2:
 			print('outlier: ', val_profile_id_all[i], scaled_diff[i])
 
-
 # Plot the scaled difference
 visualization_utils.plot_observations_world_map(val_lons, val_lats, scaled_diff, PLOT_DIR, "validation_scaled_diff_" + job_id)
+
+# Plot each predicted parameter
+all_val_pred_paras = np.stack(all_val_pred_paras, axis=0)
+print("Para matrix", all_val_pred_paras.shape)
+print("Val lons", val_lons.shape, val_lats.shape)
+
+visualization_utils.plot_observations_world_map(val_lons, val_lats, scaled_diff, PLOT_DIR, "validation_scaled_diff_" + job_id)
+
+
 print("-----------------Model Test Finished at " + str(datetime.now()) + "-----------------")
 
 

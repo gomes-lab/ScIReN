@@ -1,4 +1,4 @@
-for LR in 1e-3
+for LR in 1e-4
 do
     for SEED in 0
     do
