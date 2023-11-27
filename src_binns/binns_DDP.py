@@ -22,9 +22,9 @@ import numpy as np
 from scipy.interpolate import pchip_interpolate
 # parallel computing
 # import concurrent.futures
-# import torch.multiprocessing as mp
+import torch.multiprocessing as mp
 # initialize the multiprocessing for pytorch
-# mp.set_start_method('spawn', force=True)
+mp.set_start_method('spawn', force=True)
 
 import os
 import torch
@@ -53,7 +53,7 @@ from collections import OrderedDict
 #####################################
 
 # from fun_matrix_clm5 import fun_model_simu
-from fun_matrix_clm5_vectorized import fun_model_simu
+from fun_matrix_clm5 import fun_model_simu
 # from fun_matrix_clm5_GPU import fun_model_simu
 # from fun_matrix_clm5_parallel import fun_model_simu
 # from fun_matrix_clm5_parallel_update_V_matrix import fun_model_simu
@@ -86,7 +86,7 @@ start_time = time.time()
 
 # Get job id
 job_id = os.environ.get('PBS_JOBID')
-job_id = job_id.split('.')[0]
+job_id = job_id.split('.')[0] if job_id is not None else "default_job"
 
 ################################################
 # input data
@@ -109,8 +109,10 @@ is_resubmit = 0
 # data_dir_input = 'C:/Users/hx293/Research_Data/BINN/ENSEMBLE/INPUT_DATA/'
 # data_dir_output = 'C:/Users/hx293/Unsync_Data/BINN_output/'
 # server path
-data_dir_input = '/glade/u/home/haodixu/BINN/ENSEMBLE/INPUT_DATA/'
-data_dir_output = '/glade/u/home/haodixu/BINN/BINNS/OUTPUT_DATA/'
+# data_dir_input = '/glade/u/home/haodixu/BINN/ENSEMBLE/INPUT_DATA/'
+# data_dir_output = '/glade/u/home/haodixu/BINN/BINNS/OUTPUT_DATA/'
+data_dir_input = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/INPUT_DATA/'
+data_dir_output = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/'
 os.makedirs(os.path.join(data_dir_output, "neural_network"), exist_ok=True)
 PLOT_DIR = os.path.join(data_dir_output, "visualizations")
 os.makedirs(PLOT_DIR, exist_ok=True)
@@ -400,14 +402,15 @@ env_info_names = ['ProfileNum', 'ProfileID', 'LayerNum', 'Lon', 'Lat', 'Date', \
 'R_Squared']
 
 categorical_vars = [['ESA_Land_Cover'], ['Texture_USDA_0cm', 'Texture_USDA_30cm', 'Texture_USDA_100cm'], 
-					['USDA_Suborder'], ['WRB_Subgroup'], ['Koppen_Climate_2018']]
+					['USDA_Suborder'], ['WRB_Subgroup'], ['Koppen_Climate_2018']]  # Variables inside a sub-list share the same categories
+categorical_vars_flattened = [item for sublist in categorical_vars for item in sublist]
 
 env_info = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_env_info.mat')
 env_info = env_info['EnvInfo']
 original_lons = env_info[:, 3].copy()
 original_lats = env_info[:, 4].copy()
 
-col_max_min = loadmat(data_dir_input + 'wosis_2019_snap_shot/world_grid_envinfo_present_cesm2_clm5_cen_vr_v2_whole_time_col_max_min.mat')
+col_max_min = loadmat(data_dir_input + 'data4nn/world_grid_envinfo_present_cesm2_clm5_cen_vr_v2_whole_time_col_max_min.mat')  # @joshuafan changed
 col_max_min = col_max_min['col_max_min']
 
 # Don't want to transform categorical variables, so set max/min to nan
@@ -440,12 +443,6 @@ env_info = df(env_info)
 env_info.columns = env_info_names
 env_info["original_lon"] = original_lons
 env_info["original_lat"] = original_lats
-
-# # @joshuafan added temporarily
-# env_info.index = env_info.ProfileNum
-# print("Env info old shape", env_info.shape)
-# print("Env info", env_info.head())
-# print(profile_collection[0:5, 0])
 
 # variables used in training the NN
 var4nn = ['Lon', 'Lat', \
@@ -481,12 +478,15 @@ var4nn = ['Lon', 'Lat', \
 'nbedrock']
 
 
-var_idx_to_emb = dict()
+# Create embeddings for categorical variables (each int maps to a different category)
+var_idx_to_emb = dict()  # Column index to Embedding layer to use
 for group in categorical_vars:
-	n_categories = int(np.nanmax(env_info[group]) + 1)
-	print("Variable {}: num categories {}".format(group, n_categories))
-	print("Unique values", env_info[group].value_counts(sort=True))
-	emb = nn.Embedding(num_embeddings=n_categories, embedding_dim=5).to(device)
+	n_categories = int(np.nanmax(env_info[group])) + 1
+	# print("Variable {}: num categories {}".format(group, n_categories))
+	# print("Unique values", env_info[group].astype(float).value_counts().sort_index())
+
+	# Map each integer (category) to an embedding vector 
+	emb = nn.Embedding(num_embeddings=n_categories, embedding_dim=5).to(device)  # TODO increase embedding dim
 	for var in group:
 		idx = var4nn.index(var)
 		var_idx_to_emb[idx] = emb
@@ -522,9 +522,10 @@ current_data_z = obs_depth_matrix
 lons = np.array(env_info.loc[profile_collection[:, 0], "original_lon"])
 lats = np.array(env_info.loc[profile_collection[:, 0], "original_lat"])
 
-# for col_idx, col_name in enumerate(var4nn):
-# 	envir_var_values = current_data_x[:, col_idx, 0, 0]
-# 	visualization_utils.plot_observations_world_map(lons, lats, envir_var_values, PLOT_DIR, col_name)
+for col_idx, col_name in enumerate(var4nn):
+	envir_var_values = current_data_x[:, col_idx, 0, 0]
+	categorical = (col_name in categorical_vars_flattened)
+	visualization_utils.plot_observations_world_map(lons, lats, envir_var_values, PLOT_DIR, col_name, categorical=categorical)
 
 # # Plot SOC observation labels within each layer. If a profile has multiple observations 
 # # in a layer, pick the first one
@@ -858,6 +859,7 @@ def worker(rank, world_size):
 	# Use DistributedSampler for distributed training
 	train_sampler = DistributedSampler(train_dataset)
 	val_sampler = DistributedSampler(val_dataset)
+	print("Worker rank {}, Train dataset {}, Train sampler {}".format(rank, len(train_dataset), len(train_sampler)))
 
 	# Data loaders with DistributedSampler
 	train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=train_sampler)
@@ -1230,7 +1232,7 @@ def worker(rank, world_size):
 
 if __name__ == '__main__':
 	# Number of CPUs requester
-	world_size = 128
+	world_size = 4  #128
 	processes = []
 	for rank in range(world_size):
 		p = Process(target=worker, args=(rank, world_size))
