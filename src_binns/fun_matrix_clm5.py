@@ -767,7 +767,7 @@ def tri_matrix(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, cryo
 			# pe_p1[j] = f_p1[j].clone() / d_p1_zp1[j] # Peclet #
 		# end j == 0:
 	# end for j in range(nlevdecomp+1): 
-	
+
 	# Peclet #
 	for j in range(nlevdecomp+1):
 		if d_m1_zm1[j] == 0.:
@@ -836,7 +836,7 @@ def tri_matrix(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, cryo
 			# end j > 0:
 		# end for j in range(nlevdecomp):
 	#end for i in range(1, npool):
-	
+
 	return tri_ma
 
 # end def tri_matrix
