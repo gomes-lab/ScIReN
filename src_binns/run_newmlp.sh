@@ -4,7 +4,7 @@ for LR in 1e-3
 do
     for SEED in 0
     do
-        python3 binns_DDP.py --lr $LR --weight_decay 0 --seed $SEED --n_epochs 200 --patience 10 --model new_mlp --note EMBED5_SMALLDATA
+        python3 binns_DDP.py --lr $LR --weight_decay 0 --seed $SEED --n_epochs 200 --patience 20 --model new_mlp --note EMBED5
     done
 done
 
