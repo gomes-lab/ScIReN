@@ -957,7 +957,7 @@ def worker(rank, world_size):
 	# Use DistributedSampler for distributed training
 	train_sampler = DistributedSampler(train_dataset)
 	val_sampler = DistributedSampler(val_dataset)
-	print("Worker rank {}, Device {}, num_threads, Train dataset {}, Train sampler {}".format(rank, device, torch.get_num_threads(), len(train_dataset), len(train_sampler)))
+	print("Worker rank {}, Device {}, num_threads {}, Train dataset {}, Train sampler {}".format(rank, device, torch.get_num_threads(), len(train_dataset), len(train_sampler)))
 
 	# Data loaders with DistributedSampler
 	train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)
