@@ -76,16 +76,15 @@ class mlp_wrapper(nn.Module):
 		# Pass through MLP
 		mlp_output = self.mlp(new_input)
 
-		# Clamp temp_sigmoid to be between 0 and 500
-		# clamped_temp_sigmoid = 10 + 99 * torch.sigmoid(self.temp_sigmoid) # constrain the temp_sigmoid between 10 and 100
+		# Clamp temp_sigmoid to be between 10 and 100
+		# clamped_temp_sigmoid = 10 + 90 * torch.sigmoid(self.temp_sigmoid) # constrain the temp_sigmoid between 10 and 100
 		clamped_temp_sigmoid = 50
 		h5 = torch.sigmoid(mlp_output / clamped_temp_sigmoid)
 
 		# check if h5 is nan
-		if torch.isnan(h5).any():
-			print(h5) 
-		elif torch.isinf(h5).any():
-			print(h5)
+		if torch.isnan(h5).any() or torch.isinf(h5).any():
+			print("h5 was nan", h5)
+			exit(1) 
 
 		# CLM5 process-based model
 		simu_soc = fun_model_simu(h5, forcing, obs_depth)

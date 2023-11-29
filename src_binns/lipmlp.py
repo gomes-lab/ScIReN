@@ -61,6 +61,9 @@ class lipmlp(torch.nn.Module):
         for ii in range(len(self.layers)):
             loss_lipc = loss_lipc * self.layers[ii].get_lipschitz_constant()
         loss_lipc = loss_lipc *  self.layer_output.get_lipschitz_constant()
+        if torch.isinf(loss_lipc) or torch.isnan(loss_lipc):
+            print("Lipc is inf!")
+            exit(1)
         return loss_lipc
 
     def forward(self, x):

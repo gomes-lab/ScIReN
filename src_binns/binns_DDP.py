@@ -418,7 +418,7 @@ print(datetime.now(), '------------soc data prepared------------')
 ########################################################
 # neural network (BINNS)
 ########################################################
-embed_dim = 10
+embed_dim = 5
 clip_value = 1
 nn_split_ratio = 0.1
 test_split_ratio = 0.1
@@ -1131,7 +1131,7 @@ def worker(rank, world_size):
 				# best_simu_soc = middle_simu_soc
 				# best_pred_para = middle_pred_para
 				print(f'Best model updated at epoch {iepoch + 1}')
-			elif val_loss_history[iepoch, :] <= best_val_loss and val_NSE_history[iepoch, :] <= best_val_NSE:
+			elif val_NSE_history[iepoch, :] <= best_val_NSE:  # val_loss_history[iepoch, :] <= best_val_loss
 				# best_simu_soc = middle_simu_soc
 				# best_pred_para = middle_pred_para
 				
@@ -1225,22 +1225,6 @@ def worker(rank, world_size):
 	
 	if rank == 0:
 
-		# @joshuafan: Summary csv file of all results. Create this if it doesn't exist
-		results_summary_file = os.path.join(data_dir_output, "neural_network/results_summary.csv")
-		if not os.path.isfile(results_summary_file):
-			with open(results_summary_file, mode='w') as f:
-				csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-				csv_writer.writerow(['job_id', 'git_commit', 'command', 'lr', 'weight_decay', 'seed', 'model_path', 'best_val_NSE', 'best_val_loss'])
-		git_commit = visualization_utils.get_git_revision_hash()
-		command_string = " ".join(sys.argv)
-
-		# Add a row to the summary csv file
-		with open(results_summary_file, mode='a+') as f:
-			csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-			best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt'
-			csv_writer.writerow([job_id, git_commit, command_string, args.lr, args.weight_decay, args.seed, best_model_path, best_val_NSE.item(), best_val_loss.item()])
-
-
 		##################################################
 		# prediction bv best trained model
 		##################################################
@@ -1263,6 +1247,21 @@ def worker(rank, world_size):
 				test_loss, test_NSE = fun_loss(best_guess_test_y_hat, test_y.to(device))
 				print(f'Test loss: {test_loss.item():.2f}, Test NSE: {test_NSE.item():.2f}')
 		# end with torch.no_grad():
+
+		# @joshuafan: Summary csv file of all results. Create this if it doesn't exist
+		results_summary_file = os.path.join(data_dir_output, "neural_network/results_summary.csv")
+		if not os.path.isfile(results_summary_file):
+			with open(results_summary_file, mode='w') as f:
+				csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+				csv_writer.writerow(['job_id', 'git_commit', 'command', 'lr', 'weight_decay', 'seed', 'model_path', 'best_val_NSE', 'best_val_loss', 'test_NSE', 'test_loss'])
+		git_commit = visualization_utils.get_git_revision_hash()
+		command_string = " ".join(sys.argv)
+
+		# Add a row to the summary csv file
+		with open(results_summary_file, mode='a+') as f:
+			csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+			best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt'
+			csv_writer.writerow([job_id, git_commit, command_string, args.lr, args.weight_decay, args.seed, best_model_path, best_val_NSE.item(), best_val_loss.item(), test_NSE.item(), test_loss.item()])
 
 		# write prediction results
 		binn_obs_soc = np.ones((wosis_profile_info.shape[0], 200))*np.nan
