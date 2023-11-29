@@ -1111,7 +1111,7 @@ def worker(rank, world_size):
 		val_loss_history[iepoch, :] = torch.stack(all_val_losses).mean().detach().cpu().numpy()
 		val_NSE_history[iepoch, :] = torch.stack(all_val_NSE).mean().detach().cpu().numpy()
 
-		if rank == 2:  # @joshufaan swapped ranks
+		if rank == 2:  # @joshuafan swapped ranks
 			writer.add_scalars('loss', {'training': torch.stack(all_train_losses).mean(), 'validation': torch.stack(all_val_losses).mean()}, iepoch+1)
 			print(f'Epoch {iepoch + 1}, train loss: {torch.stack(all_train_losses).mean():.2f}, validation loss: {torch.stack(all_val_losses).mean():.2f}, time: {torch.stack(all_train_times).mean():.2f}')
 			if args.model == "lipmlp":
