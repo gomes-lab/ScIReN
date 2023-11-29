@@ -1,12 +1,16 @@
 # Distributed Data Parallel (DDP) training script for BINN
 # Initializer script for DDP, automatically resubmit jobs after 11.5 hours (call DDP_resume.py)
 # Import the required libraries
+import csv
+import math
 import sys
 import time
 import random
 import warnings
 import subprocess
 import argparse
+
+from mlp import mlp_wrapper
 
 # sys.path.append('C:/Users/hx293/Research_Data/BINN/')
 sys.path.append('/glade/u/home/haodixu/BINN')
@@ -35,13 +39,12 @@ from torch.utils.data import random_split, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, random_split
 from torch.utils.data.distributed import DistributedSampler
 import multiprocessing
 from multiprocessing import Process
 
-# set random seed
-torch.manual_seed(0)
 print("Start binns_DDP")
 
 from scipy.io import loadmat
@@ -56,7 +59,7 @@ from collections import OrderedDict
 #####################################
 
 # from fun_matrix_clm5 import fun_model_simu
-from fun_matrix_clm5 import fun_model_simu
+from fun_matrix_clm5_vectorized import fun_model_simu
 # from fun_matrix_clm5_GPU import fun_model_simu
 # from fun_matrix_clm5_parallel import fun_model_simu
 # from fun_matrix_clm5_parallel_update_V_matrix import fun_model_simu
@@ -73,6 +76,10 @@ parser.add_argument("--n_epochs", type=int, default=1500)
 parser.add_argument("--patience", type=int, default=500)
 parser.add_argument("--seed", type=int, default=0, help="Random seed")
 parser.add_argument("--note", type=str, default="", help="Optional name to give to the model")
+parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp'], help="Model type")
+parser.add_argument("--lambda_lipschitz", type=float, default=1, help="If model is `lipmlp`, this is the weight to put on the Lipschitz loss")
+
+
 args = parser.parse_args()
 
 # @joshuafan: Set random seeds to try to ensure reproducibility
@@ -84,14 +91,14 @@ if torch.cuda.is_available():
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
 
-if torch.cuda.is_available():
-	dev = 'cuda'
-else:
-	dev = 'cpu'
-# @joshuafan changed
-# dev = 'cpu'
-device = torch.device(dev) 
-print(datetime.now(), '------------device: ', device, '------------')
+# if torch.cuda.is_available():
+# 	dev = 'cuda'
+# else:
+# 	dev = 'cpu'
+# # @joshuafan changed
+# # dev = 'cpu'
+# device = torch.device(dev) 
+# print(datetime.now(), '------------device: ', device, '------------')
 
 # print the number of cores
 cpu_count = multiprocessing.cpu_count()
@@ -303,6 +310,7 @@ profile_collection = np.intersect1d(profile_collection, PRODA_collection)
 ###############################################################################################################
 
 profile_collection = np.reshape(profile_collection, [profile_collection.shape[0], 1])
+profile_collection = profile_collection[0:1000]  # TODO temporary
 
 profile_range = np.arange(0, len(profile_collection))
 
@@ -422,7 +430,7 @@ print(datetime.now(), '------------soc data prepared------------')
 ########################################################
 # neural network (BINNS)
 ########################################################
-embed_dim = 15
+embed_dim = 5
 clip_value = 1
 nn_split_ratio = 0.1
 test_split_ratio = 0.1
@@ -540,16 +548,6 @@ var4nn = ['Lon', 'Lat', \
 'nbedrock']
 
 
-# Create embeddings for categorical variables (each int maps to a different category)
-var_idx_to_emb = dict()  # Column index to Embedding layer to use
-for group in categorical_vars:
-	n_categories = int(np.nanmax(env_info[group]) + 1)
-	# print("Variable {}: num categories {}".format(group, n_categories))
-	# print("Unique values", env_info[group].value_counts(sort=True))
-	emb = nn.Embedding(num_embeddings=n_categories, embedding_dim=embed_dim).to(device)
-	for var in group:
-		idx = var4nn.index(var)
-		var_idx_to_emb[idx] = emb
 
 
 # For each embedding layer, extract which variables are passed through it,
@@ -582,10 +580,10 @@ current_data_z = obs_depth_matrix
 lons = np.array(env_info.loc[profile_collection[:, 0], "original_lon"])
 lats = np.array(env_info.loc[profile_collection[:, 0], "original_lat"])
 
-for col_idx, col_name in enumerate(var4nn):
-	envir_var_values = current_data_x[:, col_idx, 0, 0]
-	categorical = (col_name in categorical_vars_flattened)
-	visualization_utils.plot_observations_world_map(lons, lats, envir_var_values, PLOT_DIR, col_name, categorical=categorical)
+# for col_idx, col_name in enumerate(var4nn):
+# 	envir_var_values = current_data_x[:, col_idx, 0, 0]
+# 	categorical = (col_name in categorical_vars_flattened)
+# 	visualization_utils.plot_observations_world_map(lons, lats, envir_var_values, PLOT_DIR, col_name, categorical=categorical)
 
 # # Plot SOC observation labels within each layer. If a profile has multiple observations 
 # # in a layer, pick the first one
@@ -731,7 +729,7 @@ def binns_loss(y_pred, y_true):
 	# modeling inefficiency
 	modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/torch.sum((soc_true_vector - torch.mean(soc_true_vector))**2)
 	# modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/len(soc_true_vector) 
-	loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='sum')
+	loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean')  #'sum')
 	# print(modeling_inefficiency)
 
 	##########################
@@ -890,6 +888,11 @@ class nn_model(nn.Module):
 		return simu_soc, h5, clamped_temp_sigmoid
 # end nn_model
 
+
+
+
+
+# end nn_model
 # Helper function to combine the training data into a single tensor
 class MergeDataset(Dataset):
     def __init__(self, data_x, data_y, data_z, profile_id):
@@ -907,9 +910,25 @@ class MergeDataset(Dataset):
 
 # Start training
 def worker(rank, world_size):
+	# Device
+	if torch.cuda.is_available():
+		cuda_visible_devices = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
+		if rank >= len(cuda_visible_devices):
+			print(f'Tried to create worker of rank {rank}, but we only have {len(cuda_visible_devices)} GPUs ({cuda_visible_devices})')
+			exit(1)
+		dev = f'cuda:{cuda_visible_devices[rank]}'
+	else:
+		dev = 'cpu'
+	device = torch.device(dev)
+
+	# Set number of threads *per worker*. Should equal floor(CPUs/processes)
+	print("Rank {} Num threads {}".format(rank, math.floor(torch.get_num_threads() / world_size)))
+	torch.set_num_threads(math.floor(torch.get_num_threads() / world_size))
+
 	# Filename to store average losses
 	avg_loss_filename = 'avg_loss_' + nn_training_name + '.txt'
 	avg_NSE_filename = 'avg_NSE_' + nn_training_name + '.txt'
+
 	# Initialize the process group
 	os.environ['RANK'] = str(rank)
 	os.environ['WORLD_SIZE'] = str(world_size)
@@ -917,13 +936,29 @@ def worker(rank, world_size):
 	os.environ['MASTER_PORT'] = '12355'
 
 	# Initialize distributed environment
-	dist.init_process_group('gloo', rank=rank, world_size=world_size)
+	dist.init_process_group('nccl', rank=rank, world_size=world_size)  # gloo
+
+
+	# Create embeddings for categorical variables (each int maps to a different category)
+	var_idx_to_emb = dict()  # Column index to Embedding layer to use
+	for group in categorical_vars:
+		n_categories = int(np.nanmax(env_info[group]) + 1)
+		emb = nn.Embedding(num_embeddings=n_categories, embedding_dim=embed_dim).to(device)
+		for var in group:
+			idx = var4nn.index(var)
+			var_idx_to_emb[idx] = emb
 
 	# Initialize model
 	global model
-	model = nn_model(var_idx_to_emb).to(device)
-	model = DDP(model)
+	if args.model == 'old_mlp':
+		model = nn_model(var_idx_to_emb).to(device)
+	elif args.model == 'new_mlp':
+		model = mlp_wrapper(len(var4nn), var_idx_to_emb, lipschitz=False).to(device)
+	elif args.model == 'lipmlp':
+		model = mlp_wrapper(len(var4nn), var_idx_to_emb, lipschitz=True).to(device)
 
+	# Create distributed version of the model
+	model = DDP(model)
 
 	# Loss and optimizer
 	optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -940,7 +975,7 @@ def worker(rank, world_size):
 	# Use DistributedSampler for distributed training
 	train_sampler = DistributedSampler(train_dataset)
 	val_sampler = DistributedSampler(val_dataset)
-	print("Worker rank {}, Train dataset {}, Train sampler {}".format(rank, len(train_dataset), len(train_sampler)))
+	print("Worker rank {}, Device {}, Train dataset {}, Train sampler {}".format(rank, device, len(train_dataset), len(train_sampler)))
 
 	# Data loaders with DistributedSampler
 	train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)
@@ -956,7 +991,6 @@ def worker(rank, world_size):
 	val_loss_history = np.ones((num_epoch, 1))*np.nan
 	val_NSE_history = np.ones((num_epoch, 1))*np.nan
 
-
 	# Early stopping parameters
 	best_val_loss = float('inf') 
 	best_val_NSE = float('inf') 
@@ -969,10 +1003,13 @@ def worker(rank, world_size):
 		model.zero_grad()
 		# -------------------------------------training
 		loss_record_train = list()
+		lipschitz_loss_record_train = list()
 		NSE_record_train = list()
 		ibatch = 0
 		epoch_start = time.time()
 		model.train()
+		train_loader.sampler.set_epoch(iepoch)  # Set sampler's epoch number, so we use a different order per epoch
+
 		for batch_info in train_loader:
 			batch_x, batch_y, batch_z, batch_profile_id = batch_info
 			ibatch = ibatch + 1
@@ -994,14 +1031,22 @@ def worker(rank, world_size):
 			# middle_pred_para[batch_profile_id, :] = batch_pred_para
 			
 			#------------ 2 compute the objective function
-			obj, train_NSE = fun_loss(batch_y_hat, batch_y)
+			smooth_l1_loss, train_NSE = fun_loss(batch_y_hat, batch_y)
 			
+			# Lipschitz loss if using
+			if args.model == "lipmlp":
+				lipschitz_loss = model.module.mlp.get_lipschitz_loss()
+				lipschitz_loss_record_train.append(lipschitz_loss.item())
+				obj = smooth_l1_loss + lipschitz_loss * args.lambda_lipschitz
+			else:
+				obj = smooth_l1_loss
+
 			# print(batch_y_hat)
 			# print(f'{datetime.now()} Epoch {iepoch + 1} batch {ibatch}, train loss: {obj.item():.2f}')
 
 			#------------ 3 cleaning gradients
-			# model.zero_grad()
-			
+			model.zero_grad()
+
 			#------------ 4 accumulate partical derivatives of objective respect to parameters
 			obj.backward()
 
@@ -1012,7 +1057,7 @@ def worker(rank, world_size):
 			# with torch.no_grad(): para = pata - eta*para.grad # eta is learning rate
 			optimizer.step()
 			
-			loss_record_train.append(obj.item())
+			loss_record_train.append(smooth_l1_loss.item())
 			NSE_record_train.append(train_NSE.item())
 
 			# writer.add_scalar('training loss', obj.item(), iepoch)
@@ -1063,38 +1108,44 @@ def worker(rank, world_size):
 		# end for batch_info in val_loader: 
 
 		# Gather losses from all processes
-		all_train_losses = [torch.tensor(0.0) for _ in range(world_size)]
-		all_val_losses = [torch.tensor(0.0) for _ in range(world_size)]
-		all_train_times = [torch.tensor(0.0) for _ in range(world_size)]
-		all_train_NSE = [torch.tensor(0.0) for _ in range(world_size)]
-		all_val_NSE = [torch.tensor(0.0) for _ in range(world_size)]
+		all_train_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
+		all_val_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
+		all_train_times = [torch.tensor(0.0, device=device) for _ in range(world_size)]
+		all_train_NSE = [torch.tensor(0.0, device=device) for _ in range(world_size)]
+		all_val_NSE = [torch.tensor(0.0, device=device) for _ in range(world_size)]
 
-		dist.all_gather(all_train_losses, torch.tensor(loss_record_train).mean())
-		dist.all_gather(all_val_losses, torch.tensor(loss_record_val).mean())
-		dist.all_gather(all_train_times, torch.tensor(train_time))
-		dist.all_gather(all_train_NSE, torch.tensor(NSE_record_train).mean())
-		dist.all_gather(all_val_NSE, torch.tensor(NSE_record_val).mean())
+		dist.all_gather(all_train_losses, torch.tensor(loss_record_train, device=device).mean())
+		dist.all_gather(all_val_losses, torch.tensor(loss_record_val, device=device).mean())
+		dist.all_gather(all_train_times, torch.tensor(train_time, device=device))
+		dist.all_gather(all_train_NSE, torch.tensor(NSE_record_train, device=device).mean())
+		dist.all_gather(all_val_NSE, torch.tensor(NSE_record_val, device=device).mean())
+
+		if args.model == "lipmlp":
+			all_train_lipschitz_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
+			dist.all_gather(all_train_lipschitz_losses, torch.tensor(lipschitz_loss_record_train, device=device).mean())
 
 		# record the loss history
-		train_loss_history[iepoch, :] = torch.stack(all_train_losses).mean()
-		val_loss_history[iepoch, :] = torch.stack(all_val_losses).mean()
-		val_NSE_history[iepoch, :] = torch.stack(all_val_NSE).mean()
+		train_loss_history[iepoch, :] = torch.stack(all_train_losses).mean().detach().cpu().numpy()
+		val_loss_history[iepoch, :] = torch.stack(all_val_losses).mean().detach().cpu().numpy()
+		val_NSE_history[iepoch, :] = torch.stack(all_val_NSE).mean().detach().cpu().numpy()
 
-		if rank == 0:
+		if rank == 2:  # @joshufaan swapped ranks
 			writer.add_scalars('loss', {'training': torch.stack(all_train_losses).mean(), 'validation': torch.stack(all_val_losses).mean()}, iepoch+1)
 			print(f'Epoch {iepoch + 1}, train loss: {torch.stack(all_train_losses).mean():.2f}, validation loss: {torch.stack(all_val_losses).mean():.2f}, time: {torch.stack(all_train_times).mean():.2f}')
+			if args.model == "lipmlp":
+				print(f'Train Lipschitz loss: {torch.stack(all_train_lipschitz_losses).mean():.2f}')
 		elif rank == 3:
 			writer.add_scalars('NSE', {'training': torch.stack(all_train_NSE).mean(), 'validation': torch.stack(all_val_NSE).mean()}, iepoch+1)
 			print(f'Epoch {iepoch + 1}, train NSE: {torch.stack(all_train_NSE).mean():.2f}, validation NSE: {torch.stack(all_val_NSE).mean():.2f}, time: {torch.stack(all_train_times).mean():.2f}')
 		elif rank == 1:
 			with open(os.path.join(data_dir_output, "neural_network", job_id, avg_loss_filename), "a") as f:
 				f.write(f'{iepoch + 1}, {torch.stack(all_train_losses).mean():.2f}, {torch.stack(all_val_losses).mean():.2f}, {torch.stack(all_train_times).mean():.2f}\n')
-		elif rank == 4: 
+			# elif rank == 4: 
 			with open(os.path.join(data_dir_output, "neural_network", job_id, avg_NSE_filename), "a") as f:
 				f.write(f'{iepoch + 1}, {torch.stack(all_train_NSE).mean():.2f}, {torch.stack(all_val_NSE).mean():.2f}, {torch.stack(all_train_times).mean():.2f}\n')
-		elif rank == 5:
-			print(f"Epoch {iepoch+1}, Clamped Sigmoid Parameters: {sigmoid_para_val.item():.2f}")
-		elif rank == 2: 
+			# elif rank == 5:
+			# print(f"Epoch {iepoch+1}, Clamped Sigmoid Parameters: {sigmoid_para_val.item():.2f}")
+		elif rank == 0: 
 			if iepoch == 0:
 				# best_simu_soc = middle_simu_soc
 				# best_pred_para = middle_pred_para
@@ -1106,14 +1157,14 @@ def worker(rank, world_size):
 				print(f'Best model updated at epoch {iepoch + 1}')
 				
 				# save prediction and model
-				# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().numpy(), delimiter = ',')
-				# np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().numpy(), delimiter = ',')
+				# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().cpu().numpy(), delimiter = ',')
+				# np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().cpu().numpy(), delimiter = ',')
 				# torch.save(model, data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt')
 				# print(f'Best model updated at epoch {iepoch + 1}')
 				
 				# save prediction and model
-				# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().numpy(), delimiter = ',')
-				# np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().numpy(), delimiter = ',')
+				# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().cpu().numpy(), delimiter = ',')
+				# np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().cpu().numpy(), delimiter = ',')
 				checkpoint_best_model = {
 					'epoch': iepoch,
 					'model_state_dict': model.state_dict(),
@@ -1137,6 +1188,7 @@ def worker(rank, world_size):
 		# Add a early stopping condition
 		if val_NSE_history[iepoch, :] < best_val_NSE:
 			best_val_NSE = val_NSE_history[iepoch, :]
+			best_val_loss = val_loss_history[iepoch, :]
 			epochs_without_improvement = 0
 			# Optionally save the model here if it's the best one so far
 		else:
@@ -1188,34 +1240,58 @@ def worker(rank, world_size):
 	if whether_checkpoint:
 		print("Rank {}: Exiting after saving checkpoint.".format(rank))
 		return
-	
-	##################################################
-	# prediction bv best trained model
-	##################################################
-	# best_guess_model = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt').to(device)
-	# best_guess_model.eval()
-	new_checkpoint = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt')
-	# best_guess_model = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt').to(device)
-	best_guess_model = nn_model(var_idx_to_emb).to(device)
-	best_guess_model = DDP(best_guess_model)
-	best_guess_model.load_state_dict(new_checkpoint['model_state_dict'])
-	best_guess_model.eval()
+
 	
 	if rank == 0:
-		with torch.no_grad():
-			best_guess_val_y_hat, best_guess_val_pred_para, best_sigmoid_val_para = best_guess_model(val_x, val_z)
-			best_guess_train_y_hat, best_guess_train_pred_para, best_sigmoid_train_para = best_guess_model(train_x, train_z)
-			if test_split_ratio != 0:
-				best_guess_test_y_hat, best_guess_test_pred_para, best_sigmoid_test_para = best_guess_model(test_x, test_z)
-				test_loss, test_NSE = fun_loss(best_guess_test_y_hat, test_y)
-				print(f'Test loss: {test_loss.item():.2f}, Test NSE: {test_NSE.item():.2f}')
 
+		# @joshuafan: Summary csv file of all results. Create this if it doesn't exist
+		results_summary_file = os.path.join(data_dir_output, "neural_network/results_summary.csv")
+		if not os.path.isfile(results_summary_file):
+			with open(results_summary_file, mode='w') as f:
+				csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+				csv_writer.writerow(['job_id', 'git_commit', 'command', 'lr', 'weight_decay', 'seed', 'model_path', 'best_val_NSE', 'best_val_loss'])
+		git_commit = visualization_utils.get_git_revision_hash()
+		command_string = " ".join(sys.argv)
+
+		# Add a row to the summary csv file
+		with open(results_summary_file, mode='a+') as f:
+			csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+			best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt'
+			csv_writer.writerow([job_id, git_commit, command_string, args.lr, args.weight_decay, args.seed, best_model_path, best_val_NSE.item(), best_val_loss.item()])
+
+
+		##################################################
+		# prediction bv best trained model
+		##################################################
+		# best_guess_model = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt').to(device)
+		# best_guess_model.eval()
+		new_checkpoint = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt', map_location=device)
+		print("Loaded model")
+		best_guess_model = model
+		# # best_guess_model = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt').to(device)
+		# best_guess_model = nn_model(var_idx_to_emb).to(device)
+		# print("Created model")
+		# best_guess_model = DDP(best_guess_model)
+		# print("DDP")
+		best_guess_model.load_state_dict(new_checkpoint['model_state_dict'])
+		best_guess_model.eval()
+		print("Loaded state dict")
+		with torch.no_grad():
+			best_guess_val_y_hat, best_guess_val_pred_para, best_sigmoid_val_para = best_guess_model(val_x.to(device), val_z.to(device))
+			print("Val preds")
+			best_guess_train_y_hat, best_guess_train_pred_para, best_sigmoid_train_para = best_guess_model(train_x.to(device), train_z.to(device))
+			print("Train preds")
+			if test_split_ratio != 0:
+				best_guess_test_y_hat, best_guess_test_pred_para, best_sigmoid_test_para = best_guess_model(test_x.to(device), test_z.to(device))
+				test_loss, test_NSE = fun_loss(best_guess_test_y_hat, test_y.to(device))
+				print(f'Test loss: {test_loss.item():.2f}, Test NSE: {test_NSE.item():.2f}')
+		print("Got all predictions")
 		# end with torch.no_grad():
 
 		# write prediction results
 		binn_obs_soc = np.ones((wosis_profile_info.shape[0], 200))*np.nan
-		best_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32)
-		best_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32)
+		best_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
+		best_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
 
 		binn_obs_soc[current_data_profile_id, :] = current_data_y
 
@@ -1223,7 +1299,7 @@ def worker(rank, world_size):
 		best_pred_para[test_profile_id, :] = best_guess_test_pred_para
 
 		# save data
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_simu_soc_test_' + job_id + '.csv', best_simu_soc.detach().numpy(), delimiter = ',')
+		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_simu_soc_test_' + job_id + '.csv', best_simu_soc.detach().cpu().numpy(), delimiter = ',')
 
 		# get the latitudes and longitudes of the test profiles by matching ProfileID in env_info with the test_profile_id
 		test_lons = np.ones((wosis_profile_info.shape[0]))*np.nan
@@ -1239,7 +1315,7 @@ def worker(rank, world_size):
 
 		# for each location, calculate the difference between the predicted and observed SOC values
 		for i in range(binn_obs_soc.shape[0]):
-			if np.isnan(binn_obs_soc[i, :]).all() or np.isnan(best_simu_soc[i, :]).all():
+			if np.isnan(binn_obs_soc[i, :]).all() or torch.isnan(best_simu_soc[i, :]).all():
 				continue
 			else: 
 				# Get the predicted and observed SOC values for this profile
@@ -1248,7 +1324,7 @@ def worker(rank, world_size):
 				temp_simu_sum = 0
 				temp_obs_sum = 0
 				for j in range(len(simu_soc)):
-					if np.isnan(obs_soc[j]) or np.isnan(simu_soc[j]):
+					if np.isnan(obs_soc[j]) or torch.isnan(simu_soc[j]):
 						continue
 					else:
 						if j >= 25:
@@ -1263,28 +1339,28 @@ def worker(rank, world_size):
 					print('outlier: ', test_profile_id_all[i], scaled_diff[i])
 
 		# Plot the scaled difference
-		visualization_utils.plot_observations_world_map(test_lons, test_lats, scaled_diff, PLOT_DIR, "test_scaled_diff_" + job_id)
+		visualization_utils.plot_observations_world_map(test_lons, test_lats, scaled_diff, PLOT_DIR, "test_scaled_diff_" + job_id, us_only=True)
 
 		best_simu_soc[val_profile_id, :] = best_guess_val_y_hat
 		best_pred_para[val_profile_id, :] = best_guess_val_pred_para
 
 		# initializz a seperate array to store the prediction results for the validation profiles
-		val_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32)
-		val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32)
+		val_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
+		val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
 
 		val_simu_soc[val_profile_id, :] = best_guess_val_y_hat
 		val_pred_para[val_profile_id, :] = best_guess_val_pred_para
 
 		# save data
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_obs_soc_' + job_id + '.csv', binn_obs_soc, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_simu_soc_test_val_' + job_id + '.csv', best_simu_soc.detach().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_pred_para_' + job_id + '.csv', best_pred_para.detach().numpy(), delimiter = ',')
+		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_simu_soc_test_val_' + job_id + '.csv', best_simu_soc.detach().cpu().numpy(), delimiter = ',')
+		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_pred_para_' + job_id + '.csv', best_pred_para.detach().cpu().numpy(), delimiter = ',')
 
 		best_simu_soc[train_profile_id, :] = best_guess_train_y_hat
 		# best_pred_para[train_profile_id, :] = best_guess_train_pred_para
 
 		# save data
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_simu_soc_all_' + job_id + '.csv', best_simu_soc.detach().numpy(), delimiter = ',')
+		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_best_simu_soc_all_' + job_id + '.csv', best_simu_soc.detach().cpu().numpy(), delimiter = ',')
 
 		# get the latitudes and longitudes of the validation profiles by matching ProfileID in env_info with the val_profile_id
 		val_lons = np.ones((wosis_profile_info.shape[0]))*np.nan
@@ -1304,7 +1380,7 @@ def worker(rank, world_size):
 
 		# for each location, calculate the difference between the predicted and observed SOC values
 		for i in range(val_simu_soc.shape[0]):
-			if np.isnan(val_simu_soc[i, :]).all() or np.isnan(binn_obs_soc[i, :]).all():
+			if np.isnan(binn_obs_soc[i, :]).all() or torch.isnan(val_simu_soc[i, :]).all():
 				continue
 			else: 
 				# Get the predicted and observed SOC values for this profile
@@ -1315,7 +1391,7 @@ def worker(rank, world_size):
 				temp_simu = 0
 				temp_obs_sum = 0
 				for j in range(len(simu_soc)):
-					if np.isnan(obs_soc[j]) or np.isnan(simu_soc[j]):
+					if np.isnan(obs_soc[j]) or torch.isnan(simu_soc[j]):
 						continue
 					else:
 						if j >= 25:
@@ -1331,7 +1407,7 @@ def worker(rank, world_size):
 
 
 		# Plot the scaled difference
-		visualization_utils.plot_observations_world_map(val_lons, val_lats, scaled_diff, PLOT_DIR, "validation_scaled_diff_" + job_id)
+		visualization_utils.plot_observations_world_map(val_lons, val_lats, scaled_diff, PLOT_DIR, "validation_scaled_diff_" + job_id, us_only=True)
 
 		
 
@@ -1340,7 +1416,7 @@ def worker(rank, world_size):
 		print("-----------------Model Test Finished at " + str(datetime.now()) + "-----------------")
 
 
-
+	print("Rank {} finished".format(rank))
 
 
 if __name__ == '__main__':
@@ -1348,7 +1424,7 @@ if __name__ == '__main__':
 	world_size = 4
 	processes = []
 	for rank in range(world_size):
-		p = Process(target=worker, args=(rank, world_size))
+		p = mp.Process(target=worker, args=(rank, world_size))
 		p.start()
 		processes.append(p)
 
