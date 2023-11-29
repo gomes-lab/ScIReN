@@ -51,9 +51,9 @@ class mlp_wrapper(nn.Module):
 
 		# MLP backbone
 		if lipschitz:
-			self.mlp = lipmlp((new_input_size, 256, 256, 21))  # TODO different initialization methods, leaky relu, dropout, etc. not supported
+			self.mlp = lipmlp((new_input_size, 256, 256, 256, 21))  # TODO different initialization methods, leaky relu, dropout, etc. not supported
 		else:
-			self.mlp = mlp((new_input_size, 256, 256, 21))
+			self.mlp = mlp((new_input_size, 256, 256, 256, 21))
 
 		# sigmoid parameter
 		# self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)

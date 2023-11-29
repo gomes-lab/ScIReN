@@ -9,7 +9,6 @@ import random
 import warnings
 import subprocess
 import argparse
-
 from mlp import mlp_wrapper
 
 # sys.path.append('C:/Users/hx293/Research_Data/BINN/')
@@ -31,6 +30,7 @@ from scipy.interpolate import pchip_interpolate
 import torch.multiprocessing as mp
 # initialize the multiprocessing for pytorch
 mp.set_start_method('spawn', force=True)
+print("Start binns_DDP")
 
 import os
 import torch
@@ -45,7 +45,6 @@ from torch.utils.data.distributed import DistributedSampler
 import multiprocessing
 from multiprocessing import Process
 
-print("Start binns_DDP")
 
 from scipy.io import loadmat
 import netCDF4 as ncread 
@@ -79,7 +78,6 @@ parser.add_argument("--note", type=str, default="", help="Optional name to give 
 parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp'], help="Model type")
 parser.add_argument("--lambda_lipschitz", type=float, default=1, help="If model is `lipmlp`, this is the weight to put on the Lipschitz loss")
 
-
 args = parser.parse_args()
 
 # @joshuafan: Set random seeds to try to ensure reproducibility
@@ -90,15 +88,6 @@ if torch.cuda.is_available():
 	torch.cuda.manual_seed(args.seed)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
-
-# if torch.cuda.is_available():
-# 	dev = 'cuda'
-# else:
-# 	dev = 'cpu'
-# # @joshuafan changed
-# # dev = 'cpu'
-# device = torch.device(dev) 
-# print(datetime.now(), '------------device: ', device, '------------')
 
 # print the number of cores
 cpu_count = multiprocessing.cpu_count()
@@ -310,7 +299,6 @@ profile_collection = np.intersect1d(profile_collection, PRODA_collection)
 ###############################################################################################################
 
 profile_collection = np.reshape(profile_collection, [profile_collection.shape[0], 1])
-profile_collection = profile_collection[0:1000]  # TODO temporary
 
 profile_range = np.arange(0, len(profile_collection))
 
@@ -430,7 +418,7 @@ print(datetime.now(), '------------soc data prepared------------')
 ########################################################
 # neural network (BINNS)
 ########################################################
-embed_dim = 5
+embed_dim = 10
 clip_value = 1
 nn_split_ratio = 0.1
 test_split_ratio = 0.1
@@ -480,7 +468,7 @@ env_info = env_info['EnvInfo']
 original_lons = env_info[:, 3].copy()
 original_lats = env_info[:, 4].copy()
 
-col_max_min = loadmat(data_dir_input + 'data4nn/world_grid_envinfo_present_cesm2_clm5_cen_vr_v2_whole_time_col_max_min.mat')  # @joshuafan changed
+col_max_min = loadmat(data_dir_input + 'wosis_2019_snap_shot/world_grid_envinfo_present_cesm2_clm5_cen_vr_v2_whole_time_col_max_min.mat')
 col_max_min = col_max_min['col_max_min']
 
 # Don't want to transform categorical variables, so set max/min to nan
@@ -729,7 +717,7 @@ def binns_loss(y_pred, y_true):
 	# modeling inefficiency
 	modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/torch.sum((soc_true_vector - torch.mean(soc_true_vector))**2)
 	# modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/len(soc_true_vector) 
-	loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean')  #'sum')
+	loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean')
 	# print(modeling_inefficiency)
 
 	##########################
@@ -888,11 +876,6 @@ class nn_model(nn.Module):
 		return simu_soc, h5, clamped_temp_sigmoid
 # end nn_model
 
-
-
-
-
-# end nn_model
 # Helper function to combine the training data into a single tensor
 class MergeDataset(Dataset):
     def __init__(self, data_x, data_y, data_z, profile_id):
@@ -922,7 +905,6 @@ def worker(rank, world_size):
 	device = torch.device(dev)
 
 	# Set number of threads *per worker*. Should equal floor(CPUs/processes)
-	print("Rank {} Num threads {}".format(rank, math.floor(torch.get_num_threads() / world_size)))
 	torch.set_num_threads(math.floor(torch.get_num_threads() / world_size))
 
 	# Filename to store average losses
@@ -937,7 +919,6 @@ def worker(rank, world_size):
 
 	# Initialize distributed environment
 	dist.init_process_group('nccl', rank=rank, world_size=world_size)  # gloo
-
 
 	# Create embeddings for categorical variables (each int maps to a different category)
 	var_idx_to_emb = dict()  # Column index to Embedding layer to use
@@ -960,6 +941,7 @@ def worker(rank, world_size):
 	# Create distributed version of the model
 	model = DDP(model)
 
+
 	# Loss and optimizer
 	optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 	if rank == 0:
@@ -975,7 +957,7 @@ def worker(rank, world_size):
 	# Use DistributedSampler for distributed training
 	train_sampler = DistributedSampler(train_dataset)
 	val_sampler = DistributedSampler(val_dataset)
-	print("Worker rank {}, Device {}, Train dataset {}, Train sampler {}".format(rank, device, len(train_dataset), len(train_sampler)))
+	print("Worker rank {}, Device {}, num_threads, Train dataset {}, Train sampler {}".format(rank, device, torch.get_num_threads(), len(train_dataset), len(train_sampler)))
 
 	# Data loaders with DistributedSampler
 	train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)
@@ -1140,7 +1122,6 @@ def worker(rank, world_size):
 		elif rank == 1:
 			with open(os.path.join(data_dir_output, "neural_network", job_id, avg_loss_filename), "a") as f:
 				f.write(f'{iepoch + 1}, {torch.stack(all_train_losses).mean():.2f}, {torch.stack(all_val_losses).mean():.2f}, {torch.stack(all_train_times).mean():.2f}\n')
-			# elif rank == 4: 
 			with open(os.path.join(data_dir_output, "neural_network", job_id, avg_NSE_filename), "a") as f:
 				f.write(f'{iepoch + 1}, {torch.stack(all_train_NSE).mean():.2f}, {torch.stack(all_val_NSE).mean():.2f}, {torch.stack(all_train_times).mean():.2f}\n')
 			# elif rank == 5:
@@ -1267,25 +1248,20 @@ def worker(rank, world_size):
 		# best_guess_model.eval()
 		new_checkpoint = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt', map_location=device)
 		print("Loaded model")
-		best_guess_model = model
+		best_guess_model = model  # Do not need to create a new model
 		# # best_guess_model = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt').to(device)
 		# best_guess_model = nn_model(var_idx_to_emb).to(device)
-		# print("Created model")
 		# best_guess_model = DDP(best_guess_model)
-		# print("DDP")
 		best_guess_model.load_state_dict(new_checkpoint['model_state_dict'])
 		best_guess_model.eval()
-		print("Loaded state dict")
+
 		with torch.no_grad():
 			best_guess_val_y_hat, best_guess_val_pred_para, best_sigmoid_val_para = best_guess_model(val_x.to(device), val_z.to(device))
-			print("Val preds")
 			best_guess_train_y_hat, best_guess_train_pred_para, best_sigmoid_train_para = best_guess_model(train_x.to(device), train_z.to(device))
-			print("Train preds")
 			if test_split_ratio != 0:
 				best_guess_test_y_hat, best_guess_test_pred_para, best_sigmoid_test_para = best_guess_model(test_x.to(device), test_z.to(device))
 				test_loss, test_NSE = fun_loss(best_guess_test_y_hat, test_y.to(device))
 				print(f'Test loss: {test_loss.item():.2f}, Test NSE: {test_NSE.item():.2f}')
-		print("Got all predictions")
 		# end with torch.no_grad():
 
 		# write prediction results
