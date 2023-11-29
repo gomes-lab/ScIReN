@@ -5,7 +5,7 @@ for LR in 1e-2
 do
     for SEED in 0
     do
-        python3 binns_DDP.py --lr $LR --weight_decay 0 --seed $SEED --n_epochs 200 --patience 20 --model lipmlp --lambda_lipschitz $1 --note EMBED5
+        python3 binns_DDP.py --lr $LR --weight_decay 0 --seed $SEED --n_epochs 200 --patience 20 --model lipmlp --lambda_lipschitz $1
     done
 done
 

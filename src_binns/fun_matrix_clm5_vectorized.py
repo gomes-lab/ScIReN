@@ -380,13 +380,26 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	matrix_in[40:60, 0] = input_tot_litter2*vertical_input/dz[0:n_soil_layer]
 	matrix_in[60:80, 0] = input_tot_litter3*vertical_input/dz[0:n_soil_layer]
 	matrix_in[80:140, 0] = 0
-	
+
+	# construct a diagonal matrix that contains dz for each layer (20 layers) and 7 pools
+	dz_matrix = torch.diag(-1*torch.ones(npool_vr)).to(device)
+    # fill the diagonal matrix with dz for each pool (7 pools)
+	dz_matrix.diagonal()[0:20] = dz[0:20]
+	dz_matrix.diagonal()[20:40] = dz[0:20]
+	dz_matrix.diagonal()[40:60] = dz[0:20]
+	dz_matrix.diagonal()[60:80] = dz[0:20]
+	dz_matrix.diagonal()[80:100] = dz[0:20]
+	dz_matrix.diagonal()[100:120] = dz[0:20]
+	dz_matrix.diagonal()[120:140] = dz[0:20]
+
 	# analytical solution of soc pools
 	try:
 		# torch 1.7
 		# cpool_steady_state = torch.solve((-matrix_in), (torch.matmul(a_ma, kk_ma)-tri_ma)).solution
 		# torch 1.11
-		cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma)-tri_ma), (-matrix_in))
+		# cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma)-tri_ma), (-matrix_in))
+		cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma) - torch.matmul(tri_ma, dz_matrix)), (-matrix_in))
+
 	except Exception as e:
 		print("=============== Exception!!! ==============")
 		print(e)
