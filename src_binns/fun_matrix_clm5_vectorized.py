@@ -179,7 +179,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	# Q10 when forzen (unitless) 1.5
 	fq10 = q10
 	# parameters used in vertical discretization of carbon inputs 10 (metre)
-	efolding = para[3]*(1 - 0.0001) + 0.0001
+	efolding = para[3]*(15 - 0.1) + 0.1  # para[3]*(1 - 0.0001) + 0.0001
 	# turnover time of CWD (yr) 3.3333
 	tau4cwd = para[4]*(6 - 1) + 1
 	# tau for metabolic litter (yr) 0.0541
@@ -235,47 +235,47 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	xio = xio_steady_state
 	xin = xin_steady_state
 
-	# Old way of calculating xit
-	# start = time.time()
-	xit_old = (torch.ones(n_soil_layer, timestep_num)*np.nan).to(device)
-	for itimestep in range(timestep_num):
-		# temperature related function xit
-		# calculate rate constant scalar for soil temperature
-		# assuming that the base rate constants are assigned for non-moisture
-		# limiting conditions at 25 C.
-		for ilayer in range(n_soil_layer):
-			if soil_temp_profile_steady_state[ilayer, itimestep] >= (0 + kelvin_to_celsius):
-				xit_old[ilayer, itimestep] = q10**((soil_temp_profile_steady_state[ilayer, itimestep] - (kelvin_to_celsius + 25))/10)
-			else:
-				xit_old[ilayer, itimestep] = q10**((273.15 - 298.15)/10)*(fq10**((soil_temp_profile_steady_state[ilayer, itimestep] - (0 + kelvin_to_celsius))/10))
-			# end if soil_temp_profile[ilayer, itimestep] >= 0 + kelvin_to_celsius:
-		# end for layer
+	# # Old way of calculating xit
+	# # start = time.time()
+	# xit_old = (torch.ones(n_soil_layer, timestep_num)*np.nan).to(device)
+	# for itimestep in range(timestep_num):
+	# 	# temperature related function xit
+	# 	# calculate rate constant scalar for soil temperature
+	# 	# assuming that the base rate constants are assigned for non-moisture
+	# 	# limiting conditions at 25 C.
+	# 	for ilayer in range(n_soil_layer):
+	# 		if soil_temp_profile_steady_state[ilayer, itimestep] >= (0 + kelvin_to_celsius):
+	# 			xit_old[ilayer, itimestep] = q10**((soil_temp_profile_steady_state[ilayer, itimestep] - (kelvin_to_celsius + 25))/10)
+	# 		else:
+	# 			xit_old[ilayer, itimestep] = q10**((273.15 - 298.15)/10)*(fq10**((soil_temp_profile_steady_state[ilayer, itimestep] - (0 + kelvin_to_celsius))/10))
+	# 		# end if soil_temp_profile[ilayer, itimestep] >= 0 + kelvin_to_celsius:
+	# 	# end for layer
 		
-		catanf_30 = catanf(torch.tensor(30.0).to(device))
-		normalization_tref = torch.tensor(15).to(device)
-		if normalize_q10_to_century_tfunc == True:
-			# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
-			normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
-			xit_old[:, itimestep] = xit_old[:, itimestep]*normalization_factor
-	xit = xit_old
+	# 	catanf_30 = catanf(torch.tensor(30.0).to(device))
+	# 	normalization_tref = torch.tensor(15).to(device)
+	# 	if normalize_q10_to_century_tfunc == True:
+	# 		# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
+	# 		normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
+	# 		xit_old[:, itimestep] = xit_old[:, itimestep]*normalization_factor
+	# xit = xit_old
 		# end if normalize_q10_to_century_tfunc == True:
 	# end for itimestep
 	# # print("XIT old", time.time()-start)
 	# # start = time.time()
 
-	# # New way to calculate xit (vectorized))
-	# xit_above_freezing = torch.pow(q10, ((soil_temp_profile_steady_state - (kelvin_to_celsius + 25))/10))  # Above freezing case first
-	# xit_below_freezing = torch.pow(q10, ((273.15 - 298.15)/10)) * torch.pow(fq10, ((soil_temp_profile_steady_state - (0 + kelvin_to_celsius))/10))	
-	# freezing_mask = (soil_temp_profile_steady_state < (0 + kelvin_to_celsius)).detach().int()  # Create a mask which is True when the soil temperatue is below freezing
-	# xit = xit_above_freezing * (1-freezing_mask) + xit_below_freezing * freezing_mask  # [freezing_mask] = xit_below_freezing[freezing_mask].clone()
-	# catanf_30 = catanf(torch.tensor(30.0).to(device))
-	# normalization_tref = torch.tensor(15).to(device)
-	# if normalize_q10_to_century_tfunc == True:
-	# 	# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
-	# 	normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
-	# 	xit = xit * normalization_factor
-	# # print("XIT new", time.time() - start)
-	# # assert(torch.equal(xit_old, xit))
+	# New way to calculate xit (vectorized))
+	xit_above_freezing = torch.pow(q10, ((soil_temp_profile_steady_state - (kelvin_to_celsius + 25))/10))  # Above freezing case first
+	xit_below_freezing = torch.pow(q10, ((273.15 - 298.15)/10)) * torch.pow(fq10, ((soil_temp_profile_steady_state - (0 + kelvin_to_celsius))/10))	
+	freezing_mask = (soil_temp_profile_steady_state < (0 + kelvin_to_celsius)).detach().int()  # Create a mask which is True when the soil temperatue is below freezing
+	xit = xit_above_freezing * (1-freezing_mask) + xit_below_freezing * freezing_mask  # [freezing_mask] = xit_below_freezing[freezing_mask].clone()
+	catanf_30 = catanf(torch.tensor(30.0).to(device))
+	normalization_tref = torch.tensor(15).to(device)
+	if normalize_q10_to_century_tfunc == True:
+		# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
+		normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
+		xit = xit * normalization_factor
+	# print("XIT new", time.time() - start)
+	# assert(torch.equal(xit_old, xit))
 
 
 	xiw = soil_water_profile_steady_state*w_scaling
@@ -380,15 +380,32 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	matrix_in[40:60, 0] = input_tot_litter2*vertical_input/dz[0:n_soil_layer]
 	matrix_in[60:80, 0] = input_tot_litter3*vertical_input/dz[0:n_soil_layer]
 	matrix_in[80:140, 0] = 0
-	
+
+	# construct a diagonal matrix that contains dz for each layer (20 layers) and 7 pools
+	dz_matrix = torch.diag(-1*torch.ones(npool_vr)).to(device)
+    # fill the diagonal matrix with dz for each pool (7 pools)
+	dz_matrix.diagonal()[0:20] = dz[0:20]
+	dz_matrix.diagonal()[20:40] = dz[0:20]
+	dz_matrix.diagonal()[40:60] = dz[0:20]
+	dz_matrix.diagonal()[60:80] = dz[0:20]
+	dz_matrix.diagonal()[80:100] = dz[0:20]
+	dz_matrix.diagonal()[100:120] = dz[0:20]
+	dz_matrix.diagonal()[120:140] = dz[0:20]
+
 	# analytical solution of soc pools
 	try:
 		# torch 1.7
 		# cpool_steady_state = torch.solve((-matrix_in), (torch.matmul(a_ma, kk_ma)-tri_ma)).solution
 		# torch 1.11
-		cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma)-tri_ma), (-matrix_in))
-	except Exception:
+		# cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma)-tri_ma), (-matrix_in))
+		cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma) - torch.matmul(tri_ma, dz_matrix)), (-matrix_in))
+
+	except Exception as e:
+		print("=============== Exception!!! ==============")
+		print(e)
 		traceback.print_exc()
+		print(f'efolding {efolding}, Slope {slope}, Intercept {intercept}')
+
 		# check if the matrix is singular and print the matrix
 		# check a_ma
 		if torch.isnan(torch.sum(a_ma)):

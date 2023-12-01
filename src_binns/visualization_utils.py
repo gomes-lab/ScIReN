@@ -9,6 +9,13 @@ from matplotlib.colors import Normalize
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, euclidean_distances
 from scipy.interpolate import interpn
+import subprocess
+
+
+# Get the hash of the latest Git commit.
+# TODO - this is not a visualization method, but temporarily putting it here for convenience
+def get_git_revision_hash():
+    return subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
 
 
 def plot_losses(filename, train_losses, val_losses):
@@ -132,7 +139,7 @@ def plot_true_vs_predicted(filename, y_hat, y):
     plt.close()
 
 
-def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=None):
+def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=None, categorical=False, us_only=False):
     if title is None:
         title = var_name
     # Exclude NaNs and Infs
@@ -145,7 +152,11 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
     # Plot world map
     gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
     world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
-    gdf.plot(column=var_name, ax=world.boundary.plot(color='gray', figsize=(25, 18)), marker='o', markersize=2, legend=True, legend_kwds={'shrink': 0.7}, zorder=10)
+    ax = world.boundary.plot(color='gray', figsize=(25, 18))
+    if us_only:
+        ax.set_xlim(-124.8, -66.9)
+        ax.set_ylim(24.5, 49.4)
+    gdf.plot(column=var_name, ax=ax, marker='o', markersize=4, legend=True, zorder=10)  # legend_kwds={'shrink': 0.7},
     plt.title(title)
     plt.savefig(os.path.join(plot_dir, "map_{}.png".format(var_name)), bbox_inches='tight')
     plt.close()
