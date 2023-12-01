@@ -2,6 +2,7 @@
 # Initializer script for DDP, automatically resubmit jobs after 11.5 hours (call DDP_resume.py)
 # Import the required libraries
 import csv
+import functools
 import math
 import sys
 import time
@@ -77,6 +78,9 @@ parser.add_argument("--seed", type=int, default=0, help="Random seed")
 parser.add_argument("--note", type=str, default="", help="Optional name to give to the model")
 parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp'], help="Model type")
 parser.add_argument("--lambda_lipschitz", type=float, default=1, help="If model is `lipmlp`, this is the weight to put on the Lipschitz loss")
+parser.add_argument("--categorical", type=str, default="embedding", choices=["embedding", "one_hot"], help="Which embedding to use for categorical variables")
+parser.add_argument("--embed_dim", type=int, default=5, help="Embedding dim for each categorical variable (if using embeddings)")
+parser.add_argument("--use_bn", action='store_true', help="Whether to use batchnorm")
 
 args = parser.parse_args()
 
@@ -418,7 +422,6 @@ print(datetime.now(), '------------soc data prepared------------')
 ########################################################
 # neural network (BINNS)
 ########################################################
-embed_dim = 5
 clip_value = 1
 nn_split_ratio = 0.1
 test_split_ratio = 0.1
@@ -486,6 +489,7 @@ for ivar in np.arange(3, len(col_max_min[:, 0])):
 		env_info[:, ivar] = (env_info[:, ivar] - col_max_min[ivar, 0])/(col_max_min[ivar, 1] - col_max_min[ivar, 0])
 		env_info[(env_info[:, ivar] > 1), ivar] = 1
 		env_info[(env_info[:, ivar] < 0), ivar] = 0
+		# env_info[:, ivar] = env_info[:, ivar] - 0.5  # TEMP move to [-0.5, 0.5]
 	# except:
 	# 	print('error in variable: ', ivar)
 # warnings.resetwarnings()
@@ -924,7 +928,15 @@ def worker(rank, world_size):
 	var_idx_to_emb = dict()  # Column index to Embedding layer to use
 	for group in categorical_vars:
 		n_categories = int(np.nanmax(env_info[group]) + 1)
-		emb = nn.Embedding(num_embeddings=n_categories, embedding_dim=embed_dim).to(device)
+		if args.categorical == "embedding":
+			emb = nn.Embedding(num_embeddings=n_categories, embedding_dim=args.embed_dim).to(device)
+		elif args.categorical == "one_hot":
+			emb = n_categories  # Just store the number of categories for one-hot encoding
+
+			# REMOVE BELOW
+			# Create a partial function call to "one_hot" with a fixed number of classes.
+			# This will later be called with the category IDs.
+			# emb = functools.partial(F.one_hot, n_classes=n_categories)
 		for var in group:
 			idx = var4nn.index(var)
 			var_idx_to_emb[idx] = emb
@@ -934,9 +946,9 @@ def worker(rank, world_size):
 	if args.model == 'old_mlp':
 		model = nn_model(var_idx_to_emb).to(device)
 	elif args.model == 'new_mlp':
-		model = mlp_wrapper(len(var4nn), var_idx_to_emb, lipschitz=False).to(device)
+		model = mlp_wrapper(len(var4nn), var_idx_to_emb, lipschitz=False, one_hot=(args.categorical == "one_hot"), use_bn=args.use_bn).to(device)
 	elif args.model == 'lipmlp':
-		model = mlp_wrapper(len(var4nn), var_idx_to_emb, lipschitz=True).to(device)
+		model = mlp_wrapper(len(var4nn), var_idx_to_emb, lipschitz=True, one_hot=(args.categorical == "one_hot"), use_bn=args.use_bn).to(device)
 
 	# Create distributed version of the model
 	model = DDP(model)
@@ -1017,9 +1029,43 @@ def worker(rank, world_size):
 			
 			# Lipschitz loss if using
 			if args.model == "lipmlp":
-				lipschitz_loss = model.module.mlp.get_lipschitz_loss()
+				lipschitz_loss, cs, scalings = model.module.mlp.get_lipschitz_loss()
 				lipschitz_loss_record_train.append(lipschitz_loss.item())
+				if ibatch == 1 and rank == 0:
+					print("Lipschitz c", cs, "Scalings", scalings)
 				obj = smooth_l1_loss + lipschitz_loss * args.lambda_lipschitz
+			# elif args.model == "clip":
+			# 	# ---------------------------------------------------------------------
+			# 	# Adverserial update
+			# 	# ---------------------------------------------------------------------
+			# 	# get initialization for Lipschitz Training set      
+			# 	if ((cache['counter'] % conf.reg_incremental) == 0) or (not ('init' in cache)):
+			# 		if verbosity > 0:
+			# 			print('The Lipschitz set was reset')
+			# 		cache['init'] = reg.u_v_init(conf, lip_cycle, cache)
+			# 		cache['counter'] = 1
+			# 	else:
+			# 		cache['counter'] += 1
+
+			# 	# adverserial update on the Lipschitz set
+			# 	u, v = reg.search_u_v(conf, model, cache)
+			# 	# ---------------------------------------------------------------------
+
+			# 	# Use either all tuples or only one tuple for regularization
+			# 	if conf.reg_all:
+			# 		u_reg, v_reg = u, v
+			# 	else:
+			# 		# Use idx:idx+1 to keep shape
+			# 		u_reg = u[cache["idx"]:cache["idx"] + 1].detach()
+			# 		v_reg = v[cache["idx"]:cache["idx"] + 1].detach()
+					
+			# 	# Compute the Lipschitz constant
+			# 	c_reg_loss = reg.lip_constant(conf, model, u_reg, v_reg, mean=conf.reg_all)
+			# 	obj = smooth_l1_loss + c_reg_loss * args.lambda_lipschitz
+			elif args.model == "new_mlp" and args.lambda_lipschitz > 0:
+				spectral_norm_loss = model.module.mlp.spectral_norm_parallel(device)
+				lipschitz_loss_record_train.append(spectral_norm_loss.item())
+				obj = smooth_l1_loss + spectral_norm_loss * args.lambda_lipschitz
 			else:
 				obj = smooth_l1_loss
 
@@ -1102,7 +1148,7 @@ def worker(rank, world_size):
 		dist.all_gather(all_train_NSE, torch.tensor(NSE_record_train, device=device).mean())
 		dist.all_gather(all_val_NSE, torch.tensor(NSE_record_val, device=device).mean())
 
-		if args.model == "lipmlp":
+		if args.model == "lipmlp" or args.lambda_lipschitz > 0:
 			all_train_lipschitz_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
 			dist.all_gather(all_train_lipschitz_losses, torch.tensor(lipschitz_loss_record_train, device=device).mean())
 
@@ -1114,7 +1160,7 @@ def worker(rank, world_size):
 		if rank == 2:  # @joshuafan swapped ranks
 			writer.add_scalars('loss', {'training': torch.stack(all_train_losses).mean(), 'validation': torch.stack(all_val_losses).mean()}, iepoch+1)
 			print(f'Epoch {iepoch + 1}, train loss: {torch.stack(all_train_losses).mean():.2f}, validation loss: {torch.stack(all_val_losses).mean():.2f}, time: {torch.stack(all_train_times).mean():.2f}')
-			if args.model == "lipmlp":
+			if args.model == "lipmlp" or args.lambda_lipschitz > 0:
 				print(f'Train Lipschitz loss: {torch.stack(all_train_lipschitz_losses).mean():.2f}')
 		elif rank == 3:
 			writer.add_scalars('NSE', {'training': torch.stack(all_train_NSE).mean(), 'validation': torch.stack(all_val_NSE).mean()}, iepoch+1)
@@ -1222,7 +1268,7 @@ def worker(rank, world_size):
 		print("Rank {}: Exiting after saving checkpoint.".format(rank))
 		return
 
-	
+
 	if rank == 0:
 
 		##################################################
@@ -1309,9 +1355,9 @@ def worker(rank, world_size):
 						temp_simu_sum += simu_soc[j] # * dz[j]
 						temp_obs_sum += obs_soc[j] # * dz[j]
 				scaled_diff[i] = temp_obs_sum/temp_simu_sum
-				# print outlier
-				if scaled_diff[i] > 2:
-					print('outlier: ', test_profile_id_all[i], scaled_diff[i])
+				# # print outlier
+				# if scaled_diff[i] > 2:
+				# 	print('outlier: ', test_profile_id_all[i], scaled_diff[i])
 
 		# Plot the scaled difference
 		visualization_utils.plot_observations_world_map(test_lons, test_lats, scaled_diff, PLOT_DIR, "test_scaled_diff_" + job_id, us_only=True)
