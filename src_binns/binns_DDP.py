@@ -77,7 +77,7 @@ parser.add_argument("--patience", type=int, default=500)
 parser.add_argument("--seed", type=int, default=0, help="Random seed")
 parser.add_argument("--note", type=str, default="", help="Optional name to give to the model")
 parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp'], help="Model type")
-parser.add_argument("--lambda_lipschitz", type=float, default=1, help="If model is `lipmlp`, this is the weight to put on the Lipschitz loss")
+parser.add_argument("--lambda_lipschitz", type=float, default=1, help="If model is `lipmlp`, this is the weight to put on the Lipschitz loss. If model is `new_mlp`, this is the spectral norm regularization weight.")
 parser.add_argument("--categorical", type=str, default="embedding", choices=["embedding", "one_hot"], help="Which embedding to use for categorical variables")
 parser.add_argument("--embed_dim", type=int, default=5, help="Embedding dim for each categorical variable (if using embeddings)")
 parser.add_argument("--use_bn", action='store_true', help="Whether to use batchnorm")
@@ -489,7 +489,6 @@ for ivar in np.arange(3, len(col_max_min[:, 0])):
 		env_info[:, ivar] = (env_info[:, ivar] - col_max_min[ivar, 0])/(col_max_min[ivar, 1] - col_max_min[ivar, 0])
 		env_info[(env_info[:, ivar] > 1), ivar] = 1
 		env_info[(env_info[:, ivar] < 0), ivar] = 0
-		# env_info[:, ivar] = env_info[:, ivar] - 0.5  # TEMP move to [-0.5, 0.5]
 	# except:
 	# 	print('error in variable: ', ivar)
 # warnings.resetwarnings()
@@ -1063,6 +1062,7 @@ def worker(rank, world_size):
 			# 	c_reg_loss = reg.lip_constant(conf, model, u_reg, v_reg, mean=conf.reg_all)
 			# 	obj = smooth_l1_loss + c_reg_loss * args.lambda_lipschitz
 			elif args.model == "new_mlp" and args.lambda_lipschitz > 0:
+				# Compute the spectral norm of the model's layers, and add this as a loss
 				spectral_norm_loss = model.module.mlp.spectral_norm_parallel(device)
 				lipschitz_loss_record_train.append(spectral_norm_loss.item())
 				obj = smooth_l1_loss + spectral_norm_loss * args.lambda_lipschitz
