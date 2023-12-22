@@ -285,12 +285,12 @@ def fun_matrix_clm5(para, frocing_steady_state):
 
 	# allocation matrix
 	# start = time.time()
-	# a_ma_old = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
+	a_ma_old = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
 	# print("a_matrix old", time.time()-start)
 	# start = time.time()
 	a_ma = a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
 	# print("a_matrix_vectorized", time.time()-start)
-	# assert torch.equal(a_ma_old, a_ma)
+	assert torch.equal(a_ma_old, a_ma)
 
 	kk_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num], device=device)*np.nan)  #.to(device) 
 	tri_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num], device=device)*np.nan)  #.to(device) 
@@ -443,6 +443,16 @@ def a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, san
 def get_view(a_ma, nlevdecomp, i, j):
 	return a_ma[(i-1)*nlevdecomp:i*nlevdecomp, (j-1)*nlevdecomp:j*nlevdecomp]
 
+# If a_ma is a block matrix where each A_{ij} is (nlevdecomp x nlevdecomp),
+# fills in the diagonal of block A_{ij} with "value".
+# For consistency with the paper (Lu et al. 2020), i and j are indexed from 1. 
+# Modifies a_ma in place.
+def fill_submatrix_diagonal(a_ma, nlevdecomp, i, j, value):
+	diag_vector = value.repeat(nlevdecomp)
+	print("Diag vector", diag_vector)
+	a_ma[range((i-1)*nlevdecomp, i*nlevdecomp), range((j-1)*nlevdecomp, j*nlevdecomp)] = diag_vector
+ 
+
 
 def a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector):
 	device = fl1s1.device
@@ -454,17 +464,35 @@ def a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, 
 	a_ma_vr = torch.diag(-1*torch.ones(nspools_vr, device=device))
 
 	fcwdl3 = 1 - fcwdl2
-	transfer_fraction = [fl1s1.item(), fl2s1.item(), fl3s2.item(), fs1s2.item(), fs1s3.item(), fs2s1.item(), fs2s3.item(), fs3s1.item(), fcwdl2.item(), fcwdl3.item()]
-	get_view(a_ma_vr, nlevdecomp, 3, 1).fill_diagonal_(transfer_fraction[8])
-	get_view(a_ma_vr, nlevdecomp, 4, 1).fill_diagonal_(transfer_fraction[9])
-	get_view(a_ma_vr, nlevdecomp, 5, 2).fill_diagonal_(transfer_fraction[0])
-	get_view(a_ma_vr, nlevdecomp, 5, 3).fill_diagonal_(transfer_fraction[1])
-	get_view(a_ma_vr, nlevdecomp, 5, 6).fill_diagonal_(transfer_fraction[5])
-	get_view(a_ma_vr, nlevdecomp, 5, 7).fill_diagonal_(transfer_fraction[7])
-	get_view(a_ma_vr, nlevdecomp, 6, 4).fill_diagonal_(transfer_fraction[2])
-	get_view(a_ma_vr, nlevdecomp, 6, 5).fill_diagonal_(transfer_fraction[3])
-	get_view(a_ma_vr, nlevdecomp, 7, 5).fill_diagonal_(transfer_fraction[4])
-	get_view(a_ma_vr, nlevdecomp, 7, 6).fill_diagonal_(transfer_fraction[6])
+
+	transfer_fraction = [fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, fcwdl3]
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 3, 1, transfer_fraction[8])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 4, 1, transfer_fraction[9])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 5, 2, transfer_fraction[0])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 5, 3, transfer_fraction[1])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 5, 6, transfer_fraction[5])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 5, 7, transfer_fraction[7])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 6, 4, transfer_fraction[2])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 6, 5, transfer_fraction[3])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 7, 5, transfer_fraction[4])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 7, 6, transfer_fraction[6])
+
+	# Check values
+	print(transfer_fraction[8])
+	print(a_ma_vr[40:60, 0:20])
+
+	# OLD BUGGY VERSION
+	# transfer_fraction = [fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, fcwdl3]
+	# get_view(a_ma_vr, nlevdecomp, 3, 1).fill_diagonal_(transfer_fraction[8])
+	# get_view(a_ma_vr, nlevdecomp, 4, 1).fill_diagonal_(transfer_fraction[9])
+	# get_view(a_ma_vr, nlevdecomp, 5, 2).fill_diagonal_(transfer_fraction[0])
+	# get_view(a_ma_vr, nlevdecomp, 5, 3).fill_diagonal_(transfer_fraction[1])
+	# get_view(a_ma_vr, nlevdecomp, 5, 6).fill_diagonal_(transfer_fraction[5])
+	# get_view(a_ma_vr, nlevdecomp, 5, 7).fill_diagonal_(transfer_fraction[7])
+	# get_view(a_ma_vr, nlevdecomp, 6, 4).fill_diagonal_(transfer_fraction[2])
+	# get_view(a_ma_vr, nlevdecomp, 6, 5).fill_diagonal_(transfer_fraction[3])
+	# get_view(a_ma_vr, nlevdecomp, 7, 5).fill_diagonal_(transfer_fraction[4])
+	# get_view(a_ma_vr, nlevdecomp, 7, 6).fill_diagonal_(transfer_fraction[6])
 	return a_ma_vr
 
 

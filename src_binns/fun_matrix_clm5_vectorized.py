@@ -276,7 +276,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		xit = xit * normalization_factor
 	# print("XIT new", time.time() - start)
 	# assert(torch.equal(xit_old, xit))
-
+	assert xit.requires_grad
 
 	xiw = soil_water_profile_steady_state*w_scaling
 	xiw[xiw > 1] = 1
@@ -294,10 +294,11 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	a_ma = a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
 	# print("a_matrix_vectorized", time.time()-start)
 	# assert torch.equal(a_ma_old, a_ma)
+	assert a_ma.requires_grad
 
 	kk_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device) 
 	tri_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device) 
-	
+
 	for itimestep in range(timestep_num):
 		# decomposition matrix
 		timesteply_xit = xit[:, itimestep]
@@ -313,6 +314,8 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		kk_ma = kk_matrix_vectorized(timesteply_xit, timesteply_xiw, timesteply_xio, timesteply_xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3)
 		# print("kk_ma_vectorized", time.time() - start)
 		# assert torch.equal(kk_ma_old, kk_ma)
+		assert kk_ma.requires_grad
+
 		kk_ma_middle[:, :, itimestep] = kk_ma
 
 		# tri matrix	
@@ -325,6 +328,8 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		# print("tri_ma_alt", time.time()-start)
 		# start = time.time()
 		tri_ma_alternative = tri_matrix_alternative_vectorized(timesteply_nbedrock, slope, intercept, device)
+		assert tri_ma_alternative.requires_grad
+
 		# print("tri_ma_alt_vectorized", time.time()-start)
 		# assert torch.equal(tri_ma_alternative_old[20:140, 20:140], tri_ma_alternative[20:140, 20:140])
 		tri_ma_middle[:, :, itimestep] = tri_ma_alternative
@@ -493,6 +498,17 @@ def get_view(a_ma, nlevdecomp, i, j):
 	return a_ma[(i-1)*nlevdecomp:i*nlevdecomp, (j-1)*nlevdecomp:j*nlevdecomp]
 
 
+# If a_ma is a block matrix where each A_{ij} is (nlevdecomp x nlevdecomp),
+# fills in the diagonal of block A_{ij} with "value".
+# "value" is assumed to be a tensor with a single element.
+# For consistency with the paper (Lu et al. 2020), i and j are indexed from 1. 
+# Modifies a_ma in place.
+def fill_submatrix_diagonal(a_ma, nlevdecomp, i, j, value):
+	diag_vector = value.repeat(nlevdecomp)
+	a_ma[range((i-1)*nlevdecomp, i*nlevdecomp), range((j-1)*nlevdecomp, j*nlevdecomp)] = diag_vector
+ 
+
+
 def a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector):
 	device = fl1s1.device
 	nlevdecomp = n_soil_layer
@@ -503,19 +519,36 @@ def a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, 
 	a_ma_vr = torch.diag(-1*torch.ones(nspools_vr, device=device))
 
 	fcwdl3 = 1 - fcwdl2
-	transfer_fraction = [fl1s1.item(), fl2s1.item(), fl3s2.item(), fs1s2.item(), fs1s3.item(), fs2s1.item(), fs2s3.item(), fs3s1.item(), fcwdl2.item(), fcwdl3.item()]
-	get_view(a_ma_vr, nlevdecomp, 3, 1).fill_diagonal_(transfer_fraction[8])
-	get_view(a_ma_vr, nlevdecomp, 4, 1).fill_diagonal_(transfer_fraction[9])
-	get_view(a_ma_vr, nlevdecomp, 5, 2).fill_diagonal_(transfer_fraction[0])
-	get_view(a_ma_vr, nlevdecomp, 5, 3).fill_diagonal_(transfer_fraction[1])
-	get_view(a_ma_vr, nlevdecomp, 5, 6).fill_diagonal_(transfer_fraction[5])
-	get_view(a_ma_vr, nlevdecomp, 5, 7).fill_diagonal_(transfer_fraction[7])
-	get_view(a_ma_vr, nlevdecomp, 6, 4).fill_diagonal_(transfer_fraction[2])
-	get_view(a_ma_vr, nlevdecomp, 6, 5).fill_diagonal_(transfer_fraction[3])
-	get_view(a_ma_vr, nlevdecomp, 7, 5).fill_diagonal_(transfer_fraction[4])
-	get_view(a_ma_vr, nlevdecomp, 7, 6).fill_diagonal_(transfer_fraction[6])
-	return a_ma_vr
 
+	transfer_fraction = [fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, fcwdl3]
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 3, 1, transfer_fraction[8])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 4, 1, transfer_fraction[9])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 5, 2, transfer_fraction[0])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 5, 3, transfer_fraction[1])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 5, 6, transfer_fraction[5])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 5, 7, transfer_fraction[7])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 6, 4, transfer_fraction[2])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 6, 5, transfer_fraction[3])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 7, 5, transfer_fraction[4])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 7, 6, transfer_fraction[6])
+
+	# # Check values
+	# print(transfer_fraction[8])
+	# print(a_ma_vr[40:60, 0:20])
+
+	# OLD BUGGY VERSION
+	# transfer_fraction = [fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, fcwdl3]
+	# get_view(a_ma_vr, nlevdecomp, 3, 1).fill_diagonal_(transfer_fraction[8])
+	# get_view(a_ma_vr, nlevdecomp, 4, 1).fill_diagonal_(transfer_fraction[9])
+	# get_view(a_ma_vr, nlevdecomp, 5, 2).fill_diagonal_(transfer_fraction[0])
+	# get_view(a_ma_vr, nlevdecomp, 5, 3).fill_diagonal_(transfer_fraction[1])
+	# get_view(a_ma_vr, nlevdecomp, 5, 6).fill_diagonal_(transfer_fraction[5])
+	# get_view(a_ma_vr, nlevdecomp, 5, 7).fill_diagonal_(transfer_fraction[7])
+	# get_view(a_ma_vr, nlevdecomp, 6, 4).fill_diagonal_(transfer_fraction[2])
+	# get_view(a_ma_vr, nlevdecomp, 6, 5).fill_diagonal_(transfer_fraction[3])
+	# get_view(a_ma_vr, nlevdecomp, 7, 5).fill_diagonal_(transfer_fraction[4])
+	# get_view(a_ma_vr, nlevdecomp, 7, 6).fill_diagonal_(transfer_fraction[6])
+	return a_ma_vr
 
 
 def kk_matrix(xit, xiw, xio, xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3):
