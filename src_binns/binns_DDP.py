@@ -1024,9 +1024,7 @@ def worker(rank, world_size):
 			# middle_pred_para[batch_profile_id, :] = batch_pred_para
 			
 			#------------ 2 compute the objective function
-			smooth_l1_loss, train_NSE = fun_loss(batch_y_hat, batch_y)
-
-			
+			smooth_l1_loss, train_NSE = fun_loss(batch_y_hat, batch_y)			
 			
 			# Lipschitz loss if using
 			if args.model == "lipmlp":
@@ -1087,8 +1085,10 @@ def worker(rank, world_size):
 
 			#------------ 4 accumulate partical derivatives of objective respect to parameters
 			obj.backward()
-		
+
+			# # Compute gradient w.r.t. last MLP layer's weights (which output the parameters)
 			# print("L5 grad", model.module.mlp.layer_output.weight.grad.shape, model.module.mlp.layer_output.weight.grad[:, 0])
+
 			# clip gradients
 			# torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=clip_value)
 			
