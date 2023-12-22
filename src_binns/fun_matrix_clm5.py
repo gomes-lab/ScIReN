@@ -285,12 +285,12 @@ def fun_matrix_clm5(para, frocing_steady_state):
 
 	# allocation matrix
 	# start = time.time()
-	a_ma_old = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
+	# a_ma_old = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
 	# print("a_matrix old", time.time()-start)
 	# start = time.time()
 	a_ma = a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
 	# print("a_matrix_vectorized", time.time()-start)
-	assert torch.equal(a_ma_old, a_ma)
+	# assert torch.equal(a_ma_old, a_ma)
 
 	kk_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num], device=device)*np.nan)  #.to(device) 
 	tri_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num], device=device)*np.nan)  #.to(device) 
@@ -481,18 +481,6 @@ def a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, 
 	print(transfer_fraction[8])
 	print(a_ma_vr[40:60, 0:20])
 
-	# OLD BUGGY VERSION
-	# transfer_fraction = [fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, fcwdl3]
-	# get_view(a_ma_vr, nlevdecomp, 3, 1).fill_diagonal_(transfer_fraction[8])
-	# get_view(a_ma_vr, nlevdecomp, 4, 1).fill_diagonal_(transfer_fraction[9])
-	# get_view(a_ma_vr, nlevdecomp, 5, 2).fill_diagonal_(transfer_fraction[0])
-	# get_view(a_ma_vr, nlevdecomp, 5, 3).fill_diagonal_(transfer_fraction[1])
-	# get_view(a_ma_vr, nlevdecomp, 5, 6).fill_diagonal_(transfer_fraction[5])
-	# get_view(a_ma_vr, nlevdecomp, 5, 7).fill_diagonal_(transfer_fraction[7])
-	# get_view(a_ma_vr, nlevdecomp, 6, 4).fill_diagonal_(transfer_fraction[2])
-	# get_view(a_ma_vr, nlevdecomp, 6, 5).fill_diagonal_(transfer_fraction[3])
-	# get_view(a_ma_vr, nlevdecomp, 7, 5).fill_diagonal_(transfer_fraction[4])
-	# get_view(a_ma_vr, nlevdecomp, 7, 6).fill_diagonal_(transfer_fraction[6])
 	return a_ma_vr
 
 

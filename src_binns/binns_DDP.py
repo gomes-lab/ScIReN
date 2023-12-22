@@ -1024,7 +1024,7 @@ def worker(rank, world_size):
 			# middle_pred_para[batch_profile_id, :] = batch_pred_para
 			
 			#------------ 2 compute the objective function
-			smooth_l1_loss, train_NSE = fun_loss(batch_y_hat, batch_y)			
+			smooth_l1_loss, train_NSE = fun_loss(batch_y_hat, batch_y)
 			
 			# Lipschitz loss if using
 			if args.model == "lipmlp":
