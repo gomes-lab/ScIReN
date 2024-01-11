@@ -4,13 +4,12 @@ import torch
 import traceback
 import math
 
-def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_depth):
+def fun_model_prediction(tensor_para, tensor_frocing_steady_state):
 	device = tensor_para.device
 	# convert tensor to numpy
 	para = tensor_para
 	# para = (tensor_para - (-1)) /(1 - (-1)) # conversion from Hardttanh [-1, 1] to [0, 1]
 	frocing_steady_state = tensor_frocing_steady_state 
-	obs_layer_depth = tensor_obs_layer_depth
 
 	# depth of the node                                                   
 	zsoi = torch.tensor([1.000000000000000E-002, 4.000000000000000E-002, 9.000000000000000E-002, \
@@ -33,8 +32,6 @@ def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_de
 	for iprofile in range(0, profile_num):
 		profile_para = para[iprofile, :]
 		profile_force_steady_state = frocing_steady_state[iprofile, :, :, :]
-		profile_obs_layer_depth = obs_layer_depth[iprofile, :]
-		valid_layer_loc = torch.where(torch.isnan(profile_obs_layer_depth) == False)[0]
 
 		if torch.isnan(torch.sum(profile_para)) == False and \
 			torch.isnan(torch.sum(profile_force_steady_state[0:12, 0, 1:8])) == False and \
@@ -44,34 +41,9 @@ def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_de
 			# model simulation
 			profile_simu_soc = fun_matrix_clm5(profile_para, profile_force_steady_state)
 			
-			for ilayer in range(0, len(valid_layer_loc)):
-				layer_depth = profile_obs_layer_depth[valid_layer_loc[ilayer]]
-				depth_diff = zsoi[0:n_soil_layer] - layer_depth
-				if len(torch.where(depth_diff == 0)[0]) == 0:
-					if depth_diff[0] > 0:
-						node_depth_upper_loc = 0
-						node_depth_lower_loc = 0
-					elif depth_diff[-1] < 0:
-						node_depth_upper_loc = n_soil_layer - 1
-						node_depth_lower_loc = n_soil_layer - 1
-					else:
-						node_depth_upper_loc = torch.where(depth_diff[:-1]*depth_diff[1:]<0)[0]
-						node_depth_lower_loc = node_depth_upper_loc + 1
-					# end if depth_diff[0] > 0:
-				else:
-					node_depth_upper_loc = torch.where(depth_diff == 0)
-					node_depth_lower_loc = node_depth_upper_loc
-				#end if len(torch.where(depth_diff == 0)[0]) == 0:
-				if node_depth_lower_loc == node_depth_upper_loc:
-					simu_ouput[iprofile, valid_layer_loc[ilayer]] = profile_simu_soc[node_depth_lower_loc]
-				else:
-					simu_ouput[iprofile, valid_layer_loc[ilayer]] = \
-					profile_simu_soc[node_depth_lower_loc] \
-					+ (profile_simu_soc[node_depth_upper_loc] - profile_simu_soc[node_depth_lower_loc]) \
-					/(zsoi[node_depth_upper_loc] - zsoi[node_depth_lower_loc]) \
-					*(layer_depth - zsoi[node_depth_lower_loc])
-			# end for
-		# end if 
+			# save simulation results
+			simu_ouput[iprofile, 0:20] = profile_simu_soc
+
 	#end for iprofile
 	return simu_ouput
 	
@@ -160,7 +132,6 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	dz_matrix.diagonal()[100:120] = dz[0:20]
 	dz_matrix.diagonal()[120:140] = dz[0:20]
 	dz_matrix_diagonal = dz_matrix.diagonal().view(npool_vr, 1)
-
 	
 	#---------------------------------------------------
 	# steady state forcing
@@ -233,7 +204,6 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	w_scaling = para[19]*(5 - 0.0001) + 0.0001
 	# beta to describe the shape of vertical profile
 	# beta = 0.95
-	# or fix it at first ~ 0.6/0.7
 	# beta = para[20]*(0.9999 - 0.5) + 0.5
 	beta = 0.7 *(0.9999 - 0.5) + 0.5
 	
@@ -420,7 +390,6 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		# cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma)- tri_ma), (-matrix_in))
 		cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma)- tri_ma), (-matrix_in))
 		cpool_steady_state = torch.div(cpool_steady_state, dz_matrix_diagonal)
-		# print("Shape of cpool_steady_state after division: ", cpool_steady_state.shape)
 	except Exception:
 		traceback.print_exc()
 		print("Predicted Parameters: ", para)
