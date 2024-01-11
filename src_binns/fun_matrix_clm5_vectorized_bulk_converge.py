@@ -4,7 +4,7 @@ import torch
 import traceback
 import math
 
-def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_depth):
+def fun_bulk_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_depth):
 	device = tensor_para.device
 	# convert tensor to numpy
 	para = tensor_para
@@ -28,13 +28,29 @@ def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_de
 
 	# final ouputs of simulation
 	profile_num = para.shape[0]
-	simu_ouput = (torch.ones((profile_num, 200))*np.nan).to(device)
+	# Initialize the final outputs to store the simulation results: carbon_input_sum, cpool_steady_state, cpools_layer, soc_layer, 
+	# residence_time, total_res_time_base, res_time_base_pools, t_scaaler, bulk_Aler, w_sc, bulk_K, bulk_V, bulk_xi, bulk_I, litter_fraction
+	carbon_input = (torch.ones((profile_num, 1))*np.nan).to(device)
+	cpool_steady_state = (torch.ones((profile_num, 140))*np.nan).to(device)
+	cpools_layer = (torch.ones((profile_num, 20))*np.nan).to(device)
+	soc_layer = (torch.ones((profile_num, 20))*np.nan).to(device)
+	total_res_time = (torch.ones((profile_num, 20))*np.nan).to(device)
+	total_res_time_base = (torch.ones((profile_num, 20))*np.nan).to(device)
+	res_time_base_pools = (torch.ones((profile_num, 140))*np.nan).to(device)
+	t_scaler = (torch.ones((profile_num, 20))*np.nan).to(device)
+	bulk_A = (torch.ones((profile_num, 1))*np.nan).to(device)
+	w_scaler = (torch.ones((profile_num, 20))*np.nan).to(device)
+	bulk_K = (torch.ones((profile_num, 1))*np.nan).to(device)
+	bulk_V = (torch.ones((profile_num, 1))*np.nan).to(device)
+	bulk_xi = (torch.ones((profile_num, 1))*np.nan).to(device)
+	bulk_I = (torch.ones((profile_num, 1))*np.nan).to(device)
+	litter_fraction = (torch.ones((profile_num, 1))*np.nan).to(device)
 	# calculate soc solution for each profile
 	for iprofile in range(0, profile_num):
 		profile_para = para[iprofile, :]
 		profile_force_steady_state = frocing_steady_state[iprofile, :, :, :]
-		profile_obs_layer_depth = obs_layer_depth[iprofile, :]
-		valid_layer_loc = torch.where(torch.isnan(profile_obs_layer_depth) == False)[0]
+		# profile_obs_layer_depth = obs_layer_depth[iprofile, :]
+		# valid_layer_loc = torch.where(torch.isnan(profile_obs_layer_depth) == False)[0]
 
 		if torch.isnan(torch.sum(profile_para)) == False and \
 			torch.isnan(torch.sum(profile_force_steady_state[0:12, 0, 1:8])) == False and \
@@ -42,38 +58,50 @@ def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_de
 			
 			# print(profile_para)
 			# model simulation
-			profile_simu_soc = fun_matrix_clm5(profile_para, profile_force_steady_state)
+			carbon_input_sum_profile, cpool_steady_state_profile, cpools_layer_profile, soc_layer_profile, \
+			total_res_time_profile, total_res_time_base_profile, res_time_base_pools_profile, t_scaler_profile, \
+			bulk_A_profile, w_scaler_profile, bulk_K_profile, bulk_V_profile, bulk_xi_profile, bulk_I_profile, \
+			litter_fraction_profile = fun_matrix_clm5(profile_para, profile_force_steady_state)
+
+			# print the shape of the outputs
+			# print("carbon_input_sum_profile", carbon_input_sum_profile.shape)
+			# print("cpool_steady_state_profile", cpool_steady_state_profile.shape)
+			# print("cpools_layer_profile", cpools_layer_profile.shape)
+			# print("soc_layer_profile", soc_layer_profile.shape)
+			# print("total_res_time_profile", total_res_time_profile.shape)
+			# print("total_res_time_base_profile", total_res_time_base_profile.shape)
+			# print("res_time_base_pools_profile", res_time_base_pools_profile.shape)
+			# print("t_scaler_profile", t_scaler_profile.shape)
+			# print("bulk_A_profile", bulk_A_profile.shape)
+			# print("w_scaler_profile", w_scaler_profile.shape)
+			# print("bulk_K_profile", bulk_K_profile.shape)
+			# print("bulk_V_profile", bulk_V_profile.shape)
+			# print("bulk_xi_profile", bulk_xi_profile.shape)
+			# print("bulk_I_profile", bulk_I_profile.shape)
+			# print("litter_fraction_profile", litter_fraction_profile.shape)
+
 			
-			for ilayer in range(0, len(valid_layer_loc)):
-				layer_depth = profile_obs_layer_depth[valid_layer_loc[ilayer]]
-				depth_diff = zsoi[0:n_soil_layer] - layer_depth
-				if len(torch.where(depth_diff == 0)[0]) == 0:
-					if depth_diff[0] > 0:
-						node_depth_upper_loc = 0
-						node_depth_lower_loc = 0
-					elif depth_diff[-1] < 0:
-						node_depth_upper_loc = n_soil_layer - 1
-						node_depth_lower_loc = n_soil_layer - 1
-					else:
-						node_depth_upper_loc = torch.where(depth_diff[:-1]*depth_diff[1:]<0)[0]
-						node_depth_lower_loc = node_depth_upper_loc + 1
-					# end if depth_diff[0] > 0:
-				else:
-					node_depth_upper_loc = torch.where(depth_diff == 0)
-					node_depth_lower_loc = node_depth_upper_loc
-				#end if len(torch.where(depth_diff == 0)[0]) == 0:
-				if node_depth_lower_loc == node_depth_upper_loc:
-					simu_ouput[iprofile, valid_layer_loc[ilayer]] = profile_simu_soc[node_depth_lower_loc]
-				else:
-					simu_ouput[iprofile, valid_layer_loc[ilayer]] = \
-					profile_simu_soc[node_depth_lower_loc] \
-					+ (profile_simu_soc[node_depth_upper_loc] - profile_simu_soc[node_depth_lower_loc]) \
-					/(zsoi[node_depth_upper_loc] - zsoi[node_depth_lower_loc]) \
-					*(layer_depth - zsoi[node_depth_lower_loc])
+			# store the results
+			carbon_input[iprofile, :] = carbon_input_sum_profile
+			cpool_steady_state[iprofile, :] = cpool_steady_state_profile.squeeze()
+			cpools_layer[iprofile, :] = cpools_layer_profile
+			soc_layer[iprofile, :] = soc_layer_profile
+			total_res_time[iprofile, :] = total_res_time_profile
+			total_res_time_base[iprofile, :] = total_res_time_base_profile
+			res_time_base_pools[iprofile, :] = res_time_base_pools_profile.squeeze()
+			t_scaler[iprofile, :] = t_scaler_profile
+			bulk_A[iprofile, :] = bulk_A_profile
+			w_scaler[iprofile, :] = w_scaler_profile
+			bulk_K[iprofile, :] = bulk_K_profile
+			bulk_V[iprofile, :] = bulk_V_profile
+			bulk_xi[iprofile, :] = bulk_xi_profile
+			bulk_I[iprofile, :] = bulk_I_profile
+			litter_fraction[iprofile, :] = litter_fraction_profile
+
 			# end for
 		# end if 
 	#end for iprofile
-	return simu_ouput
+	return carbon_input, cpool_steady_state, cpools_layer, soc_layer, total_res_time, total_res_time_base, res_time_base_pools, t_scaler, bulk_A, w_scaler, bulk_K, bulk_V, bulk_xi, bulk_I, litter_fraction
 	
 # end def fun_model_simu
 
@@ -160,7 +188,6 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	dz_matrix.diagonal()[100:120] = dz[0:20]
 	dz_matrix.diagonal()[120:140] = dz[0:20]
 	dz_matrix_diagonal = dz_matrix.diagonal().view(npool_vr, 1)
-
 	
 	#---------------------------------------------------
 	# steady state forcing
@@ -233,7 +260,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	w_scaling = para[19]*(5 - 0.0001) + 0.0001
 	# beta to describe the shape of vertical profile
 	# beta = 0.95
-	# or fix it at first ~ 0.6/0.7
+	# try to cut the max beta
 	# beta = para[20]*(0.9999 - 0.5) + 0.5
 	beta = 0.7 *(0.9999 - 0.5) + 0.5
 	
@@ -411,6 +438,9 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	matrix_in[40:60, 0] = input_tot_litter2*vertical_input
 	matrix_in[60:80, 0] = input_tot_litter3*vertical_input
 	matrix_in[80:140, 0] = 0
+
+	# calculate the sum of the input
+	carbon_input_sum = (input_tot_cwd + input_tot_litter1 + input_tot_litter2 + input_tot_litter3) * days_per_year # unit gc/m2/yr
 	
 	# analytical solution of soc pools
 	try:
@@ -420,7 +450,6 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		# cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma)- tri_ma), (-matrix_in))
 		cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma)- tri_ma), (-matrix_in))
 		cpool_steady_state = torch.div(cpool_steady_state, dz_matrix_diagonal)
-		# print("Shape of cpool_steady_state after division: ", cpool_steady_state.shape)
 	except Exception:
 		traceback.print_exc()
 		print("Predicted Parameters: ", para)
@@ -459,16 +488,165 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	# end try
 	# cpool_steady_state = (torch.ones([140, 1])*(-9999.)).to(device)*torch.sum(para)/torch.sum(para) 
 	# end try
+	# convert cpools_steady_state to a vector with size [20]
+	cpools_layer = torch.cat((cpool_steady_state[0:20, :], cpool_steady_state[20:40, :], cpool_steady_state[40:60, :], cpool_steady_state[60:80, :], cpool_steady_state[80:100, :], cpool_steady_state[100:120, :], cpool_steady_state[120:140, :]), dim = 1)	
+	cpools_layer = torch.sum(cpools_layer, axis = 1) # unit gC/m3
 	soc_layer = torch.cat((cpool_steady_state[80:100, :], cpool_steady_state[100:120, :], cpool_steady_state[120:140, :]), dim = 1)
 	soc_layer = torch.sum(soc_layer, axis = 1) # unit gC/m3
+
 	
+	#--------------------------------------------------- Residence Time ---------------------------------------------------
+	# Initialize the B matrix
+	B_matrix = (torch.ones([npool_vr, 1])*np.nan).to(device)
+
+	# Calculate the B matrix
+	B_matrix[0:20, 0] = (input_tot_cwd * vertical_input) / (carbon_input_sum * dz[0:n_soil_layer])
+	B_matrix[20:40, 0] = (input_tot_litter1 * vertical_input) / (carbon_input_sum * dz[0:n_soil_layer])
+	B_matrix[40:60, 0] = (input_tot_litter2 * vertical_input) / (carbon_input_sum * dz[0:n_soil_layer])
+	B_matrix[60:80, 0] = (input_tot_litter3 * vertical_input) / (carbon_input_sum * dz[0:n_soil_layer])
+	B_matrix[80:140, 0] = 0
+
+	# diagonal scaling matrix
+	diag_scaler_monthly = (torch.ones([n_soil_layer, month_num])*np.nan).to(device)
+	for imonth in range(month_num):
+		diag_scaler_monthly[:, imonth] = 1/(xiw[:, imonth] * xit[:, imonth] * xio[:, imonth] * xin[:, imonth])
+	# end for imonth
+	t_scaler = torch.nanmean(xit, axis = 1).to(device)
+	w_scaler = torch.nanmean(xiw, axis = 1).to(device)
+
+
+	diag_scaler_temp = torch.nanmean(diag_scaler_monthly, axis = 1).to(device)
+	diag_scaler = (torch.ones([npool_vr, npool_vr])*np.nan).to(device)
+	# Fill the diagonal of diag_scaler with diag_scaler_temp for each pool
+	diag_scaler[0:20, 0:20] = torch.diag(diag_scaler_temp[0:20])
+	diag_scaler[20:40, 20:40] = torch.diag(diag_scaler_temp[0:20])
+	diag_scaler[40:60, 40:60] = torch.diag(diag_scaler_temp[0:20])
+	diag_scaler[60:80, 60:80] = torch.diag(diag_scaler_temp[0:20])
+	diag_scaler[80:100, 80:100] = torch.diag(diag_scaler_temp[0:20])
+	diag_scaler[100:120, 100:120] = torch.diag(diag_scaler_temp[0:20])
+	diag_scaler[120:140, 120:140] = torch.diag(diag_scaler_temp[0:20])
+
+	# calculate the residence time
+	residence_time = torch.linalg.solve((torch.matmul(a_ma, kk_ma)- torch.matmul(tri_ma, dz_matrix)), (-B_matrix))
+	residence_time_baseline = torch.linalg.solve(torch.matmul((torch.matmul(a_ma, kk_ma)- torch.matmul(tri_ma, dz_matrix)), diag_scaler), (-B_matrix))
+
+	total_res_time = torch.cat((residence_time[80:100, :], residence_time[100:120, :], residence_time[120:140, :]), dim = 1)
+	total_res_time = torch.sum(total_res_time, axis = 1)
+
+	total_res_time_base = torch.cat((residence_time[80:100, :], residence_time[100:120, :], residence_time[120:140, :]), dim = 1)
+	total_res_time_base = torch.sum(total_res_time_base, axis = 1)
+
+	res_time_base_pools = residence_time_baseline
+
+	#--------------------------------------------------- Bulk Process ---------------------------------------------------
+	## I matrix ##
+	cum_fraction_input = torch.cumsum(vertical_input, dim = 0).to(device)
+	# for the value over 1, set it to nan
+	cum_fraction_input[cum_fraction_input > 1] = np.nan
+	bulk_I = torch.nanmean(torch.exp(torch.log(1 - cum_fraction_input)/(zsoi[0:n_soil_layer]*100)), axis = 0).to(device)
+
+	## K matrix ##
+	# calculate the sum of cpool_steady_state
+	cpools_total = torch.stack([torch.sum(cpool_steady_state[0:20, :] * dz[0:n_soil_layer], dim = 0),
+		torch.sum(cpool_steady_state[20:40, :] * dz[0:n_soil_layer], dim = 0),
+		torch.sum(cpool_steady_state[40:60, :] * dz[0:n_soil_layer], dim = 0),
+		torch.sum(cpool_steady_state[60:80, :] * dz[0:n_soil_layer], dim = 0),
+		torch.sum(cpool_steady_state[80:100, :] * dz[0:n_soil_layer], dim = 0),
+		torch.sum(cpool_steady_state[100:120, :] * dz[0:n_soil_layer], dim = 0),
+		torch.sum(cpool_steady_state[120:140, :] * dz[0:n_soil_layer], dim = 0)], dim = 0).to(device)
+	# print("cpools_total", cpools_total.shape)
+	# calculate decomposition rate
+	decom_cpools = torch.tensor([tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3], dtype=torch.float32).reciprocal().unsqueeze(1).to(device)
+	# print("tau4cwd", tau4cwd)
+	# print("decom_cpools", decom_cpools.shape)
+	# print("decom_cpools", decom_cpools.shape)
+	# print("cpools_total", cpools_total.shape)
+	# calculate bulk_K
+	bulk_K = torch.sum(decom_cpools * (cpools_total / torch.sum(cpools_total))).to(device)
+
+	## litter fraction ##
+	decom_cpool_apparent = torch.matmul(kk_ma, cpool_steady_state).to(device)
+	# print("decom_cpool_apparent", decom_cpool_apparent.shape)
+	total_decom_litter = torch.stack([torch.sum(decom_cpool_apparent[20:40, :] * dz[0:n_soil_layer], dim = 0),
+		torch.sum(decom_cpool_apparent[40:60, :] * dz[0:n_soil_layer], dim = 0),
+		torch.sum(decom_cpool_apparent[60:80, :] * dz[0:n_soil_layer], dim = 0)], dim = 0).to(device)
+	# dz_repeated = dz[0:n_soil_layer].repeat(3, 1).t() 
+	# total_decom_litter = decom_cpool_apparent[20:80] * dz_repeated
+	resp_vector = -torch.sum(a_ma, dim=0).t()
+	litter_resp_vector = torch.stack((resp_vector[20:40], resp_vector[40:60], resp_vector[60:80]), dim = 0).t().to(device)
+
+	# convert total_decom_litter to an 1d matrix
+	# print("total_decom_litter", total_decom_litter.shape)
+	# print("resp_vector", resp_vector.shape)
+	# print("litter_resp_vector", litter_resp_vector.shape)
+	# total_decom_litter = total_decom_litter.reshape(1, -1)
+	# print("total_decom_litter_reshape", total_decom_litter.shape)
+	total_resp_litter = torch.matmul(total_decom_litter, litter_resp_vector).to(device)
+	litter_fraction = 1 - torch.nansum(total_resp_litter) / torch.nansum(total_decom_litter)
+	
+	## xi ##
+	depth_scaler = torch.exp(-zsoi[:n_soil_layer] / efolding).to(device)
+	bulk_xi_layer = (t_scaler * w_scaler * depth_scaler).to(device)
+	bulk_xi = (torch.sum(bulk_xi_layer * (soc_layer * dz[:n_soil_layer])) / torch.sum(soc_layer * dz[:n_soil_layer])).to(device)
+	if not torch.isreal(bulk_xi):
+		bulk_xi = torch.nan
+	
+	## A matrix ##
+	donor_pool_layer = torch.stack([cpool_steady_state[0:20, :], cpool_steady_state[20:40, :], cpool_steady_state[40:60, :], cpool_steady_state[60:80, :], cpool_steady_state[80:100, :], cpool_steady_state[100:120, :], cpool_steady_state[120:140, :]], dim = 1).to(device)
+	cue_cpool = torch.tensor([fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1]).to(device)
+	# print("cue_cpool", len(cue_cpool))
+	donor_pool_size = donor_pool_layer[:, [1, 2, 3, 4, 4, 5, 5, 6]]
+	# print("donor_pool_size", donor_pool_size.shape)
+	# print("fl1s1", fl1s1.shape)
+	# decom_cpool = 1.0 / np.array([tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3])
+	# donor_decomp = decom_cpool[[1, 2, 3, 4, 4, 5, 5, 6]]
+	# print("decom_cpools", decom_cpools.shape)
+	donor_decomp = torch.stack((decom_cpools[1], decom_cpools[2], decom_cpools[3], decom_cpools[4], decom_cpools[4], decom_cpools[5], decom_cpools[5], decom_cpools[6]), dim = 0).to(device)
+
+	# Calculate total_doner_flow
+	total_doner_flow = torch.nan * torch.ones(len(cue_cpool))
+	for idoner in range(len(cue_cpool)):
+		# print("donor pool size", donor_pool_size[:, idoner].shape)
+		# print("donor decomp", donor_decomp[idoner].shape)
+		# print("bulk_xi_layer", bulk_xi_layer.shape)
+		# print("dz", dz[:n_soil_layer].shape)
+		total_doner_flow[idoner] = torch.sum(torch.matmul(donor_pool_size[:, idoner], donor_decomp[idoner]) * bulk_xi_layer * dz[:n_soil_layer])
+
+	bulk_A = torch.sum(cue_cpool * total_doner_flow) / torch.sum(total_doner_flow[[0, 1, 2, 3, 5, 7]])
+
+	## V matrix ##
+	bulk_V_monthly = torch.nan * torch.ones(month_num)
+	for imonth in range(month_num):
+		bulk_V_middle = torch.diag(tri_ma_middle[20:40, 20:40, imonth]) * days_per_year
+		bulk_V_monthly[imonth] = torch.sum(bulk_V_middle * (soc_layer * dz[:n_soil_layer]) / torch.sum(soc_layer * dz[:n_soil_layer]))
+	bulk_V = torch.nanmean(bulk_V_monthly)
+
+
 	
 	# if soc_layer[-1] > soc_layer[0]:
 	# 	soc_layer =  (torch.ones(20)*(-9999.*3))
 	# # end if soc_layer[-1] > soc_layer[0]:
 	
 	outcome = soc_layer
-	return outcome
+
+	# check the shape of all the returned variables
+	# print("shape of carbon_input_sum", carbon_input_sum.shape)
+	# print("shape of cpool_steady_state", cpool_steady_state.shape)
+	# print("shape of cpools_layer", cpools_layer.shape)
+	# print("shape of soc_layer", soc_layer.shape)
+	# print("shape of total_res_time", total_res_time.shape)
+	# print("shape of total_res_time_base", total_res_time_base.shape)
+	# print("shape of res_time_base_pools", res_time_base_pools.shape)
+	# print("shape of t_scaler", t_scaler.shape)
+	# print("shape of w_scaler", w_scaler.shape)
+	# print("shape of bulk_A", bulk_A.shape)
+	# print("shape of bulk_K", bulk_K.shape)
+	# print("shape of bulk_V", bulk_V.shape)
+	# print("shape of bulk_xi", bulk_xi.shape)
+	# print("shape of bulk_I", bulk_I.shape)
+	# print("shape of litter_fraction", litter_fraction.shape)
+
+	return carbon_input_sum, cpool_steady_state, cpools_layer, soc_layer, total_res_time, total_res_time_base, res_time_base_pools, t_scaler, bulk_A, w_scaler, bulk_K, bulk_V, bulk_xi, bulk_I, litter_fraction
 	
 #end def fun_forward_simu_clm5
 
