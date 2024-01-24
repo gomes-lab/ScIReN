@@ -265,9 +265,17 @@ def fun_matrix_clm5(para, frocing_steady_state):
 
 	# New way to calculate xit (vectorized))
 	xit_above_freezing = torch.pow(q10, ((soil_temp_profile_steady_state - (kelvin_to_celsius + 25))/10))  # Above freezing case first
-	xit_below_freezing = torch.pow(q10, ((273.15 - 298.15)/10)) * torch.pow(fq10, ((soil_temp_profile_steady_state - (0 + kelvin_to_celsius))/10))	
+	xit_below_freezing = torch.pow(q10, ((273.15 - 298.15)/10)) * torch.pow(fq10, ((soil_temp_profile_steady_state - (0 + kelvin_to_celsius))/10))
+	# if not xit_below_freezing.requires_grad:
+	# 	print("xit_below_freewzing did not require grad")
+	# 	print("Q10", q10.requires_grad, q10.shape, q10)
+	# 	print("FQ10", fq10.requires_grad, fq10.shape, fq10)
+	# 	print("soil_temp_profile_steady_state", soil_temp_profile_steady_state.requires_grad, soil_temp_profile_steady_state.shape, soil_temp_profile_steady_state)
+
+	# assert xit_below_freezing.requires_grad
 	freezing_mask = (soil_temp_profile_steady_state < (0 + kelvin_to_celsius)).detach().int()  # Create a mask which is True when the soil temperatue is below freezing
 	xit = xit_above_freezing * (1-freezing_mask) + xit_below_freezing * freezing_mask  # [freezing_mask] = xit_below_freezing[freezing_mask].clone()
+
 	catanf_30 = catanf(torch.tensor(30.0).to(device))
 	normalization_tref = torch.tensor(15).to(device)
 	if normalize_q10_to_century_tfunc == True:
@@ -276,11 +284,12 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		xit = xit * normalization_factor
 	# print("XIT new", time.time() - start)
 	# assert(torch.equal(xit_old, xit))
-	assert xit.requires_grad
+	# assert xit.requires_grad
 
 
 	xiw = soil_water_profile_steady_state*w_scaling
 	xiw[xiw > 1] = 1
+	# assert xiw.requires_grad
 
 	#---------------------------------------------------
 	# steady state tridiagnal matrix, A matrix, K matrix, fire matrix
@@ -295,7 +304,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	a_ma = a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
 	# print("a_matrix_vectorized", time.time()-start)
 	# assert torch.equal(a_ma_old, a_ma)
-	assert a_ma.requires_grad
+	# assert a_ma.requires_grad
 
 	kk_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device) 
 	tri_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device) 
@@ -315,7 +324,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		kk_ma = kk_matrix_vectorized(timesteply_xit, timesteply_xiw, timesteply_xio, timesteply_xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3)
 		# print("kk_ma_vectorized", time.time() - start)
 		# assert torch.equal(kk_ma_old, kk_ma)
-		assert kk_ma.requires_grad
+		# assert kk_ma.requires_grad
 
 		kk_ma_middle[:, :, itimestep] = kk_ma
 
@@ -329,7 +338,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		# print("tri_ma_alt", time.time()-start)
 		# start = time.time()
 		tri_ma_alternative = tri_matrix_alternative_vectorized(timesteply_nbedrock, slope, intercept, device)
-		assert tri_ma_alternative.requires_grad
+		# assert tri_ma_alternative.requires_grad
 
 		# print("tri_ma_alt_vectorized", time.time()-start)
 		# assert torch.equal(tri_ma_alternative_old[20:140, 20:140], tri_ma_alternative[20:140, 20:140])

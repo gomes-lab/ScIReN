@@ -81,6 +81,7 @@ parser.add_argument("--lambda_lipschitz", type=float, default=1, help="If model 
 parser.add_argument("--categorical", type=str, default="embedding", choices=["embedding", "one_hot"], help="Which embedding to use for categorical variables")
 parser.add_argument("--embed_dim", type=int, default=5, help="Embedding dim for each categorical variable (if using embeddings)")
 parser.add_argument("--use_bn", action='store_true', help="Whether to use batchnorm")
+parser.add_argument("--continue_job_id", type=str, default='', help="If specified, initialize model with weights from given job ID")
 
 args = parser.parse_args()
 
@@ -952,6 +953,11 @@ def worker(rank, world_size):
 	# Create distributed version of the model
 	model = DDP(model)
 
+	# Load pretrained model if desired
+	if args.continue_job_id != "":
+		print("Reloading model from job {}".format(args.continue_job_id))
+		new_checkpoint = torch.load(data_dir_output + 'neural_network/' + args.continue_job_id + '/opt_nn_' + args.continue_job_id + '.pt', map_location=device)
+		model.load_state_dict(new_checkpoint['model_state_dict'])
 
 	# Loss and optimizer
 	optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -1075,13 +1081,14 @@ def worker(rank, world_size):
 			#------------ 3 cleaning gradients
 			model.zero_grad()
 
-			# # Compute gradients wrt process parameters
-			# print("Para shape", batch_pred_para.shape)
-			# gradients = torch.autograd.grad(outputs=obj, inputs=batch_pred_para,
-			# 									grad_outputs=torch.ones(obj.size()).to(device), 
-			# 								create_graph=True, retain_graph=True)[0]
-			# print("Gradients shape", gradients.shape)
-			# print(gradients)
+			# Compute gradients wrt process parameters
+			print("Para shape", batch_pred_para.shape)
+			gradients = torch.autograd.grad(outputs=obj, inputs=batch_pred_para,
+												grad_outputs=torch.ones(obj.size()).to(device), 
+											create_graph=True, retain_graph=True)[0]
+			print("Gradients shape", gradients.shape)
+			print(gradients)
+			print("Profile IDs", batch_profile_id)
 
 			#------------ 4 accumulate partical derivatives of objective respect to parameters
 			obj.backward()
@@ -1101,6 +1108,7 @@ def worker(rank, world_size):
 
 			# writer.add_scalar('training loss', obj.item(), iepoch)
 			# record prediction
+
 		# end for batch_info in train_loader:
 		
 		# record the loss history

@@ -116,7 +116,7 @@ class mlp_wrapper(nn.Module):
 			self.mlp = mlp((new_input_size, 256, 256, 256, 21), use_bn=use_bn)
 
 		# sigmoid parameter
-		# self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)
+		self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)
 
 
 	def forward(self, input_var, wosis_depth):
@@ -139,9 +139,13 @@ class mlp_wrapper(nn.Module):
 		# Pass through MLP
 		mlp_output = self.mlp(new_input)
 
+		# check if mlp output is nan
+		if torch.isnan(mlp_output).any() or torch.isinf(mlp_output).any():
+			print("mlp_output was nan", mlp_output)
+			exit(1)
+
 		# Clamp temp_sigmoid to be between 10 and 100
-		# clamped_temp_sigmoid = 10 + 90 * torch.sigmoid(self.temp_sigmoid) # constrain the temp_sigmoid between 10 and 100
-		clamped_temp_sigmoid = 1
+		clamped_temp_sigmoid = 10 + 90 * torch.sigmoid(self.temp_sigmoid) # constrain the temp_sigmoid between 10 and 100
 		h5 = torch.sigmoid(mlp_output / clamped_temp_sigmoid)
 
 		# check if h5 is nan
