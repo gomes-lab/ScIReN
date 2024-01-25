@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from lipmlp import lipmlp
 from fun_matrix_clm5_vectorized import fun_model_simu
+from fun_matrix_clm5_vectorized_prediction import fun_model_prediction
 
 class mlp(torch.nn.Module):
     """
@@ -102,24 +103,24 @@ class mlp_wrapper(nn.Module):
 
 		# List of non-categorical variable indices
 		self.non_categorical_indices = list(set(list(range(input_vars))).difference(var_idx_to_emb.keys()))
-		new_input_size = len(self.non_categorical_indices)
+		self.new_input_size = len(self.non_categorical_indices)
 		for idx, emb in self.var_idx_to_emb.items():
 			if self.one_hot:
-				new_input_size += emb
+				self.new_input_size += emb
 			else:
-				new_input_size += emb.embedding_dim
+				self.new_input_size += emb.embedding_dim
 
 		# MLP backbone
 		if lipschitz:
-			self.mlp = lipmlp((new_input_size, 256, 256, 256, 21), use_bn=use_bn)  # TODO different initialization methods, leaky relu, dropout, etc. not supported
+			self.mlp = lipmlp((self.new_input_size, 256, 256, 256, 21), use_bn=use_bn)  # TODO different initialization methods, leaky relu, dropout, etc. not supported
 		else:
-			self.mlp = mlp((new_input_size, 256, 256, 256, 21), use_bn=use_bn)
+			self.mlp = mlp((self.new_input_size, 256, 256, 256, 21), use_bn=use_bn)
 
 		# sigmoid parameter
 		self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)
 
 
-	def forward(self, input_var, wosis_depth):
+	def forward(self, input_var, wosis_depth, whether_predict):
 		predictor = input_var[:, :, 0, 0]
 		forcing = input_var[:, :, :, :]
 		obs_depth = wosis_depth
@@ -135,6 +136,11 @@ class mlp_wrapper(nn.Module):
 			embs.append(emb)
 		all_embs = torch.concatenate(embs, dim=1)
 		new_input = torch.concatenate([predictor[:, self.non_categorical_indices], all_embs], dim=1)
+
+		# check if new_input is nan
+		if torch.isnan(new_input).any() or torch.isinf(new_input).any():
+			print("new_input was nan", new_input)
+			exit(1)
 
 		# Pass through MLP
 		mlp_output = self.mlp(new_input)
@@ -154,6 +160,10 @@ class mlp_wrapper(nn.Module):
 			exit(1) 
 
 		# CLM5 process-based model
-		simu_soc = fun_model_simu(h5, forcing, obs_depth)
-		return simu_soc, h5, clamped_temp_sigmoid
+		if whether_predict == 1:
+			simu_soc = fun_model_prediction(h5, forcing)
+		else:
+			simu_soc = fun_model_simu(h5, forcing, obs_depth)
+
+		return simu_soc, h5, new_input  #, clamped_temp_sigmoid
 		
