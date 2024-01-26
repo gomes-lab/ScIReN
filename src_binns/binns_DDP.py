@@ -1291,11 +1291,12 @@ def worker(rank, world_size):
 		lipschitz_loss_record_train = list()
 		NSE_record_train = list()
 		ibatch = 0
-		best_model_epoch = torch.tensor(0) # epoch with the best model so far. Creating tensor so it can be broadcasted
+		best_model_epoch = 0  # epoch with the best model so far. Creating tensor so it can be broadcasted
 		epoch_start = time.time()
 		model.train()
 		train_loader.sampler.set_epoch(iepoch)  # Set sampler's epoch number, so we use a different order per epoch
 
+		print("Started to train")
 		for batch_info in train_loader:
 			batch_x, batch_y, batch_z, batch_profile_id = batch_info
 			ibatch = ibatch + 1
@@ -1306,6 +1307,7 @@ def worker(rank, world_size):
 			batch_y = batch_y.to(device)
 			#------------ 1 forward
 			batch_y_hat, batch_pred_para, batch_input = model(batch_x, batch_z, whether_predict=0)
+			print("Batch para", batch_pred_para)
 
 			# Check if batch_pred_para is nan or inf
 			if torch.isnan(batch_pred_para).any() or torch.isinf(batch_pred_para).any():
