@@ -88,6 +88,8 @@ parser.add_argument("--categorical", type=str, default="embedding", choices=["em
 parser.add_argument("--embed_dim", type=int, default=5, help="Embedding dim for each categorical variable (if using embeddings)")
 parser.add_argument("--use_bn", action='store_true', help="Whether to use batchnorm")
 parser.add_argument("--continue_job_id", type=str, default='', help="If specified, initialize model with weights from given job ID")
+parser.add_argument("--clip_value", type=float, default=1, help="Clip value for gradient clipping")
+
 
 args = parser.parse_args()
 
@@ -107,7 +109,7 @@ thread_count = torch.get_num_threads()
 # print("Number of CPUs: ", torch.cpu.device_count())  # No idea why it is not working on NCAR server
 print("Number of Cores: ", cpu_count)
 print("Number of threads: ", thread_count)
-# set the number of threads
+# set the number of threads  
 # torch.set_num_threads(thread_count-1)
 print(datetime.now(), '------------number of cores: ', cpu_count, '------------')
 
@@ -190,6 +192,7 @@ nc_data_middle.close()
 # CLM5 constants
 #-------------------------------
 para_names = ['diffus', 'cryo', 'q10', 'efolding', 'taucwd', 'taul1', 'taul2', 'tau4s1', 'tau4s2', 'tau4s3', 'fl1s1', 'fl2s1', 'fl3s2', 'fs1s2', 'fs1s3', 'fs2s1', 'fs2s3', 'fs3s1', 'fcwdl2', 'w-scaling', 'beta']
+# para_names = ['diffus', 'cryo', 'q10', 'efolding', 'taucwd', 'taul1', 'taul2', 'tau4s1', 'tau4s2', 'tau4s3', 'fl1s1', 'fl2s1', 'fl3s2', 'fs1s2', 'fs1s3', 'fs2s1', 'fs2s3', 'fs3s1', 'fcwdl2', 'w-scaling']
 # soil depths info
 # width between two interfaces
 dz = np.array([2.000000000000000E-002, 4.000000000000000E-002, 6.000000000000000E-002, \
@@ -315,6 +318,9 @@ PRODA_collection = np.where((np.mean(para_gr, axis = 1) < 1.05) &
 							)[0]
 # Choose overlap between profile_collection and PRODA_collection
 profile_collection = np.intersect1d(profile_collection, PRODA_collection)
+
+# Choose random 2000 profiles for testing
+# profile_collection = np.random.choice(profile_collection, 12000, replace=False)
 
 ###############################################################################################################
 
@@ -455,7 +461,6 @@ print(datetime.now(), '------------soc data prepared------------')
 ########################################################
 # neural network (BINNS)
 ########################################################
-clip_value = 1
 nn_split_ratio = 0.1
 test_split_ratio = 0.1
 #---------------------------------------------------
@@ -697,7 +702,9 @@ if test_split_ratio == 0:
 	val_z = torch.tensor(current_data_z[val_loc, :], dtype = torch.float32)
 
 	train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype = torch.float32)
+	# train_x = train_x.requires_grad_(True)
 	val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype = torch.float32)
+	# val_x = val_x.requires_grad_(True)
 
 	train_profile_id = torch.tensor(current_data_profile_id[train_loc], dtype = torch.long)
 	val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype = torch.long)
@@ -720,8 +727,11 @@ else:
 	test_z = torch.tensor(current_data_z[test_loc, :], dtype=torch.float32)
 
 	train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype=torch.float32)
+	# train_x = train_x.requires_grad_(True)
 	val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype=torch.float32)
+	# val_x = val_x.requires_grad_(True)
 	test_x = torch.tensor(current_data_x[test_loc, :, :, :], dtype=torch.float32)
+	# test_x = test_x.requires_grad_(True)
 
 	train_profile_id = torch.tensor(current_data_profile_id[train_loc], dtype=torch.long)
 	val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype=torch.long)
@@ -893,11 +903,6 @@ print(datetime.now(), '------------grid env info prepared------------')
 
 
 
-
-
-
-
-
 #---------------------------------------------------
 # constants for NN
 #---------------------------------------------------
@@ -908,11 +913,16 @@ nn_training_name = job_id + '_' + model_name
 #---------------------------------------------------
 # define the loss function                          
 #---------------------------------------------------
-def binns_loss(y_pred, y_true):
+def binns_loss(y_pred, y_true, pred_para):
 	# process modeling
 	soc_simu = y_pred
 	# observations
 	soc_true = y_true
+	# predicted parameters
+	pred_para = pred_para
+
+	# print("Shape of model input", model_input.shape)
+	# New input has shape: [32, 193]
 	# flatten simulation
 	soc_simu_vector = torch.reshape(soc_simu, [1, -1])
 	soc_true_vector = torch.reshape(soc_true, [1, -1])
@@ -923,8 +933,57 @@ def binns_loss(y_pred, y_true):
 
 	# modeling inefficiency
 	modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/torch.sum((soc_true_vector - torch.mean(soc_true_vector))**2)
+
+	# # Gradient of beta w.r.t. batch_x
+	# grad_beta = torch.autograd.grad(outputs=beta, inputs=model_input, grad_outputs=torch.ones_like(beta), retain_graph=True)[0]
+	# # only consider the gradient that is not zero
+	# non_zero_idx = torch.nonzero(grad_beta)
+	# grad_beta = grad_beta[non_zero_idx[:, 0], non_zero_idx[:, 1], non_zero_idx[:, 2], non_zero_idx[:, 3]]
+	# # Use torch.autograd.grad for inputs for one profile
+	# for i in range(beta.shape[0]):
+	# 	grad_beta_temp = torch.autograd.grad(outputs=beta[i], inputs=model_input[i, :], grad_outputs=torch.ones_like(beta[i]), retain_graph=True)[0]
+	# 	if i == 0:
+	# 		grad_beta = grad_beta_temp
+	# 	else:
+	# 		grad_beta = torch.cat((grad_beta, grad_beta_temp), dim=0)
+	# grad_norm = torch.norm(grad_beta, p=2)
+
+	# print("Beta gradient norm", grad_norm)
+
 	# modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/len(soc_true_vector) 
-	loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean')
+	# lambda_reg = 0.1
+
+	# # Calculate the penalty if beta is too large
+	# penalty_threshold = 0.8
+	# transformed_threshold = -0.8  # Transformed threshold for negative values
+	# penalty_weight = 20  # Adjust the weight as needed
+
+	# # Inverting beta values so that high values become negative
+	# inverted_beta = -beta
+
+	# # Applying threshold to inverted beta
+	# thresholded_beta = torch.nn.Threshold(transformed_threshold, 0)(inverted_beta)
+
+	# # Inverting back to positive values and applying penalty
+	# beta_penalty = penalty_weight * (-(thresholded_beta) - penalty_threshold)**2
+
+	
+	# # Sum the penalty across the batch
+	# total_beta_penalty = beta_penalty.sum()
+
+	# Calculate variance of predicted parameters
+	var_predicted_para = torch.var(pred_para[:, 19]) # calculate variance of the 21st parameter beta
+	# var_predicted_para = torch.mean(var_predicted_para)
+	# print("Variance of predicted parameters", var_predicted_para)
+
+	# Normalize or scale the variance term
+	scale_factor = 1e5
+	scaled_variance = scale_factor * var_predicted_para
+
+	# Weighting factor for variance term
+	variance_weight = 0
+
+	loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean') + variance_weight * scaled_variance
 	# print(modeling_inefficiency)
 
 	##########################
@@ -977,7 +1036,7 @@ class nn_model(nn.Module):
 
 
 		# third layer
-		# self.l3 = nn.Linear(256, 256)
+		# self.l3 = nn.Linear(128, 128)
 		# torch.nn.init.xavier_uniform_(self.l3.weight)
 		# nn.init.zeros_(self.l3.bias)
 
@@ -994,7 +1053,7 @@ class nn_model(nn.Module):
 
 
 		# Dropout layers
-		self.dropout = nn.Dropout(0.0)
+		self.dropout = nn.Dropout(0)
 
 		# leaky relu
 		self.leaky_relu = nn.LeakyReLU(negative_slope=0.3)
@@ -1015,7 +1074,7 @@ class nn_model(nn.Module):
 		# batch normalization
 		self.bn1 = nn.BatchNorm1d(128)
 		self.bn2 = nn.BatchNorm1d(128)
-		# self.bn3 = nn.BatchNorm1d(256)
+		# self.bn3 = nn.BatchNorm1d(128)
 		self.bn4 = nn.BatchNorm1d(128)
 
 		# Initialize weights
@@ -1075,13 +1134,13 @@ class nn_model(nn.Module):
 		h2 = self.bn2(h2)
 		h2 = self.leaky_relu(h2) # + h1 # residual connection
 		h2 = self.dropout(h2)
-		# transformed_h2 = self.transform_h2_to_h3(h2)
+		# # transformed_h2 = self.transform_h2_to_h3(h2)
 		# h3 = self.l3(h2)
-		# h3 = self.bn(h3)
-		# h3 = self.leaky_relu(h3) + h2 # residual connection
+		# h3 = self.bn3(h3)
+		# h3 = self.leaky_relu(h3) # residual connection
 		# h3 = self.dropout(h3)
 		# transformed_h3 = self.transform_h3_to_h4(h3)
-		h4 = self.l4(h2)
+		h4 = self.l4(h2) ### remember to change back to h2 if only use 4 layers ###
 		h4 = self.bn4(h4)
 		h4 = self.leaky_relu(h4) # + h3 # residual connection
 		h4 = self.dropout(h4)
@@ -1091,11 +1150,11 @@ class nn_model(nn.Module):
 		# h5 = torch.sigmoid(self.l5(h4) / clamped_temp_sigmoid)
 		h5 = self.sigmoid(self.l5(h4)/clamped_temp_sigmoid)
 
-		# check if h5 is nan
-		if torch.isnan(h5).any():
-			print("Rank {} h5 is nan".format(os.environ['RANK']))
-		elif torch.isinf(h5).any():
-			print("Rank {} h5 is inf".format(os.environ['RANK']))
+		# # check if h5 is nan
+		# if torch.isnan(h5).any():
+		# 	print("Rank {} h5 is nan".format(os.environ['RANK']))
+		# elif torch.isinf(h5).any():
+		# 	print("Rank {} h5 is inf".format(os.environ['RANK']))
 		# parallel computing
 		# biogeochemical model
 		# profile_num = h5.shape[0]
@@ -1224,7 +1283,7 @@ def worker(rank, world_size):
 	# Loss and optimizer
 	optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 	# Add a learning rate scheduler that decreases the learning rate by a factor of 0.1 every 50 epochs
-	# scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=1)
+	scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=200, gamma=0.1)
 	if rank == 0:
 		print(model.parameters)
 	# for name, param in model.module.named_parameters():
@@ -1252,6 +1311,7 @@ def worker(rank, world_size):
 	train_loss_history = np.ones((num_epoch, 1))*np.nan
 	val_loss_history = np.ones((num_epoch, 1))*np.nan
 	val_NSE_history = np.ones((num_epoch, 1))*np.nan
+	best_model_epoch = torch.tensor(0) # epoch with the best model so far
 
 	# Early stopping parameters
 	best_val_loss = float('inf') 
@@ -1291,7 +1351,6 @@ def worker(rank, world_size):
 		lipschitz_loss_record_train = list()
 		NSE_record_train = list()
 		ibatch = 0
-		best_model_epoch = 0  # epoch with the best model so far. Creating tensor so it can be broadcasted
 		epoch_start = time.time()
 		model.train()
 		train_loader.sampler.set_epoch(iepoch)  # Set sampler's epoch number, so we use a different order per epoch
@@ -1306,8 +1365,11 @@ def worker(rank, world_size):
 			batch_x = batch_x.to(device)
 			batch_y = batch_y.to(device)
 			#------------ 1 forward
-			batch_y_hat, batch_pred_para, batch_input = model(batch_x, batch_z, whether_predict=0)
+			batch_y_hat, batch_pred_para = model(batch_x, batch_z, whether_predict=0)
 			print("Batch para", batch_pred_para)
+			train_nn_start = time.time()
+			batch_y_hat, batch_pred_para, batch_input = model(batch_x, batch_z, whether_predict=0)
+			train_nn_end = time.time()
 
 			# Check if batch_pred_para is nan or inf
 			if torch.isnan(batch_pred_para).any() or torch.isinf(batch_pred_para).any():
@@ -1315,7 +1377,10 @@ def worker(rank, world_size):
 				# change NaN to 0 and inf to 1 to avoid error in loss.backward()
 				# batch_pred_para[torch.isnan(batch_pred_para)] = 0
 				# batch_pred_para[torch.isinf(batch_pred_para)] = 1
-				print(f"Process {rank} found NaN or inf in batch_pred_para during Epoch {iepoch + 1} batch {ibatch}")
+				# check which parameter is nan or inf in batch_pred_para
+				for ipara in range(batch_pred_para.shape[0]):
+					if torch.isnan(batch_pred_para[ipara]).any() or torch.isinf(batch_pred_para[ipara]).any():
+						print(f"Rank {rank} Epoch {iepoch} batch {ibatch} parameter {ipara} is {batch_pred_para[ipara]}")
 
 			# num_cores = os.cpu_count()
 			# print(f'Number of cores: {num_cores}')
@@ -1327,7 +1392,9 @@ def worker(rank, world_size):
 			# middle_pred_para[batch_profile_id, :] = batch_pred_para
 			
 			#------------ 2 compute the objective function
-			smooth_l1_loss, train_NSE = fun_loss(batch_y_hat, batch_y)
+			# train_loss_start = time.time()
+			smooth_l1_loss, train_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
+			# train_loss_end = time.time()
 			
 			# Lipschitz loss if using
 			if args.model == "lipmlp":
@@ -1376,7 +1443,7 @@ def worker(rank, world_size):
 			# print(f'{datetime.now()} Epoch {iepoch + 1} batch {ibatch}, train loss: {obj.item():.2f}')
 
 			#------------ 3 cleaning gradients
-			model.zero_grad()
+			optimizer.zero_grad()
 
 			# Compute gradients wrt process parameters
 			# print("Para shape", batch_pred_para.shape)  # [batch, num_para]
@@ -1388,17 +1455,22 @@ def worker(rank, world_size):
 			# print("Profile IDs", batch_profile_id)
 
 			#------------ 4 accumulate partical derivatives of objective respect to parameters
+			# backward_start = time.time()
 			obj.backward()
+			# backward_end = time.time()
 
 			# # Compute gradient w.r.t. last MLP layer's weights (which output the parameters)
 			# print("L5 grad", model.module.mlp.layer_output.weight.grad.shape, model.module.mlp.layer_output.weight.grad[:, 0])
 
 			# clip gradients
-			# torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=clip_value)
+			torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_value)
+			# torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=args.clip_value)
 			
 			#------------ 5 step in the opposite direction of the gradient
 			# with torch.no_grad(): para = pata - eta*para.grad # eta is learning rate
+			# optimizer_start = time.time()
 			optimizer.step()
+			# optimizer_end = time.time()
 			
 			loss_record_train.append(smooth_l1_loss.item())
 			NSE_record_train.append(train_NSE.item())
@@ -1452,7 +1524,7 @@ def worker(rank, world_size):
 				# middle_pred_para[batch_profile_id, :] = batch_pred_para
 			# 2 compute the objective function
 			
-			obj, val_NSE = fun_loss(batch_y_hat, batch_y)
+			obj, val_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
 
 			# if validation loss is nan, print out the batch info
 			if np.isnan(obj.item()):
@@ -1465,6 +1537,11 @@ def worker(rank, world_size):
 			
 		# record the time
 		hist_time = time.time() - start_time
+
+		# # print time
+		# print('Training time for rank {}: {:.5f}'.format(rank, train_time))
+		# print('Backward time for rank {}: {:.5f}'.format(rank, backward_end - backward_start))
+		# print('Optimizer time for rank {}: {:.5f}'.format(rank, optimizer_end - optimizer_start))
 
 		# Gather losses from all processes
 		all_train_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
@@ -1501,6 +1578,10 @@ def worker(rank, world_size):
 		elif rank == 3:
 			# writer.add_scalars('NSE', {'training': torch.stack(all_train_NSE).mean(), 'validation': torch.stack(all_val_NSE).mean()}, iepoch+1)
 			print(f'Epoch {iepoch + 1}, train NSE: {torch.stack(all_train_NSE).mean():.2f}, validation NSE: {torch.stack(all_val_NSE).mean():.2f}, time: {torch.stack(all_train_times).mean():.2f}')
+			# print the gradient of the NN parameters
+			for name, param in model.named_parameters():
+				if param.requires_grad:
+					print(name, param.grad)
 		# elif rank == 1:
 		# 	with open(os.path.join(data_dir_output, "neural_network", job_id, avg_loss_filename), "a") as f:
 		# 		f.write(f'{iepoch + 1}, {torch.stack(all_train_losses).mean():.6f}, {torch.stack(all_val_losses).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}\n')
@@ -1547,10 +1628,8 @@ def worker(rank, world_size):
 				
 				print(f'Best model updated at epoch {iepoch + 1}')
 				
-				best_model_epoch = iepoch
+				best_model_epoch = torch.tensor(iepoch, device=device)
 
-				# spread the best_model_epoch to other processes
-				# dist.broadcast(best_model_epoch, src=0)
 				
 				# save prediction and model
 				# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().numpy(), delimiter = ',')
@@ -1582,20 +1661,18 @@ def worker(rank, world_size):
 				# np.savetxt(data_dir_output + 'neural_network/val_loss_history_' + time_stamp + '.csv', val_loss_history, delimiter = ',')
 				# np.savetxt(data_dir_output + 'neural_network/train_loss_history_' + time_stamp + '.csv', train_loss_history, delimiter = ',')
 			# end if iepoch == 0:
+			
+			# save the training and validation loss history
+			with open(os.path.join(data_dir_output, "neural_network", job_id, avg_loss_filename), "a") as f:
+				f.write(f'{iepoch + 1}, {torch.stack(all_train_losses).mean():.6f}, {torch.stack(all_val_losses).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}, {best_model_epoch.item()}\n')
+			with open(os.path.join(data_dir_output, "neural_network", job_id, avg_NSE_filename), "a") as f:
+				f.write(f'{iepoch + 1}, {torch.stack(all_train_NSE).mean():.6f}, {torch.stack(all_val_NSE).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}, {best_model_epoch.item()}\n')
+
 		
 		# Ensure all processes reach this point before proceeding
 		dist.barrier()
 		# # Add a learning rate scheduler
-		# scheduler.step()
-		if rank == 0:
-			with open(os.path.join(data_dir_output, "neural_network", job_id, avg_loss_filename), "a") as f:
-				f.write(f'{iepoch + 1}, {torch.stack(all_train_losses).mean():.6f}, {torch.stack(all_val_losses).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}, {best_model_epoch}\n')
-			# elif rank == 3: 
-			with open(os.path.join(data_dir_output, "neural_network", job_id, avg_NSE_filename), "a") as f:
-				f.write(f'{iepoch + 1}, {torch.stack(all_train_NSE).mean():.6f}, {torch.stack(all_val_NSE).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}, {best_model_epoch}\n')
-
-		# Ensure all processes reach this point before proceeding
-		dist.barrier()
+		scheduler.step()
 		
 
 		# Add a early stopping condition
@@ -1674,15 +1751,23 @@ def worker(rank, world_size):
 	best_guess_model.load_state_dict(new_checkpoint['model_state_dict'])
 	print("Loaded model for rank: {}".format(rank))
 
+	dist.barrier()
+
 	if rank == 0:
+		if whether_break.item() == 1:
+			print(f"Rank {rank} exiting after training due to NaN encountered in any process.")
+			return
 		print("Rank 0 beginning prediction at time {}".format(datetime.now()))
 		best_guess_model.eval()
+		print("Rank 0 model set to eval at time {}".format(datetime.now()))
 		with torch.no_grad():
 			best_guess_val_y_hat, best_guess_val_pred_para, best_guess_val_input = best_guess_model(val_x.to(device), val_z.to(device), whether_predict=0)
+			print("Rank 0 finished validation prediction at time {}".format(datetime.now()))
 			best_guess_train_y_hat, best_guess_train_pred_para, best_guess_train_input = best_guess_model(train_x.to(device), train_z.to(device), whether_predict=0)
+			print("Rank 0 finished training prediction at time {}".format(datetime.now()))
 			if test_split_ratio != 0:
 				best_guess_test_y_hat, best_guess_test_pred_para, best_guess_test_input = best_guess_model(test_x.to(device), test_z.to(device), whether_predict=0)
-				test_loss, test_NSE = fun_loss(best_guess_test_y_hat, test_y.to(device))
+				test_loss, test_NSE = fun_loss(best_guess_test_y_hat, test_y.to(device), best_guess_test_pred_para)
 				print(f'Test loss: {test_loss.item():.2f}, Test NSE: {test_NSE.item():.2f}')
 		# end with torch.no_grad():
 
@@ -2212,6 +2297,9 @@ def worker(rank, world_size):
 
 	# end if rank == 0:
 	else:
+		if whether_break.item() == 1:
+			print("Rank {} finished".format(rank))
+			return
 		# Pause to allow rank 0 to finish writing the summary file
 		dist.barrier()
 

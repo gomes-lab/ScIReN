@@ -261,8 +261,10 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	# beta to describe the shape of vertical profile
 	# beta = 0.95
 	# try to cut the max beta
-	# beta = para[20]*(0.9999 - 0.5) + 0.5
-	beta = 0.7 *(0.9999 - 0.5) + 0.5
+	# beta = para[20]*(0.9 - 0.5) + 0.5
+	# beta = para[20] *(0.9999 - 0.5) + 0.5
+	# beta = 0.7 *(0.9 - 0.5) + 0.5
+	beta = 0.8
 	
 	# maximum and minimum water potential (MPa)
 	maxpsi= -0.0020
