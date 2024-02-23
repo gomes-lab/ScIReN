@@ -606,7 +606,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	donor_decomp = torch.stack((decom_cpools[1], decom_cpools[2], decom_cpools[3], decom_cpools[4], decom_cpools[4], decom_cpools[5], decom_cpools[5], decom_cpools[6]), dim = 0).to(device)
 
 	# Calculate total_doner_flow
-	total_doner_flow = torch.nan * torch.ones(len(cue_cpool))
+	total_doner_flow = torch.nan * torch.ones(len(cue_cpool), device=device)
 	for idoner in range(len(cue_cpool)):
 		# print("donor pool size", donor_pool_size[:, idoner].shape)
 		# print("donor decomp", donor_decomp[idoner].shape)

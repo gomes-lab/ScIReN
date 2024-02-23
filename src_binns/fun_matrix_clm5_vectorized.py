@@ -188,7 +188,8 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	# cryo = para[1]*(16*1e-4 - 3*1e-5) + 3*1e-5
 	# use the alternative tri-matrix
 	slope = para[0]*((0) - (-3)) + (-3)  # increase, decrease, or no change of diffusion rate with depth
-	intercept = para[1]*((-6) - (-10)) + (-10)
+	# intercept = para[1]*((-6) - (-10)) + (-10)
+	intercept = para[1]*((-2) - (-12)) + (-12)
 	#  Q10 (unitless) 1.5
 	q10 = para[2]*(3 - 1.2) + 1.2
 	# Q10 when forzen (unitless) 1.5
@@ -234,11 +235,17 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	# beta to describe the shape of vertical profile
 	# beta = 0.95
 	# or fix it at first ~ 0.6/0.7
-	beta = para[20]*(0.9 - 0.5) + 0.5
+	beta = para[20]*(0.9999 - 0.5) + 0.5
 	# beta = para[20] *(0.9999 - 0.5) + 0.5
 	# beta = 0.7 *(0.9 - 0.5) + 0.5
 	# beta = 0.8
-	
+
+	# Separate intercept for "leach" (downward transport)
+	if len(para) == 22:
+		intercept_leach = para[21]*((-2) - (-12)) + (-12)
+	else:
+		intercept_leach = intercept
+
 	# maximum and minimum water potential (MPa)
 	maxpsi= -0.0020
 	minpsi= -2; # minimum water potential (MPa)
@@ -255,29 +262,29 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	xio = xio_steady_state
 	xin = xin_steady_state
 
-	# Old way of calculating xit
-	# start = time.time()
-	xit_old = (torch.ones(n_soil_layer, timestep_num)*np.nan).to(device)
-	for itimestep in range(timestep_num):
-		# temperature related function xit
-		# calculate rate constant scalar for soil temperature
-		# assuming that the base rate constants are assigned for non-moisture
-		# limiting conditions at 25 C.
-		for ilayer in range(n_soil_layer):
-			if soil_temp_profile_steady_state[ilayer, itimestep] >= (0 + kelvin_to_celsius):
-				xit_old[ilayer, itimestep] = q10**((soil_temp_profile_steady_state[ilayer, itimestep] - (kelvin_to_celsius + 25))/10)
-			else:
-				xit_old[ilayer, itimestep] = q10**((273.15 - 298.15)/10)*(fq10**((soil_temp_profile_steady_state[ilayer, itimestep] - (0 + kelvin_to_celsius))/10))
-			# end if soil_temp_profile[ilayer, itimestep] >= 0 + kelvin_to_celsius:
-		# end for layer
+	# # Old way of calculating xit
+	# # start = time.time()
+	# xit_old = (torch.ones(n_soil_layer, timestep_num)*np.nan).to(device)
+	# for itimestep in range(timestep_num):
+	# 	# temperature related function xit
+	# 	# calculate rate constant scalar for soil temperature
+	# 	# assuming that the base rate constants are assigned for non-moisture
+	# 	# limiting conditions at 25 C.
+	# 	for ilayer in range(n_soil_layer):
+	# 		if soil_temp_profile_steady_state[ilayer, itimestep] >= (0 + kelvin_to_celsius):
+	# 			xit_old[ilayer, itimestep] = q10**((soil_temp_profile_steady_state[ilayer, itimestep] - (kelvin_to_celsius + 25))/10)
+	# 		else:
+	# 			xit_old[ilayer, itimestep] = q10**((273.15 - 298.15)/10)*(fq10**((soil_temp_profile_steady_state[ilayer, itimestep] - (0 + kelvin_to_celsius))/10))
+	# 		# end if soil_temp_profile[ilayer, itimestep] >= 0 + kelvin_to_celsius:
+	# 	# end for layer
 		
-		catanf_30 = catanf(torch.tensor(30.0).to(device))
-		normalization_tref = torch.tensor(15).to(device)
-		if normalize_q10_to_century_tfunc == True:
-			# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
-			normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
-			xit_old[:, itimestep] = xit_old[:, itimestep]*normalization_factor
-	xit = xit_old
+	# 	catanf_30 = catanf(torch.tensor(30.0).to(device))
+	# 	normalization_tref = torch.tensor(15).to(device)
+	# 	if normalize_q10_to_century_tfunc == True:
+	# 		# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
+	# 		normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
+	# 		xit_old[:, itimestep] = xit_old[:, itimestep]*normalization_factor
+	# xit = xit_old
 		# end if normalize_q10_to_century_tfunc == True:
 	# end for itimestep
 	# # print("XIT old", time.time()-start)
@@ -360,7 +367,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		# tri_ma_alternative_old = tri_matrix_alternative(timesteply_nbedrock, slope, intercept, device)
 		# print("tri_ma_alt", time.time()-start)
 		# start = time.time()
-		tri_ma_alternative = tri_matrix_alternative_vectorized(timesteply_nbedrock, slope, intercept, device)
+		tri_ma_alternative = tri_matrix_alternative_vectorized(timesteply_nbedrock, slope, intercept, intercept_leach, device)
 		# assert tri_ma_alternative.requires_grad
 
 		# print("tri_ma_alt_vectorized", time.time()-start)
@@ -675,18 +682,21 @@ def tri_matrix_alternative(nbedrock, slope, intercept, device):
 # end  def tri_matrix_gas()
 
 
-def tri_matrix_alternative_vectorized(nbedrock, slope, intercept, device):
+def tri_matrix_alternative_vectorized(nbedrock, slope, intercept, intercept_leach, device):
 	# Use torch.diag with offset
 	# slope = -1.2
 	# intercept = -4
+
 	rate_to_atmos = -0. # # at the surface, part of the CO2 should be released to atmos
-	transport_rate = -10**(intercept + slope*torch.log10(zsoi[0:20]*100)) # convert zsoi from m to cm
-	transport_rate[nbedrock:] = -10**(-30)
-	
-	float_ratio = 1.0
-	leach_ratio = 1.0
-	transport_rate_float = transport_rate*float_ratio
-	transport_rate_leach = transport_rate*leach_ratio
+	transport_rate_float = -10**(intercept + slope*torch.log10(zsoi[0:20]*100)) # convert zsoi from m to cm
+	transport_rate_float[nbedrock:] = -10**(-30)
+	transport_rate_leach = -10**(intercept_leach + slope*torch.log10(zsoi[0:20]*100)) # convert zsoi from m to cm
+	transport_rate_leach[nbedrock:] = -10**(-30)
+
+	# float_ratio = 1.0
+	# leach_ratio = 1.0
+	# transport_rate_float = transport_rate*float_ratio
+	# transport_rate_leach = transport_rate*leach_ratio
 
 	# Create a tridiagonal matrix for each pool type
 	tri_ma_middle = torch.zeros(n_soil_layer, n_soil_layer, device=device)

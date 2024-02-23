@@ -6,94 +6,102 @@ from fun_matrix_clm5_vectorized import fun_model_simu
 from fun_matrix_clm5_vectorized_prediction import fun_model_prediction
 
 class mlp(torch.nn.Module):
-    """
+	"""
 	New MLP from this repo: https://github.com/whitneychiu/lipmlp_pytorch/blob/main/models/mlp.py
 	"""
-    def __init__(self, dims, use_bn=False):
-        """
-        dim[0]: input dim
-        dim[1:-1]: hidden dims
-        dim[-1]: out dim
+	def __init__(self, dims, use_bn=False):
+		"""
+		dim[0]: input dim
+		dim[1:-1]: hidden dims
+		dim[-1]: out dim
 
-        assume len(dims) >= 3
-        """
-        super().__init__()
+		assume len(dims) >= 3
+		"""
+		super().__init__()
 
-        self.layers = torch.nn.ModuleList()
-        self.use_bn = use_bn
-        if use_bn:
-            self.bns = torch.nn.ModuleList()
-        for ii in range(len(dims)-2):
-            self.layers.append(torch.nn.Linear(dims[ii], dims[ii+1]))
-            if use_bn:
-                self.bns.append(torch.nn.BatchNorm1d(dims[ii+1]))
-        self.layer_output = torch.nn.Linear(dims[-2], dims[-1])
-        self.relu = torch.nn.ReLU()
+		self.layers = torch.nn.ModuleList()
+		self.use_bn = use_bn
+		if use_bn:
+			self.bns = torch.nn.ModuleList()
+		for ii in range(len(dims)-2):
+			self.layers.append(torch.nn.Linear(dims[ii], dims[ii+1]))
+			if use_bn:
+				self.bns.append(torch.nn.BatchNorm1d(dims[ii+1]))
+		self.layer_output = torch.nn.Linear(dims[-2], dims[-1])
+		self.relu = torch.nn.ReLU()
 
-        # Power iteration for spectral norm
-        self.sr_u = {}
-        self.sr_v = {}
-        self.num_power_iter = 4
+		# Power iteration for spectral norm
+		self.sr_u = {}
+		self.sr_v = {}
+		self.num_power_iter = 4
 
 
-    def forward(self, x):
-        for ii in range(len(self.layers)):
-            x = self.layers[ii](x)
-            if self.use_bn:
-                x = self.bns[ii](x)
-            x = self.relu(x)
-        return self.layer_output(x)
+	def forward(self, x):
+		for ii in range(len(self.layers)):
+			x = self.layers[ii](x)
+			if self.use_bn:
+				x = self.bns[ii](x)
+			x = self.relu(x)
+		return self.layer_output(x)
 
-    def spectral_norm_parallel(self, device):
-        """Code from https://github.com/NVlabs/NVAE/blob/master/model.py
-            
-        This method computes spectral normalization for all conv layers in parallel. This method should be called
-         after calling the forward method of all the conv layers in each iteration. """
+	def spectral_norm_parallel(self, device):
+		"""Code from https://github.com/NVlabs/NVAE/blob/master/model.py
+			
+		This method computes spectral normalization for all conv layers in parallel. This method should be called
+		 after calling the forward method of all the conv layers in each iteration. """
 
-        weights = {}   # a dictionary indexed by the shape of weights
-        for ii in range(len(self.layers)):
-            weight = self.layers[ii].weight
-            weight_mat = weight.view(weight.size(0), -1)
+		weights = {}   # a dictionary indexed by the shape of weights
+		for ii in range(len(self.layers)):
+			weight = self.layers[ii].weight
+			weight_mat = weight.view(weight.size(0), -1)
 
-            # Modify by batchnorm?
-            if self.use_bn:
-                weight_mat = weight_mat * (self.bns[ii].weight.unsqueeze(1) / torch.sqrt(self.bns[ii].running_var.unsqueeze(1)))
-            if weight_mat.shape not in weights:
-                weights[weight_mat.shape] = []
+			# Modify by batchnorm?
+			if self.use_bn:
+				weight_mat = weight_mat * (self.bns[ii].weight.unsqueeze(1) / torch.sqrt(self.bns[ii].running_var.unsqueeze(1)))
+			if weight_mat.shape not in weights:
+				weights[weight_mat.shape] = []
 
-            weights[weight_mat.shape].append(weight_mat)
+			weights[weight_mat.shape].append(weight_mat)
 
-        loss = 0
-        for i in weights:
-            weights[i] = torch.stack(weights[i], dim=0)
-            with torch.no_grad():
-                num_iter = self.num_power_iter
-                if i not in self.sr_u:
-                    num_w, row, col = weights[i].shape
-                    self.sr_u[i] = F.normalize(torch.ones(num_w, row).normal_(0, 1).to(device), dim=1, eps=1e-3)
-                    self.sr_v[i] = F.normalize(torch.ones(num_w, col).normal_(0, 1).to(device), dim=1, eps=1e-3)
-                    # increase the number of iterations for the first time
-                    num_iter = 10 * self.num_power_iter
+		loss = 0
+		for i in weights:
+			weights[i] = torch.stack(weights[i], dim=0)
+			with torch.no_grad():
+				num_iter = self.num_power_iter
+				if i not in self.sr_u:
+					num_w, row, col = weights[i].shape
+					self.sr_u[i] = F.normalize(torch.ones(num_w, row).normal_(0, 1).to(device), dim=1, eps=1e-3)
+					self.sr_v[i] = F.normalize(torch.ones(num_w, col).normal_(0, 1).to(device), dim=1, eps=1e-3)
+					# increase the number of iterations for the first time
+					num_iter = 10 * self.num_power_iter
 
-                for j in range(num_iter):
-                    # Spectral norm of weight equals to `u^T W v`, where `u` and `v`
-                    # are the first left and right singular vectors.
-                    # This power iteration produces approximations of `u` and `v`.
-                    self.sr_v[i] = F.normalize(torch.matmul(self.sr_u[i].unsqueeze(1), weights[i]).squeeze(1),
-                                               dim=1, eps=1e-3)  # bx1xr * bxrxc --> bx1xc --> bxc
-                    self.sr_u[i] = F.normalize(torch.matmul(weights[i], self.sr_v[i].unsqueeze(2)).squeeze(2),
-                                               dim=1, eps=1e-3)  # bxrxc * bxcx1 --> bxrx1  --> bxr
+				for j in range(num_iter):
+					# Spectral norm of weight equals to `u^T W v`, where `u` and `v`
+					# are the first left and right singular vectors.
+					# This power iteration produces approximations of `u` and `v`.
+					self.sr_v[i] = F.normalize(torch.matmul(self.sr_u[i].unsqueeze(1), weights[i]).squeeze(1),
+											   dim=1, eps=1e-3)  # bx1xr * bxrxc --> bx1xc --> bxc
+					self.sr_u[i] = F.normalize(torch.matmul(weights[i], self.sr_v[i].unsqueeze(2)).squeeze(2),
+											   dim=1, eps=1e-3)  # bxrxc * bxcx1 --> bxrx1  --> bxr
 
-            sigma = torch.matmul(self.sr_u[i].unsqueeze(1), torch.matmul(weights[i], self.sr_v[i].unsqueeze(2)))
-            loss += torch.sum(sigma)
-        return loss
+			sigma = torch.matmul(self.sr_u[i].unsqueeze(1), torch.matmul(weights[i], self.sr_v[i].unsqueeze(2)))
+			loss += torch.sum(sigma)
+		return loss
+
+	# def batchnorm_loss(self):
+	# 	loss = 0
+	# 	for l in self.bns:
+	# 		if l.affine:
+	# 			loss += torch.max(torch.abs(l.weight))
+	# 	return loss
+
 
 #---------------------------------------------------
 # Wrapper for MLP and LipMLP from this repo: https://github.com/whitneychiu/lipmlp_pytorch/blob/main/models/mlp.py
 #---------------------------------------------------
 # define model
 class mlp_wrapper(nn.Module):
-	def __init__(self, input_vars, var_idx_to_emb, lipschitz=False, one_hot=False, use_bn=False):
+	def __init__(self, input_vars, var_idx_to_emb, lipschitz=False, one_hot=False, use_bn=False, two_intercepts=False):
 		super().__init__()
 
 		# If one_hot is True, this is a Dict from categorical variable index to number of categories.
@@ -110,11 +118,17 @@ class mlp_wrapper(nn.Module):
 			else:
 				self.new_input_size += emb.embedding_dim
 
+		# Number of parameters
+		if two_intercepts:
+			num_parameters = 22
+		else:
+			num_parameters = 21
+
 		# MLP backbone
 		if lipschitz:
-			self.mlp = lipmlp((self.new_input_size, 256, 256, 256, 21), use_bn=use_bn)  # TODO different initialization methods, leaky relu, dropout, etc. not supported
+			self.mlp = lipmlp((self.new_input_size, 256, 256, 256, num_parameters), use_bn=use_bn)  # TODO different initialization methods, leaky relu, dropout, etc. not supported
 		else:
-			self.mlp = mlp((self.new_input_size, 256, 256, 256, 21), use_bn=use_bn)
+			self.mlp = mlp((self.new_input_size, 256, 256, 256, num_parameters), use_bn=use_bn)
 
 		# sigmoid parameter
 		self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)

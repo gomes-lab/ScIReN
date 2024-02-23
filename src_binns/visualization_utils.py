@@ -18,11 +18,15 @@ def get_git_revision_hash():
     return subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
 
 
-def plot_losses(filename, train_losses, val_losses):
-    assert len(train_losses) == len(val_losses)
-    epochs = list(range(len(train_losses)))
-    plt.plot(epochs, train_losses, color='blue', label='Train loss')
-    plt.plot(epochs, val_losses, color='red', label='Validation loss')
+def plot_losses(filename, losses, labels):
+    """
+    losses is a list of lists: each inner list represents a given loss at each epoch
+    labels represents the label for each list (loss name)
+    """
+
+    epochs = list(range(len(losses[0])))
+    for i in range(len(losses)):
+        plt.plot(epochs, losses[i], color='blue', label=labels[i])
     plt.xlabel('Epoch #')
     plt.ylabel('Loss')
     plt.title('Losses')
