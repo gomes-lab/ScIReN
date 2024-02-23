@@ -101,13 +101,14 @@ class mlp(torch.nn.Module):
 #---------------------------------------------------
 # define model
 class mlp_wrapper(nn.Module):
-	def __init__(self, input_vars, var_idx_to_emb, lipschitz=False, one_hot=False, use_bn=False, two_intercepts=False):
+	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, lipschitz=False, one_hot=False, use_bn=False):
 		super().__init__()
 
 		# If one_hot is True, this is a Dict from categorical variable index to number of categories.
 		# If one_hot is False, this is a Dict from categorical variable index -> Embedding layer we use
 		self.one_hot = one_hot
 		self.var_idx_to_emb = var_idx_to_emb
+		self.vertical_mixing = vertical_mixing
 
 		# List of non-categorical variable indices
 		self.non_categorical_indices = list(set(list(range(input_vars))).difference(var_idx_to_emb.keys()))
@@ -119,7 +120,7 @@ class mlp_wrapper(nn.Module):
 				self.new_input_size += emb.embedding_dim
 
 		# Number of parameters
-		if two_intercepts:
+		if self.vertical_mixing == 'simple_two_intercepts':
 			num_parameters = 22
 		else:
 			num_parameters = 21
@@ -175,9 +176,9 @@ class mlp_wrapper(nn.Module):
 
 		# CLM5 process-based model
 		if whether_predict == 1:
-			simu_soc = fun_model_prediction(h5, forcing)
+			simu_soc = fun_model_prediction(h5, forcing, self.vertical_mixing)
 		else:
-			simu_soc = fun_model_simu(h5, forcing, obs_depth)
+			simu_soc = fun_model_simu(h5, forcing, obs_depth, self.vertical_mixing)
 
 		return simu_soc, h5, new_input  #, clamped_temp_sigmoid
 		

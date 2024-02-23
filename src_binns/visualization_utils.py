@@ -162,8 +162,11 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
         ax.set_ylim(24.5, 49.4)
     gdf.plot(column=var_name, ax=ax, marker='o', markersize=4, legend=True, zorder=10)  # legend_kwds={'shrink': 0.7},
     plt.title(title)
-    plt.savefig(os.path.join(plot_dir, "map_{}.png".format(var_name)), bbox_inches='tight')
-    plt.close()
+    if plot_dir is not None:
+        plt.savefig(os.path.join(plot_dir, "map_{}.png".format(var_name)), bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
 
     # Plot histograms of the raw values
     # filtered_values = values[~np.isnan(values)]
@@ -172,5 +175,8 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
     values = values[~np.isinf(values)]
     plt.hist(values, bins=30)
     plt.title(title)
-    plt.savefig(os.path.join(plot_dir, "histogram_{}.png".format(var_name)))
-    plt.close()
+    if plot_dir is not None:
+        plt.savefig(os.path.join(plot_dir, "histogram_{}.png".format(var_name)))
+        plt.close()
+    else:
+        plt.show()
