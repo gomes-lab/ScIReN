@@ -1,5 +1,5 @@
 # BINNS
- Biogeochemical Informed Neural Network
+ Biogeochemistry Informed Neural Networks
 
 
 # Data Notes
