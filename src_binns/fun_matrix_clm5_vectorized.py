@@ -6,6 +6,7 @@ import math
 
 # Simulate the soil carbon profile using the CLM5 model at the depth of the observation layers
 def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_depth):
+	start_time = time.time()
 	device = tensor_para.device
 	# convert tensor to numpy
 	para = tensor_para
@@ -74,6 +75,7 @@ def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_de
 			# end for
 		# end if 
 	#end for iprofile
+	# print("fun_model_simu", time.time()-start_time)
 	return simu_ouput
 	
 # end def fun_model_simu
@@ -413,8 +415,8 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	# a_ma_old = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
 	# print("a_matrix old", time.time()-start)
 	# start = time.time()
-	# a_ma = a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
-	a_ma = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
+	a_ma = a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
+	# a_ma = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
 	# print("a_matrix_vectorized", time.time()-start)
 	# assert torch.equal(a_ma_old, a_ma)
 
@@ -453,6 +455,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		# print("tri_ma_alt_vectorized", time.time()-start)
 		# assert torch.equal(tri_ma_alternative_old[20:140, 20:140], tri_ma_alternative[20:140, 20:140])
 		# tri_ma_middle[:, :, itimestep] = tri_ma_alternative
+		# tri_ma_middle[:, :, itimestep] = tri_matrix_old(timesteply_nbedrock, timesteply_altmax_current_profile, timesteply_altmax_lastyear_profile, bio, adv, cryo)
 		tri_ma_middle[:, :, itimestep] = tri_matrix_old_improved(timesteply_nbedrock, timesteply_altmax_current_profile, timesteply_altmax_lastyear_profile, bio, adv, cryo)
 	# end for itimestep
 	tri_ma = torch.mean(tri_ma_middle, axis = 2)
@@ -565,6 +568,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 	# end try
 	soc_layer = torch.cat((cpool_steady_state[80:100, :], cpool_steady_state[100:120, :], cpool_steady_state[120:140, :]), dim = 1)
 	soc_layer = torch.sum(soc_layer, axis = 1) # unit gC/m3
+
 	
 	
 	# if soc_layer[-1] > soc_layer[0]:
@@ -825,9 +829,15 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	#------ first get diffusivity / advection terms -------
 	# Convert conditions to tensor operations
 	active_layer_depth = torch.tensor(max(altmax.item(), altmax_lastyear.item())).to(device)
-	is_active_layer = zisoi[:nbedrock+1] < active_layer_depth
-	is_below_active_layer_and_cryoturb = (zisoi[:nbedrock+1] >= active_layer_depth) & (zisoi[:nbedrock+1] <= torch.min(torch.tensor(max_depth_cryoturb), zisoi[nbedrock+1]))
+	# is_active_layer = zisoi[:nbedrock+1] < active_layer_depth
+	# is_below_active_layer_and_cryoturb = (zisoi[:nbedrock+1] >= active_layer_depth) & (zisoi[:nbedrock+1] <= torch.min(torch.tensor(max_depth_cryoturb), zisoi[nbedrock+1]))
+	is_active_layer = zisoi[:nlevdecomp+1] < active_layer_depth
+	is_below_active_layer_and_cryoturb = (zisoi[:nlevdecomp+1] >= active_layer_depth) & (zisoi[:nlevdecomp+1] <= torch.min(torch.tensor(max_depth_cryoturb), zisoi[nlevdecomp+1]))
 	is_bedrock_layer = torch.arange(nlevdecomp+1).to(device) > nbedrock
+	# Fill is_active_layer with False for bedrock layers to shape = nlevdecomp+1
+	# is_active_layer = torch.cat((is_active_layer, torch.full((nlevdecomp-nbedrock,), False).to(device)))
+	# is_below_active_layer_and_cryoturb = torch.cat((is_below_active_layer_and_cryoturb, torch.full((nlevdecomp-nbedrock,), False).to(device)))
+	# is_bedrock_layer = torch.cat((is_bedrock_layer, torch.full((nlevdecomp-nbedrock,), True).to(device)))
 
 	# Initialize coefficients with zeros
 	som_diffus_coef.fill_(0.)
@@ -835,8 +845,16 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 
 	if active_layer_depth <= max_altdepth_cryoturbation and active_layer_depth > 0.:
 		# Active layer conditions
+		# print("nbedrock: ", nbedrock)
 		# print("Shape of som_diffus_coef: ", som_diffus_coef.shape)
+		# print("Shape of active_layer_depth: ", active_layer_depth.shape)
+		# print("Shape of zisoi[:nbedrock+1]: ", zisoi[:nbedrock+1].shape)
 		# print("Shape of is_active_layer: ", is_active_layer.shape)
+		# print("is_active_layer: ", is_active_layer)
+		# print("Shape of is_below_active_layer_and_cryoturb: ", is_below_active_layer_and_cryoturb.shape)
+		# print("is_below_active_layer_and_cryoturb: ", is_below_active_layer_and_cryoturb)
+		# print("Shape of is_bedrock_layer: ", is_bedrock_layer.shape)
+		# print("is_bedrock_layer: ", is_bedrock_layer)
 		# print("Shape of cryoturb_diffusion_k_day: ", cryoturb_diffusion_k_day.shape)
 		som_diffus_coef[is_active_layer] = cryoturb_diffusion_k_day
 		linear_decrease_factor = (1. - (zisoi[:nlevdecomp+1][is_below_active_layer_and_cryoturb] - active_layer_depth) / (torch.min(torch.tensor(max_depth_cryoturb), zisoi[nlevdecomp+1]) - active_layer_depth))
