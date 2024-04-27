@@ -11,6 +11,7 @@ import warnings
 import subprocess
 import argparse
 from mlp import mlp_wrapper
+from pe_gcn_model import GridCellSpatialRelationEncoder
 
 # sys.path.append('C:/Users/hx293/Research_Data/BINN/')
 # sys.path.append('/glade/u/home/haodixu/BINN')
@@ -255,8 +256,13 @@ print(PRODA_para.head())
 #-------------------------------
 # CLM5 constants
 #-------------------------------
+# parameters names
 para_names = ['diffus', 'cryo', 'q10', 'efolding', 'taucwd', 'taul1', 'taul2', 'tau4s1', 'tau4s2', 'tau4s3', 'fl1s1', 'fl2s1', 'fl3s2', 'fs1s2', 'fs1s3', 'fs2s1', 'fs2s3', 'fs3s1', 'fcwdl2', 'w-scaling', 'beta']
 # para_names = ['diffus', 'cryo', 'q10', 'efolding', 'taucwd', 'taul1', 'taul2', 'tau4s1', 'tau4s2', 'tau4s3', 'fl1s1', 'fl2s1', 'fl3s2', 'fs1s2', 'fs1s3', 'fs2s1', 'fs2s3', 'fs3s1', 'fcwdl2', 'w-scaling']
+# parameters index for retrieval test
+# If choosing all parameters
+para_index = np.arange(0, 21)
+# para_index = [0, 2, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20]
 # soil depths info
 # width between two interfaces
 dz = np.array([2.000000000000000E-002, 4.000000000000000E-002, 6.000000000000000E-002, \
@@ -667,8 +673,8 @@ var4nn = ['Lon', 'Lat', \
 #---------------------------------------------------
 # training data
 #---------------------------------------------------
-current_data_x = np.ones((len(profile_collection), 60, 12, 13))*np.nan
-current_data_x[:, 0:60, 0, 0] = np.array(env_info.loc[profile_collection[:, 0], var4nn])
+current_data_x = np.ones((len(profile_collection), len(var4nn), 12, 13))*np.nan
+current_data_x[:, 0:len(var4nn), 0, 0] = np.array(env_info.loc[profile_collection[:, 0], var4nn])
 current_data_x[:, 0:12, 0, 1] = model_force_input_vector_cwd
 current_data_x[:, 0:12, 0, 2] = model_force_input_vector_litter1
 current_data_x[:, 0:12, 0, 3] = model_force_input_vector_litter2
@@ -725,7 +731,7 @@ lats = np.array(env_info.loc[profile_collection[:, 0], "original_lat"])
 
 
 nan_loc = np.nanmean(current_data_y, axis = 1) + \
-			np.sum(current_data_x[:, 0:60, 0, 0], axis = 1) + \
+			np.sum(current_data_x[:, 0:len(var4nn), 0, 0], axis = 1) + \
 			np.sum(model_force_input_vector_cwd, axis = 1) + \
 			np.sum(model_force_input_vector_litter1, axis = 1) + \
 			np.sum(model_force_input_vector_litter2, axis = 1) + \
@@ -929,6 +935,13 @@ grid_env_info_US = grid_env_info[(grid_env_info["original_lon"] >= -124.763068)
 								& (grid_env_info["original_lat"] >= 24.521694)
 								& (grid_env_info["original_lat"] <= 49.384358)]
 grid_env_info_num = grid_env_info_US.shape[0]
+# Check the max value of categorical variables, if it is larger than the number of categories, then remove the row
+for group in categorical_vars:
+	mask = grid_env_info[group].apply(lambda x: (x > np.max(env_info[group])).any(), axis=1)
+	indices_to_remove = grid_env_info[mask].index
+	grid_env_info = grid_env_info.drop(indices_to_remove)
+	print("Shape of grid env info after removing rows with categorical values larger than the number of categories in category {}: ".format(group), grid_env_info.shape)
+grid_env_info_num = grid_env_info.shape[0]
 print("Shape of grid env info after selecting US", grid_env_info_US.shape)
 # Include forcing data for the grid env info
 # Initialize the forcing data for the grid env info to nan and then fill in the values row by row
@@ -969,8 +982,8 @@ for irow in np.arange(0, grid_env_info_num):
 # end
 
 # wrapping up for the nn prediction
-predict_data_x = np.ones((grid_env_info_num, 60, 12, 13))*np.nan
-predict_data_x[:, 0:60, 0, 0] = np.array(grid_env_info_US.loc[:, var4nn])
+predict_data_x = np.ones((grid_env_info_num, len(var4nn), 12, 13))*np.nan
+predict_data_x[:, 0:len(var4nn), 0, 0] = np.array(grid_env_info.loc[:, var4nn])
 predict_data_x[:, 0:12, 0, 1] = model_force_pred_input_vector_cwd
 predict_data_x[:, 0:12, 0, 2] = model_force_pred_input_vector_litter1
 predict_data_x[:, 0:12, 0, 3] = model_force_pred_input_vector_litter2
@@ -987,6 +1000,27 @@ predict_data_x[:, 0:20, 0:12, 12] = model_force_pred_soil_water_profile
 # create dummy z since it is not used in the prediction
 predict_data_z = np.ones((grid_env_info_num))*np.nan
 
+# Drop rows with nan values
+nan_loc = np.nanmean(predict_data_x[:, 0:len(var4nn), 0, 0], axis = 1) + \
+			np.sum(predict_data_x[:, 0:12, 0, 1], axis = 1) + \
+			np.sum(predict_data_x[:, 0:12, 0, 2], axis = 1) + \
+			np.sum(predict_data_x[:, 0:12, 0, 3], axis = 1) + \
+			np.sum(predict_data_x[:, 0:12, 0, 4], axis = 1) + \
+			np.sum(predict_data_x[:, 0:12, 0, 5], axis = 1) + \
+			np.sum(predict_data_x[:, 0:12, 0, 6], axis = 1) + \
+			np.sum(predict_data_x[:, 0:12, 0, 7], axis = 1) + \
+			np.sum(predict_data_x[:, 0:20, 0:12, 8], axis = (1, 2)) + \
+			np.sum(predict_data_x[:, 0:20, 0:12, 9], axis = (1, 2)) + \
+			np.sum(predict_data_x[:, 0:20, 0:12, 10], axis = (1, 2)) + \
+			np.sum(predict_data_x[:, 0:20, 0:12, 11], axis = (1, 2)) + \
+			np.sum(predict_data_x[:, 0:20, 0:12, 12], axis = (1, 2))
+
+valid_profile_loc = np.where(np.isnan(nan_loc) == False)[0]
+
+predict_data_x = predict_data_x[valid_profile_loc, :, :, :]
+predict_data_z = predict_data_z[valid_profile_loc]
+
+print("Shape of predict data x", predict_data_x.shape)
 print(datetime.now(), '------------grid env info prepared------------')
 
 
@@ -1024,8 +1058,8 @@ def binns_loss(y_pred, y_true, pred_para):
 	# modeling inefficiency
 	modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/torch.sum((soc_true_vector - torch.mean(soc_true_vector))**2)
 
-	# Define l2 loss
-	l2_loss_func = torch.nn.MSELoss(reduction='mean')
+	# # Define l2 loss
+	# l2_loss_func = torch.nn.MSELoss(reduction='mean')
 
 	# # Gradient of beta w.r.t. batch_x
 	# grad_beta = torch.autograd.grad(outputs=beta, inputs=model_input, grad_outputs=torch.ones_like(beta), retain_graph=True)[0]
@@ -1064,22 +1098,33 @@ def binns_loss(y_pred, y_true, pred_para):
 	# # Sum the penalty across the batch
 	# total_beta_penalty = beta_penalty.sum()
 
-	# Calculate variance of predicted parameters
-	var_predicted_para = torch.var(pred_para[:, 19]) # calculate variance of the 21st parameter beta
-	# var_predicted_para = torch.mean(var_predicted_para)
-	# print("Variance of predicted parameters", var_predicted_para)
+	# ## Variance term ##
+	# # Calculate variance of predicted parameters
+	# var_predicted_para = torch.var(pred_para[:, 20]) # calculate variance of the 21st parameter beta
+	# # var_predicted_para = torch.mean(var_predicted_para)
+	# # print("Variance of predicted parameters", var_predicted_para)
 
-	# Normalize or scale the variance term
-	scale_factor = 1e5
-	scaled_variance = scale_factor * var_predicted_para
+	# # Normalize or scale the variance term
+	# scale_factor = 1e5
+	# scaled_variance = scale_factor * var_predicted_para
 
-	# Weighting factor for variance term
-	variance_weight = 0
-	
+	# # Weighting factor for variance term
+	# variance_weight = 0
+
+	# Regularization for predicted parameters using cosh
+	# Encourage parameters to be around 0.5
+	target_value = 0.5
+	scale_factor = 10
+	parameter_regularization_loss = torch.mean(torch.cosh(scale_factor*(pred_para - target_value)) - 1)
+
+	# Weighting factor for regularization term
+	regularization_weight = 100  # 10*torch.tensor(0.5)) - 1 ~ 70
+
 	# Calculate the loss
 	# * l2_loss_func(soc_simu_vector, soc_true_vector)
 	# torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean') * 
-	loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean') + variance_weight * scaled_variance
+	l1_loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean')
+	loss = l1_loss + regularization_weight * parameter_regularization_loss
 	# print(modeling_inefficiency)
 
 	##########################
@@ -1090,7 +1135,7 @@ def binns_loss(y_pred, y_true, pred_para):
 	# l2_reg = sum(p.pow(2.0).sum() for p in model.parameters())
 	# loss = modeling_inefficiency # + lambda_reg * l2_reg
 
-	return loss, modeling_inefficiency
+	return loss, modeling_inefficiency, l1_loss
 	
 	# return modeling_inefficiency
 # end binns loss
@@ -1118,6 +1163,22 @@ class nn_model(nn.Module):
 			# ## for one-hot encoding ##
 			# new_input_size += emb
 
+		# Spatial Encoder from PE-GNN
+
+		self.spatial_encoder = GridCellSpatialRelationEncoder(
+			spa_embed_dim= 128, 
+			coord_dim=2, # Longitude and latitude
+			frequency_num=16, 
+			max_radius=360,
+			min_radius=1e-06,
+			freq_init="geometric",
+			ffn=True # Enable feedforward network for final spatial embeddings
+		)
+
+		# Adjust the input size
+		new_input_size -= 2  # Remove the longitude and latitude columns
+		new_input_size += 128  # Add the spatial embeddings
+
 		# Neural network layers
 		# first layer
 		self.l1 = nn.Linear(new_input_size, 128)
@@ -1143,7 +1204,7 @@ class nn_model(nn.Module):
 
 
 		# fifth layer
-		self.l5 = nn.Linear(128, 21) # 21 parameters
+		self.l5 = nn.Linear(128, len(para_index))
 		# torch.nn.init.xavier_uniform_(self.l5.weight)
 		# nn.init.zeros_(self.l5.bias)
 
@@ -1205,6 +1266,11 @@ class nn_model(nn.Module):
 		predictor = input_var[:, :, 0, 0]
 		forcing = input_var[:, :, :, :]
 		obs_depth = wosis_depth
+		longitudes = input_var[:, 0, 0, 0]
+		latitudes = input_var[:, 1, 0, 0] 
+
+		coords = np.stack((longitudes, latitudes), axis=-1)
+		coords = np.expand_dims(coords, axis=1)
 
 		# Compute embeddings for all categorical variables
 		embs = []
@@ -1218,7 +1284,20 @@ class nn_model(nn.Module):
 			########################
 			embs.append(emb)
 		all_embs = torch.concatenate(embs, dim=1)
-		new_input = torch.concatenate([predictor[:, self.non_categorical_indices], all_embs], dim=1)
+
+		# Spatial Encoding
+		spatial_embeddings = self.spatial_encoder(coords)
+		spatial_embeddings = spatial_embeddings.squeeze(1) # Remove the channel dimension
+		# Remove the longitude and latitude columns from non_categorical_indices
+		non_spatial_categorical_indices = [i for i in self.non_categorical_indices if i not in [0, 1]]
+
+		# Concatenate all embeddings
+		# if rank == 0:
+		# 	print(f"Spatial embeddings shape: {spatial_embeddings.shape}")
+		# 	print(f"Predictor shape: {predictor[:, self.non_categorical_indices].shape}")
+		# 	print(f"All embeddings shape: {all_embs.shape}")
+		
+		new_input = torch.concatenate([spatial_embeddings, predictor[:, non_spatial_categorical_indices], all_embs], dim=1)
 
 		# hidden layers
 		h1 = self.l1(new_input)
@@ -1317,6 +1396,7 @@ def worker(rank, world_size):
 	# torch.set_num_threads(math.floor(torch.get_num_threads() / world_size))
 	# Filename to store average losses
 	avg_loss_filename = 'avg_loss_' + nn_training_name + '.txt'
+	avg_l1_loss_filename = 'avg_l1_loss_' + nn_training_name + '.txt'
 	avg_NSE_filename = 'avg_NSE_' + nn_training_name + '.txt'
 
 	# Initialize the process group
@@ -1377,6 +1457,7 @@ def worker(rank, world_size):
 	# for name, param in model.module.named_parameters():
 	# 	print(f"{name}: {param.size()}")
 	fun_loss = binns_loss
+
 
 	# Initialize datasets
 	train_dataset = MergeDataset(train_x, train_y, train_z, train_profile_id)
@@ -1468,6 +1549,16 @@ def worker(rank, world_size):
 		whether_break = torch.tensor(0).to(device)
 
 		# Initialize the storage for the predicted parameters
+		val_pred_soc_all_rank = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
+		val_pred_para_all_rank = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
+		val_profile_id_all_rank = torch.tensor(np.ones((wosis_profile_info.shape[0]))*np.nan, dtype = torch.float32, device=device)
+
+		val_pred_soc_rank = torch.zeros([len(val_loader), args.batch_size, 200], dtype=torch.float32, device=device)
+		val_pred_para_rank = torch.zeros([len(val_loader), args.batch_size, len(para_names)], dtype=torch.float32, device=device)
+		val_profile_id_rank = torch.zeros([len(val_loader), args.batch_size], dtype=torch.float32, device=device)
+
+
+
 		val_pred_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
 		val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
 		train_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
@@ -1476,7 +1567,8 @@ def worker(rank, world_size):
 		optimizer.zero_grad()
 		model.zero_grad()
 		# -------------------------------------training
-		loss_record_train = list()
+		total_loss_record_train = list()
+		l1_loss_record_train = list()
 		lipschitz_loss_record_train = list()
 		NSE_record_train = list()
 		ibatch = 0
@@ -1487,6 +1579,7 @@ def worker(rank, world_size):
 		for batch_info in train_loader:
 			batch_x, batch_y, batch_z, batch_profile_id = batch_info
 			ibatch = ibatch + 1
+			# print("Shape of batch_x in batch", ibatch, "rank", rank, "is", batch_x.shape)
 
 			# batch_size = batch_x.size(0)
 			# batch_x = batch_x.view(batch_size, -1).to(device)
@@ -1519,7 +1612,7 @@ def worker(rank, world_size):
 			
 			#------------ 2 compute the objective function
 			# train_loss_start = time.time()
-			smooth_l1_loss, train_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
+			total_loss, train_NSE, smooth_l1_loss = fun_loss(batch_y_hat, batch_y, batch_pred_para)
 			# train_loss_end = time.time()
 			
 			# Lipschitz loss if using
@@ -1528,7 +1621,7 @@ def worker(rank, world_size):
 				lipschitz_loss_record_train.append(lipschitz_loss.item())
 				if ibatch == 1 and rank == 0:
 					print("Lipschitz c", cs, "Scalings", scalings)
-				obj = smooth_l1_loss + lipschitz_loss * args.lambda_lipschitz
+				obj = total_loss + lipschitz_loss * args.lambda_lipschitz
 			# elif args.model == "clip":
 			# 	# ---------------------------------------------------------------------
 			# 	# Adverserial update
@@ -1561,9 +1654,9 @@ def worker(rank, world_size):
 				# Compute the spectral norm of the model's layers, and add this as a loss
 				spectral_norm_loss = model.module.mlp.spectral_norm_parallel(device)
 				lipschitz_loss_record_train.append(spectral_norm_loss.item())
-				obj = smooth_l1_loss + spectral_norm_loss * args.lambda_lipschitz
+				obj = total_loss + spectral_norm_loss * args.lambda_lipschitz
 			else:
-				obj = smooth_l1_loss
+				obj = total_loss
 
 			# print(batch_y_hat)
 			# print(f'{datetime.now()} Epoch {iepoch + 1} batch {ibatch}, train loss: {obj.item():.2f}')
@@ -1586,7 +1679,8 @@ def worker(rank, world_size):
 			optimizer.step()
 			# optimizer_end = time.time()
 			
-			loss_record_train.append(smooth_l1_loss.item())
+			total_loss_record_train.append(total_loss.item())
+			l1_loss_record_train.append(smooth_l1_loss.item())
 			NSE_record_train.append(train_NSE.item())
 
 			# writer.add_scalar('training loss', obj.item(), iepoch)
@@ -1617,13 +1711,13 @@ def worker(rank, world_size):
 		dist.barrier()
 
 		# -------------------------------------validation
-		loss_record_val = list()
+		total_loss_record_val = list()
+		l1_loss_record_val = list()
 		NSE_record_val = list()
 		ibatch = 0
 		model.eval()
 		for batch_info in val_loader:
 			batch_x, batch_y, batch_z, batch_profile_id = batch_info
-			ibatch = ibatch + 1
 			# batch_size = batch_x.size(0)
 			# batch_x = batch_x.view(batch_size, -1).to(device)
 			batch_x = batch_x.to(device)
@@ -1634,17 +1728,37 @@ def worker(rank, world_size):
 				# record the predicted para and modelled soc
 				# middle_simu_soc[batch_profile_id, :] = batch_y_hat
 				# middle_pred_para[batch_profile_id, :] = batch_pred_para
+
+
 			# 2 compute the objective function
-			
-			obj, val_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
+			obj, val_NSE, val_l1_loss = fun_loss(batch_y_hat, batch_y, batch_pred_para)
 
 			# if validation loss is nan, print out the batch info
 			if np.isnan(obj.item()):
 				print(batch_y_hat)
 			
-			loss_record_val.append(obj.item())
+			total_loss_record_val.append(obj.item())
+
+			l1_loss_record_val.append(val_l1_loss.item())
+
 			NSE_record_val.append(val_NSE.item())
 			# print(f'{datetime.now()}, Epoch {iepoch + 1}, Rank {rank}, batch {ibatch}, validation loss: {obj.item():.2f}')
+			# record prediction
+			# Check the shape of the predictions
+			if batch_profile_id.shape[0] != args.batch_size:
+				print(f"ibatch {ibatch} Rank {rank} batch_y_hat shape {batch_y_hat.shape}")
+				# Add nan values to the end of the tensor
+				batch_y_hat = torch.cat((batch_y_hat, torch.ones(args.batch_size - batch_profile_id.shape[0], 200)*np.nan), dim=0)
+				batch_pred_para = torch.cat((batch_pred_para, torch.ones(args.batch_size - batch_profile_id.shape[0], len(para_names))*np.nan), dim=0)
+				batch_profile_id = torch.cat((batch_profile_id, torch.ones(args.batch_size - batch_profile_id.shape[0])*np.nan), dim=0)
+
+			val_pred_soc_rank[ibatch, :, :] = batch_y_hat
+			val_pred_para_rank[ibatch, :, :] = batch_pred_para
+			val_profile_id_rank[ibatch, :] = batch_profile_id
+
+			ibatch = ibatch + 1
+
+
 		# end for batch_info in val_loader: 
 			
 		# record the time
@@ -1656,40 +1770,107 @@ def worker(rank, world_size):
 		# print('Optimizer time for rank {}: {:.5f}'.format(rank, optimizer_end - optimizer_start))
 
 		# Gather losses from all processes
-		all_train_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
-		all_val_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
+		all_total_train_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
+		all_l1_train_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
+		all_total_val_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
+		all_l1_val_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
 		all_train_times = [torch.tensor(0.0, device=device) for _ in range(world_size)]
 		all_train_NSE = [torch.tensor(0.0, device=device) for _ in range(world_size)]
 		all_val_NSE = [torch.tensor(0.0, device=device) for _ in range(world_size)]
 		all_hist_times = [torch.tensor(0.0, device=device) for _ in range(world_size)]
 
-		# Gather validation parameters predictions from all processes
 
-
-		dist.all_gather(all_train_losses, torch.tensor(loss_record_train, device=device).mean())
-		dist.all_gather(all_val_losses, torch.tensor(loss_record_val, device=device).mean())
+		dist.all_gather(all_total_train_losses, torch.tensor(total_loss_record_train, device=device).mean())
+		dist.all_gather(all_l1_train_losses, torch.tensor(l1_loss_record_train, device=device).mean())
+		dist.all_gather(all_total_val_losses, torch.tensor(total_loss_record_val, device=device).mean())
+		dist.all_gather(all_l1_val_losses, torch.tensor(l1_loss_record_val, device=device).mean())
 		dist.all_gather(all_train_times, torch.tensor(train_time, device=device))
 		dist.all_gather(all_train_NSE, torch.tensor(NSE_record_train, device=device).mean())
 		dist.all_gather(all_val_NSE, torch.tensor(NSE_record_val, device=device).mean())
 		dist.all_gather(all_hist_times, torch.tensor(hist_time, device=device))
+
+
+		
+
+
+
 
 		if args.model == "lipmlp" or args.lambda_lipschitz > 0:
 			all_train_lipschitz_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
 			dist.all_gather(all_train_lipschitz_losses, torch.tensor(lipschitz_loss_record_train, device=device).mean())
 
 		# record the loss history
-		train_loss_history[iepoch, :] = torch.stack(all_train_losses).mean().detach().cpu().numpy()
-		val_loss_history[iepoch, :] = torch.stack(all_val_losses).mean().detach().cpu().numpy()
+		train_loss_history[iepoch, :] = torch.stack(all_total_train_losses).mean().detach().cpu().numpy()
+		val_loss_history[iepoch, :] = torch.stack(all_total_val_losses).mean().detach().cpu().numpy()
 		val_NSE_history[iepoch, :] = torch.stack(all_val_NSE).mean().detach().cpu().numpy()
 
-		if rank == 2:  # @joshuafan swapped ranks
-			# writer.add_scalars('loss', {'training': torch.stack(all_train_losses).mean(), 'validation': torch.stack(all_val_losses).mean()}, iepoch+1)
-			print(f'Epoch {iepoch}, train loss: {torch.stack(all_train_losses).mean():.2f}, validation loss: {torch.stack(all_val_losses).mean():.2f}, time: {torch.stack(all_train_times).mean():.2f}')
-			if args.model == "lipmlp" or args.lambda_lipschitz > 0:
-				print(f'Train Lipschitz loss: {torch.stack(all_train_lipschitz_losses).mean():.2f}')
-		elif rank == 3:
+
+		# Reshape the predictions before gathering
+		val_loss_start_time = time.time()
+		val_pred_soc_rank = val_pred_soc_rank.view(-1, 200)
+		val_pred_para_rank = val_pred_para_rank.view(-1, len(para_names))
+		val_profile_id_rank = val_profile_id_rank.view(-1)
+
+		if rank == 2:  
+			# Gather validation parameters predictions from all processes
+			temp_val_pred_soc_list = [torch.zeros([len(val_loader)*args.batch_size, 200], dtype=torch.float32, device=device) for _ in range(world_size)]
+			temp_val_pred_para_list = [torch.zeros([len(val_loader)*args.batch_size, len(para_names)], dtype=torch.float32, device=device) for _ in range(world_size)]
+			temp_val_profile_id_list = [torch.zeros([len(val_loader)*args.batch_size], dtype=torch.float32, device=device) for _ in range(world_size)]
+		else:
+			temp_val_pred_soc_list = None
+			temp_val_pred_para_list = None
+			temp_val_profile_id_list = None
+			val_all_total_loss = None
+			val_all_NSE = None
+			val_all_l1_loss = None
+
+
+
+		# Gather the predictions
+		dist.gather(val_pred_soc_rank, gather_list=temp_val_pred_soc_list, dst=2)
+		dist.gather(val_pred_para_rank, gather_list=temp_val_pred_para_list, dst=2)
+		dist.gather(val_profile_id_rank, gather_list=temp_val_profile_id_list, dst=2)
+
+		if rank == 2: 
+			# Concatenate the gathered predictions
+			temp_val_pred_soc = torch.cat(temp_val_pred_soc_list, dim=0)
+			temp_val_pred_para = torch.cat(temp_val_pred_para_list, dim=0)
+			temp_val_profile_id = torch.cat(temp_val_profile_id_list, dim=0)
+
+			# remove the nan values based on the profile_id
+			temp_valid_idx = torch.where(~torch.isnan(temp_val_profile_id))
+			temp_val_pred_soc = temp_val_pred_soc[temp_valid_idx]
+			temp_val_pred_para = temp_val_pred_para[temp_valid_idx]
+			temp_val_profile_id = temp_val_profile_id[temp_valid_idx]
+
+			# Fill the gathered predictions into the full tensor with profile_id
+			val_pred_soc_all_rank[temp_val_profile_id.long(), :] = temp_val_pred_soc
+			val_pred_para_all_rank[temp_val_profile_id.long(), :] = temp_val_pred_para
+			# # Save predicted parameters and SOC
+			# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_rank_val_pred_soc_' + job_id + "_" + str(iepoch) + '.csv', val_pred_soc_all_rank.detach().cpu().numpy(), delimiter = ',')
+			# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_rank_val_pred_para_' + job_id + "_" + str(iepoch) + '.csv', val_pred_para_all_rank.detach().cpu().numpy(), delimiter = ',')
+
+			# Calculate the NSE for the validation predictions
+			val_all_total_loss, val_all_NSE, val_all_l1_loss = fun_loss(temp_val_pred_soc, val_y, temp_val_pred_para)
+		
+		dist.barrier()
+		# Boardcast the validation loss to all processes
+		dist.broadcast(val_all_total_loss, src=2)
+		dist.broadcast(val_all_NSE, src=2)
+		dist.broadcast(val_all_l1_loss, src=2)
+
+		# Resync val loss
+		dist.all_gather(all_total_val_losses, val_all_total_loss)
+		dist.all_gather(all_l1_val_losses, val_all_l1_loss)
+		dist.all_gather(all_val_NSE, val_all_NSE)
+		val_loss_history[iepoch, :] = val_all_total_loss.item()
+		val_NSE_history[iepoch, :] = val_all_NSE.item()
+
+
+		if rank == 3:
 			# writer.add_scalars('NSE', {'training': torch.stack(all_train_NSE).mean(), 'validation': torch.stack(all_val_NSE).mean()}, iepoch+1)
 			print(f'Epoch {iepoch}, train NSE: {torch.stack(all_train_NSE).mean():.2f}, validation NSE: {torch.stack(all_val_NSE).mean():.2f}, time: {torch.stack(all_train_times).mean():.2f}')
+			print("Time it takes to calculate validation loss: {:.2f}".format(time.time() - val_loss_start_time))
 			# print the gradient of the NN parameters
 			# for name, param in model.named_parameters():
 			# 	if param.requires_grad:
@@ -1737,6 +1918,13 @@ def worker(rank, world_size):
 		# 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_train_pred_para_' + job_id + "_" + str(iepoch) + '.csv', train_pred_para.detach().numpy(), delimiter = ',')
 
 		elif rank == 0: 
+			# writer.add_scalars('loss', {'training': torch.stack(all_train_losses).mean(), 'validation': torch.stack(all_val_losses).mean()}, iepoch+1)
+			print(f'Epoch {iepoch}, train loss: {torch.stack(all_total_train_losses).mean():.2f}, train L1 loss: {torch.stack(all_l1_train_losses).mean():.2f}, \
+		 validation loss: {torch.stack(all_total_val_losses).mean():.2f}, validation L1 loss: {torch.stack(all_l1_val_losses).mean():.2f}, \
+			time: {torch.stack(all_train_times).mean():.2f}')
+			if args.model == "lipmlp" or args.lambda_lipschitz > 0:
+				print(f'Train Lipschitz loss: {torch.stack(all_train_lipschitz_losses).mean():.2f}')
+				
 			if iepoch == 0:
 				# best_simu_soc = middle_simu_soc
 				# best_pred_para = middle_pred_para
@@ -1782,8 +1970,10 @@ def worker(rank, world_size):
 				eval_start_time = time.time()
 				with torch.no_grad():
 					temp_soc_simu, temp_pred_para = model(val_x.to(device), val_z.to(device), whether_predict=0)
+					total_val_loss, val_NSE, val_l1_loss = fun_loss(temp_soc_simu, val_y.to(device), temp_pred_para)
 					grid_simu_soc, grid_pred_para = model(torch.tensor(predict_data_x, dtype=torch.float32, device=device), torch.tensor(predict_data_z, dtype=torch.float32, device=device), whether_predict = 1)
-				# save validation parameters 
+				# save validation parameters
+				print(f'Best model update at Epoch {iepoch}, validation loss: {total_val_loss.item():.2f}, validation NSE: {val_NSE.item():.2f}, validation L1 loss: {val_l1_loss.item():.2f}')
 				val_pred_soc[val_profile_id, :] = temp_soc_simu.detach().cpu()
 				val_pred_para[val_profile_id, :] = temp_pred_para.detach().cpu()
 				# print("Ending time to predict parameters: {}".format(datetime.now()))
@@ -1823,7 +2013,9 @@ def worker(rank, world_size):
 			
 			# save the training and validation loss history
 			with open(os.path.join(data_dir_output, "neural_network", job_id, avg_loss_filename), "a") as f:
-				f.write(f'{iepoch}, {torch.stack(all_train_losses).mean():.6f}, {torch.stack(all_val_losses).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}, {best_model_epoch.item()}\n')
+				f.write(f'{iepoch}, {torch.stack(all_total_train_losses).mean():.6f}, {torch.stack(all_total_val_losses).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}, {best_model_epoch.item()}\n')
+			with open(os.path.join(data_dir_output, "neural_network", job_id, avg_l1_loss_filename), "a") as f:
+				f.write(f'{iepoch}, {torch.stack(all_l1_train_losses).mean():.6f}, {torch.stack(all_l1_val_losses).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}, {best_model_epoch.item()}\n')
 			with open(os.path.join(data_dir_output, "neural_network", job_id, avg_NSE_filename), "a") as f:
 				f.write(f'{iepoch}, {torch.stack(all_train_NSE).mean():.6f}, {torch.stack(all_val_NSE).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}, {best_model_epoch.item()}\n')
 
@@ -1949,8 +2141,8 @@ def worker(rank, world_size):
 			print("Rank 0 finished training prediction at time {}".format(datetime.now()))
 			if test_split_ratio != 0:
 				best_guess_test_y_hat, best_guess_test_pred_para = best_guess_model(test_x.to(device), test_z.to(device), whether_predict=0)
-				test_loss, test_NSE = fun_loss(best_guess_test_y_hat, test_y.to(device), best_guess_test_pred_para)
-				print(f'Test loss: {test_loss.item():.2f}, Test NSE: {test_NSE.item():.2f}')
+				test_loss, test_NSE, test_l1_loss = fun_loss(best_guess_test_y_hat, test_y.to(device), best_guess_test_pred_para)
+				print(f'Test loss: {test_loss.item():.4f}, Test NSE: {test_NSE.item():.4f}, Test L1 loss: {test_l1_loss.item():.4f}')
 		# end with torch.no_grad():
 
 		# @joshuafan: Summary csv file of all results. Create this if it doesn't exist
