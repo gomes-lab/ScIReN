@@ -214,9 +214,9 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	beta = para[20]*(0.9999 - 0.5) + 0.5
 
 	# Separate intercept for "leach" (downward transport)
-	if vertical_mixing == 'simple_two_intercept':
+	if vertical_mixing == 'simple_two_intercepts':
 		intercept_leach = para[21]*((-2) - (-12)) + (-12)
-	else:
+	elif vertical_mixing == 'simple_one_intercept':
 		intercept_leach = intercept
 
 	# maximum and minimum water potential (MPa)
@@ -636,19 +636,29 @@ def tri_matrix_alternative(nbedrock, slope, intercept, device):
 	return tri_ma
 # end  def tri_matrix_gas()
 
-
-def tri_matrix_alternative_vectorized(nbedrock, slope, intercept, device):
+def tri_matrix_alternative_vectorized(nbedrock, slope, intercept, intercept_leach, device):
 	# Use torch.diag with offset
 	# slope = -1.2
 	# intercept = -4
+
 	rate_to_atmos = -0. # # at the surface, part of the CO2 should be released to atmos
-	transport_rate = -10**(intercept + slope*torch.log10(zsoi[0:20]*100)) # convert zsoi from m to cm
-	transport_rate[nbedrock:] = -10**(-30)
-	
-	float_ratio = 1.0
-	leach_ratio = 1.0
-	transport_rate_float = transport_rate*float_ratio
-	transport_rate_leach = transport_rate*leach_ratio
+	transport_rate_float = -10**(intercept + slope*torch.log10(zsoi[0:20]*100)) # convert zsoi from m to cm
+	transport_rate_float[nbedrock:] = -10**(-30)
+	transport_rate_leach = -10**(intercept_leach + slope*torch.log10(zsoi[0:20]*100)) # convert zsoi from m to cm
+	transport_rate_leach[nbedrock:] = -10**(-30)
+
+	# def tri_matrix_alternative_vectorized(nbedrock, slope, intercept, device):
+	# 	# Use torch.diag with offset
+	# 	# slope = -1.2
+	# 	# intercept = -4
+	# 	rate_to_atmos = -0. # # at the surface, part of the CO2 should be released to atmos
+	# 	transport_rate = -10**(intercept + slope*torch.log10(zsoi[0:20]*100)) # convert zsoi from m to cm
+	# 	transport_rate[nbedrock:] = -10**(-30)
+		
+	# 	float_ratio = 1.0
+	# 	leach_ratio = 1.0
+	# 	transport_rate_float = transport_rate*float_ratio
+	# 	transport_rate_leach = transport_rate*leach_ratio
 
 	# Create a tridiagonal matrix for each pool type
 	tri_ma_middle = torch.zeros(n_soil_layer, n_soil_layer, device=device)

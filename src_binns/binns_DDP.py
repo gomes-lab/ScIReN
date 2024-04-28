@@ -11,6 +11,8 @@ import warnings
 import subprocess
 import argparse
 from mlp import mlp_wrapper
+from torch.optim.swa_utils import AveragedModel, SWALR
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 # sys.path.append('C:/Users/hx293/Research_Data/BINN/')
 # sys.path.append('/glade/u/home/haodixu/BINN')
@@ -30,10 +32,9 @@ import numpy as np
 from scipy.interpolate import pchip_interpolate
 # parallel computing
 # import concurrent.futures
-import torch.multiprocessing as mp
+# import torch.multiprocessing as mp
 # # initialize the multiprocessing for pytorch
-mp.set_start_method('spawn', force=True)  # NOTE changed @joshuafan
-print("Start binns_DDP")
+
 
 import os
 import torch
@@ -49,7 +50,6 @@ from torch.utils.data import Dataset, DataLoader, random_split
 from torch.utils.data.distributed import DistributedSampler
 import multiprocessing
 from multiprocessing import Process
-
 
 from scipy.io import loadmat
 import netCDF4 as ncread 
@@ -79,6 +79,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--num_CPU", type=int, default=32)
 parser.add_argument("--lr", type=float, default=1e-3)
 parser.add_argument("--weight_decay", type=float, default=1e-4)
+parser.add_argument("--use_swa", type=int, default=0)
 parser.add_argument("--batch_size", type=int, default=32)
 parser.add_argument("--n_epochs", type=int, default=1500)
 parser.add_argument("--patience", type=int, default=500)
@@ -89,9 +90,12 @@ parser.add_argument("--lambda_lipschitz", type=float, default=1, help="If model 
 parser.add_argument("--categorical", type=str, default="embedding", choices=["embedding", "one_hot"], help="Which embedding to use for categorical variables")
 parser.add_argument("--embed_dim", type=int, default=5, help="Embedding dim for each categorical variable (if using embeddings)")
 parser.add_argument("--use_bn", action='store_true', help="Whether to use batchnorm")
-parser.add_argument("--vertical_mixing", type=str, choices=['original', 'simple_one_intercept', 'simple_two_intercept'], help="Vertical mixing matrix parameterization. Simple uses a log-log relationship with depth")
+parser.add_argument("--vertical_mixing", type=str, choices=['original', 'simple_one_intercept', 'simple_two_intercepts'], help="Vertical mixing matrix parameterization. Simple uses a log-log relationship with depth")
 parser.add_argument("--clip_value", type=float, default=1, help="Clip value for gradient clipping")
 parser.add_argument("--whether_resume", type=int, default=0, help="Whether to resume training from a previous model")
+parser.add_argument("--scheduler", type=str, default="pbs", choices=["pbs", "slurm"], help="Job scheduler system")
+
+
 args = parser.parse_args()
 
 # @joshuafan: Set random seeds to try to ensure reproducibility
@@ -112,8 +116,12 @@ print("Number of threads: ", thread_count)
 # set the number of threads  
 # torch.set_num_threads(thread_count-1)
 print(datetime.now(), '------------number of cores: ', cpu_count, '------------')
+
 print(datetime.now(), '------------all packages loaded------------')
 
+# time_stamp = f'{datetime.date(datetime.now())}'
+time_stamp = str(datetime.now()).replace(':', '_').replace(' ', '_').replace('.', '_')
+job_begin_time = time.time()
 
 # @joshuafan: Create a "job id" using timestamp, note, and PBS jobid
 if args.whether_resume == 0:
@@ -131,14 +139,11 @@ else:
 	job_id = os.environ.get('PREVIOUS_JOB_ID')
 	print(f"Previous job ID: {job_id}")
 
-	
+
 
 ################################################
 # input data
 ################################################
-data_dir_input = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/INPUT_DATA/'
-data_dir_output = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/'
-
 cesm2_case_name = 'sasu_f05_g16_checked_step4'
 start_year = 661
 end_year = 680
@@ -150,16 +155,23 @@ start_id = 1
 end_id = 5000
 is_resubmit = 0
 
-# @joshuafan changed
-# pathway
-# data_dir_input = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/ENSEMBLE/INPUT_DATA/'
-# data_dir_output = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/BINNS/OUTPUT_DATA/'
-# data_dir_input = 'C:/Users/hx293/Research_Data/BINN/ENSEMBLE/INPUT_DATA/'
-# data_dir_output = 'C:/Users/hx293/Unsync_Data/BINN_output/'
-# server path
-job_submit_path = '/glade/u/home/haodixu/BINN/PBS_Submit/Bulk_Converge/'
-data_dir_input = '/glade/u/home/haodixu/BINN/ENSEMBLE/INPUT_DATA/'
-data_dir_output = '/glade/work/haodixu/BINN/BINNS/OUTPUT_DATA/'
+# # @joshuafan changed
+# # pathway
+# # data_dir_input = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/ENSEMBLE/INPUT_DATA/'
+# # data_dir_output = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/BINNS/OUTPUT_DATA/'
+# # data_dir_input = 'C:/Users/hx293/Research_Data/BINN/ENSEMBLE/INPUT_DATA/'
+# # data_dir_output = 'C:/Users/hx293/Unsync_Data/BINN_output/'
+# # server path
+# # job_submit_path = '/glade/u/home/haodixu/BINN/PBS_Submit/Bulk_Converge/'
+# # data_dir_input = '/glade/u/home/haodixu/BINN/ENSEMBLE/INPUT_DATA/'
+# # data_dir_output = '/glade/work/haodixu/BINN/BINNS/OUTPUT_DATA/'
+# # job_submit_path = '/glade/u/home/haodixu/BINN/PBS_Submit/Bulk_Converge/'
+# # data_dir_input = '/glade/u/home/haodixu/BINN/ENSEMBLE/INPUT_DATA/'
+# # data_dir_output = '/glade/work/haodixu/BINN/BINNS/OUTPUT_DATA/'
+job_submit_path = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/aida_submit/Bulk_Converge'
+data_dir_input = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/INPUT_DATA/'
+data_dir_output = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/'
+os.makedirs(job_submit_path, exist_ok=True)
 os.makedirs(os.path.join(data_dir_output, "neural_network"), exist_ok=True)
 os.makedirs(os.path.join(data_dir_output, "neural_network", job_id), exist_ok=True)
 # create folder for the model parameters
@@ -378,8 +390,8 @@ PRODA_collection = np.where((np.mean(para_gr, axis = 1) < 1.05) &
 # Choose overlap between profile_collection and PRODA_collection
 profile_collection = np.intersect1d(profile_collection, PRODA_collection)
 
-# Choose random 2000 profiles for testing
-# profile_collection = np.random.choice(profile_collection, 10, replace=False)
+# Choose random 2000 profiles for testing.
+# profile_collection = np.random.choice(profile_collection, 2000, replace=False)
 
 ###############################################################################################################
 
@@ -845,7 +857,7 @@ else:
 # 
 # modeling_inefficiency.backward(retain_graph=True)
 
-print(datetime.now(), '------------nn data prepared------------')
+# print(datetime.now(), '------------nn data prepared------------')
 
 
 
@@ -915,14 +927,14 @@ grid_env_info["original_lon"] = original_lons_grid
 grid_env_info["original_lat"] = original_lats_grid
 # Exclude all rows with nan values
 grid_env_info = grid_env_info.dropna(axis=0, how='any')
-print("Shape of grid env info after dropping nans", grid_env_info.shape)
+
 # Select the rows with lon and lat values within continental US
 grid_env_info_US = grid_env_info[(grid_env_info["original_lon"] >= -124.763068) 
 								& (grid_env_info["original_lon"] <= -66.949895)
 								& (grid_env_info["original_lat"] >= 24.521694)
 								& (grid_env_info["original_lat"] <= 49.384358)]
 grid_env_info_num = grid_env_info_US.shape[0]
-print("Shape of grid env info after selecting US", grid_env_info_US.shape)
+
 # Include forcing data for the grid env info
 # Initialize the forcing data for the grid env info to nan and then fill in the values row by row
 forcing_var = ['Input_CWD', 'Input_Litter1', 'Input_Litter2', 
@@ -980,10 +992,18 @@ predict_data_x[:, 0:20, 0:12, 12] = model_force_pred_soil_water_profile
 # create dummy z since it is not used in the prediction
 predict_data_z = np.ones((grid_env_info_num))*np.nan
 
-print(datetime.now(), '------------grid env info prepared------------')
+# print(datetime.now(), '------------grid env info prepared------------')
+print(datetime.now(), '------------ FINISHED ALL PREPROCESSING ------------')
 
 
 
+
+#---------------------------------------------------
+# constants for NN
+#---------------------------------------------------
+nn_training_name = job_id + '_' + model_name
+
+# writer = SummaryWriter(data_dir_output + 'tensorboard/' + nn_training_name)
 
 #---------------------------------------------------
 # define the loss function                          
@@ -1009,8 +1029,23 @@ def binns_loss(y_pred, y_true, pred_para):
 	# modeling inefficiency
 	modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/torch.sum((soc_true_vector - torch.mean(soc_true_vector))**2)
 
+	# Regularization for predicted parameters using cosh
+	# Encourage parameters to be around 0.5
+	target_value = 0.5
+	scale_factor = 10
+	parameter_regularization_loss = torch.mean(torch.cosh(scale_factor*(pred_para - target_value)) - 1)
+
+	# Weighting factor for regularization term
+	regularization_weight = 10  # 10*torch.tensor(0.5)) - 1 ~ 70
+
+	# Calculate the loss
+	# * l2_loss_func(soc_simu_vector, soc_true_vector)
+	# torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean') * 
+	loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean') + regularization_weight * parameter_regularization_loss
+
+
 	# Define l2 loss
-	l2_loss_func = torch.nn.MSELoss(reduction='mean')
+	# l2_loss_func = torch.nn.MSELoss(reduction='mean')
 
 	# # Gradient of beta w.r.t. batch_x
 	# grad_beta = torch.autograd.grad(outputs=beta, inputs=model_input, grad_outputs=torch.ones_like(beta), retain_graph=True)[0]
@@ -1049,23 +1084,23 @@ def binns_loss(y_pred, y_true, pred_para):
 	# # Sum the penalty across the batch
 	# total_beta_penalty = beta_penalty.sum()
 
-	# Calculate variance of predicted parameters
-	var_predicted_para = torch.var(pred_para[:, 19]) # calculate variance of the 21st parameter beta
-	# var_predicted_para = torch.mean(var_predicted_para)
-	# print("Variance of predicted parameters", var_predicted_para)
+	# # Calculate variance of predicted parameters
+	# var_predicted_para = torch.var(pred_para[:, 19]) # calculate variance of the 21st parameter beta
+	# # var_predicted_para = torch.mean(var_predicted_para)
+	# # print("Variance of predicted parameters", var_predicted_para)
 
-	# Normalize or scale the variance term
-	scale_factor = 1e5
-	scaled_variance = scale_factor * var_predicted_para
+	# # Normalize or scale the variance term
+	# scale_factor = 1e5
+	# scaled_variance = scale_factor * var_predicted_para
 
-	# Weighting factor for variance term
-	variance_weight = 0
+	# # Weighting factor for variance term
+	# variance_weight = 0
 	
-	# Calculate the loss
-	# * l2_loss_func(soc_simu_vector, soc_true_vector)
-	# torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean') * 
-	loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean') + variance_weight * scaled_variance
-	# print(modeling_inefficiency)
+	# # Calculate the loss
+	# # * l2_loss_func(soc_simu_vector, soc_true_vector)
+	# # torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean') * 
+	# loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean') + variance_weight * scaled_variance
+	# # print(modeling_inefficiency)
 
 	##########################
 	# Regularization Penalty #
@@ -1313,49 +1348,15 @@ def worker(rank, world_size):
 		dev = 'cpu'
 	device = torch.device(dev)
 
-
-	# @joshuafan: Create a "job id" using timestamp, note, and PBS jobid,
-	# then create output folders
-	if rank == 0:
-		job_id = time.strftime("%Y%m%d-%H%M%S")  # Convert datetime to string: https://stackoverflow.com/questions/10607688/how-to-create-a-file-name-with-the-current-date-time-in-python
-		if args.note != "":
-			job_id += ("_" + args.note)
-		pbs_job_id = os.environ.get('PBS_JOBID')
-		if pbs_job_id is not None:
-			pbs_job_id = pbs_job_id.split('.')[0]
-			job_id += ("_" + pbs_job_id)
-
-		# Create folders @joshuafan changed
-		# pathway
-		# data_dir_input = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/ENSEMBLE/INPUT_DATA/'
-		# data_dir_output = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/BINNS/OUTPUT_DATA/'
-		# data_dir_input = 'C:/Users/hx293/Research_Data/BINN/ENSEMBLE/INPUT_DATA/'
-		# data_dir_output = 'C:/Users/hx293/Unsync_Data/BINN_output/'
-		# server path
-		# data_dir_input = '/glade/u/home/haodixu/BINN/ENSEMBLE/INPUT_DATA/'
-		# data_dir_output = '/glade/work/haodixu/BINN/BINNS/OUTPUT_DATA/'
-		os.makedirs(os.path.join(data_dir_output, "neural_network"), exist_ok=True)
-		os.makedirs(os.path.join(data_dir_output, "neural_network", job_id), exist_ok=True)
-		# create folder for the model parameters
-		os.makedirs(os.path.join(data_dir_output, "neural_network", job_id, "model_parameters"), exist_ok=True)
-		# create folder for the model training history
-		os.makedirs(os.path.join(data_dir_output, "neural_network", job_id, "model_training_history"), exist_ok=True)
-		# create folder for the visualization
-		PLOT_DIR = os.path.join(data_dir_output, 'neural_network', job_id, 'visualizations')
-		os.makedirs(PLOT_DIR, exist_ok=True)
-		# create folder for the model prediction
-		os.makedirs(os.path.join(data_dir_output, "neural_network", job_id, "Prediction"), exist_ok=True)
-
-		nn_training_name = job_id + '_' + model_name
-		# writer = SummaryWriter(data_dir_output + 'tensorboard/' + nn_training_name)
-
-		# Filename to store average losses
-		avg_loss_filename = 'avg_loss_' + nn_training_name + '.txt'
-		avg_NSE_filename = 'avg_NSE_' + nn_training_name + '.txt'
-
 	# Set number of threads *per worker*. Should equal floor(CPUs/processes)
 	torch.set_num_threads(math.floor(torch.get_num_threads() / world_size))
-	print(datetime.now(), '------------device: ', device, '------------')
+	print(datetime.now(), 'WORKER: Rank', rank, 'Job ID', job_id, 'Threads', math.floor(torch.get_num_threads() / world_size),
+	      '------------device: ', device, '------------')
+	sys.stdout.flush()
+
+	# Filename to store average losses
+	avg_loss_filename = 'avg_loss_' + nn_training_name + '.txt'
+	avg_NSE_filename = 'avg_NSE_' + nn_training_name + '.txt'
 
 	# Initialize the process group
 	os.environ['RANK'] = str(rank)
@@ -1368,6 +1369,7 @@ def worker(rank, world_size):
 		dist.init_process_group('gloo', rank=rank, world_size=world_size, timeout=timedelta(hours=12))  # gloo for CPU
 	else:
 		dist.init_process_group('nccl', rank=rank, world_size=world_size, timeout=timedelta(hours=12))  # gloo for CPU
+	
 
 	# Create embeddings for categorical variables (each int maps to a different category)
 	var_idx_to_emb = dict()  # Column index to Embedding layer to use
@@ -1396,7 +1398,6 @@ def worker(rank, world_size):
 		model = mlp_wrapper(len(var4nn), var_idx_to_emb, args.vertical_mixing, lipschitz=True, one_hot=(args.categorical == "one_hot"), use_bn=args.use_bn).to(device)
 
 	# Create distributed version of the model
-	
 	model = DDP(model)
 
 	if args.whether_resume == 1:
@@ -1408,6 +1409,12 @@ def worker(rank, world_size):
 
 	# Loss and optimizer
 	optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+	if args.use_swa == 1:
+		swa_model = AveragedModel(model)
+		scheduler = CosineAnnealingLR(optimizer, T_max=100)
+		swa_start = 5
+		swa_scheduler = SWALR(optimizer, swa_lr=0.05)
+
 	# Add a learning rate scheduler that decreases the learning rate by a factor of 0.1 every 50 epochs
 	scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr, gamma=0.1)
 	# if rank == 0:
@@ -1425,7 +1432,7 @@ def worker(rank, world_size):
 	val_sampler = DistributedSampler(val_dataset)
 
 	# Data loaders with DistributedSampler
-	train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)
+	train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)  # Set drop_last=True to avoid 1-example batches during training, which causes error with BatchNorm https://stackoverflow.com/questions/65882526/expected-more-than-1-value-per-channel-when-training-got-input-size-torch-size
 	val_loader = DataLoader(val_dataset, batch_size=args.batch_size, sampler=val_sampler)
 	# train_loader = DataLoader([[train_x[i], train_y[i], train_z[i], train_profile_id[i]] for i in range(train_y.shape[0])], shuffle = True, batch_size = batch_size, num_workers=4)
 	# val_loader = DataLoader([[val_x[i], val_y[i], val_z[i], val_profile_id[i]] for i in range(val_y.shape[0])], shuffle = True, batch_size = batch_size, num_workers=4)
@@ -1459,17 +1466,18 @@ def worker(rank, world_size):
 			# print the model structure
 			print(model)
 
-		# try to save the predicted parameters before training
 		elif rank == 0:
+			# # try to save the predicted parameters before training
+			# elif rank == 0:
 			val_pred_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
 			val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
 			model.eval()
 			with torch.no_grad():
-				temp_SOC, temp_pred_para = model(val_x, val_z, whether_predict=0)
-			val_pred_soc[val_profile_id, :] = temp_SOC.detach().cpu()
-			val_pred_para[val_profile_id, :] = temp_pred_para.detach().cpu()
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_soc.detach().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_para.detach().numpy(), delimiter = ',')
+				temp_SOC, temp_pred_para = model(val_x.to(device), val_z.to(device), whether_predict=0)
+			val_pred_soc[val_profile_id, :] = temp_SOC.detach()
+			val_pred_para[val_profile_id, :] = temp_pred_para.detach()
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_soc.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_para.detach().cpu().numpy(), delimiter = ',')
 
 	else: 
 		# record the loss history
@@ -1494,8 +1502,6 @@ def worker(rank, world_size):
 		if rank == 1:
 			# print the model structure
 			print(model)
-
-
 	
 
 	# record start time
@@ -1526,6 +1532,10 @@ def worker(rank, world_size):
 		torch.autograd.set_detect_anomaly(True)
 		for batch_info in train_loader:
 			batch_x, batch_y, batch_z, batch_profile_id = batch_info
+
+			if batch_x.shape[0] == 1 and args.use_bn:  # Batch size of 1 during training does not work with BatchNorm
+				continue
+
 			ibatch = ibatch + 1
 			# if ibatch % 50 == 0:
 			# 	print(f'Rank {rank} batch {ibatch}: time so far {time.time()-epoch_start}')
@@ -1536,7 +1546,8 @@ def worker(rank, world_size):
 			batch_y = batch_y.to(device)
 			#------------ 1 forward
 			# train_nn_start = time.time()
-			batch_y_hat, batch_pred_para, batch_input = model(batch_x, batch_z, whether_predict=0)
+
+			batch_y_hat, batch_pred_para = model(batch_x, batch_z, whether_predict=0)
 			# train_nn_end = time.time()
 
 			# Check if batch_pred_para is nan or inf
@@ -1659,15 +1670,17 @@ def worker(rank, world_size):
 
 			# writer.add_scalar('training loss', obj.item(), iepoch)
 			# record prediction
-			# print("Batch time", time.time()-batch_start)
-			# batch_start = time.time()
+			batch_start = time.time()
+
+			# flush all printed output
+			sys.stdout.flush()
 
 		# end for batch_info in train_loader:
 
 		# record the loss history
 		# train_loss_history[iepoch, :] = loss_record_train
 
-		print(f"Process {rank} finished epoch {iepoch}")
+		# print(f"Process {rank} finished epoch {iepoch}")
 
 		# Ensure all processes reach this point to synchronize
 		# Use all_reduce to check if any process has encountered NaN
@@ -1688,7 +1701,7 @@ def worker(rank, world_size):
 		# writer.add_scalar('training loss', torch.tensor(loss_record_train).mean(), iepoch+1)
 		# Ensure all processes reach this point before proceeding
 		dist.barrier()
-		print(f"Process {rank} passed barrier. Epoch {iepoch}")
+		# print(f"Process {rank} passed barrier. Epoch {iepoch}")
 
 		# -------------------------------------validation
 		loss_record_val = list()
@@ -1704,7 +1717,7 @@ def worker(rank, world_size):
 			batch_y = batch_y.to(device)
 			# 1 forward
 			with torch.no_grad():
-				batch_y_hat, batch_pred_para, batch_input = model(batch_x, batch_z, whether_predict=0)
+				batch_y_hat, batch_pred_para = model(batch_x, batch_z, whether_predict=0)
 				# record the predicted para and modelled soc
 				# middle_simu_soc[batch_profile_id, :] = batch_y_hat
 				# middle_pred_para[batch_profile_id, :] = batch_pred_para
@@ -1757,59 +1770,62 @@ def worker(rank, world_size):
 		val_loss_history[iepoch, :] = torch.stack(all_val_losses).mean().detach().cpu().numpy()
 		val_NSE_history[iepoch, :] = torch.stack(all_val_NSE).mean().detach().cpu().numpy()
 
-		if rank == 2:  # @joshuafan swapped ranks
+		if rank == 2:
 			# writer.add_scalars('loss', {'training': torch.stack(all_train_losses).mean(), 'validation': torch.stack(all_val_losses).mean()}, iepoch+1)
 			print(f'Epoch {iepoch}, train loss: {torch.stack(all_train_losses).mean():.2f}, validation loss: {torch.stack(all_val_losses).mean():.2f}, time: {torch.stack(all_train_times).mean():.2f}')
 			if args.model == "lipmlp" or args.lambda_lipschitz > 0:
 				print(f'Train Lipschitz loss: {torch.stack(all_train_lipschitz_losses).mean():.2f}')
 		elif rank == 3:
 			# writer.add_scalars('NSE', {'training': torch.stack(all_train_NSE).mean(), 'validation': torch.stack(all_val_NSE).mean()}, iepoch+1)
-			print(f'Epoch {iepoch}, train NSE: {torch.stack(all_train_NSE).mean():.2f}, validation NSE: {torch.stack(all_val_NSE).mean():.2f}, time: {torch.stack(all_train_times).mean():.2f}')
+			print(f'Epoch {iepoch}, train NSE: {torch.stack(all_train_NSE).mean():.2f}, validation NSE: {torch.stack(all_val_NSE).mean():.2f}, time: {torch.stack(all_train_times).mean():.2f}', flush=True)
 			# print the gradient of the NN parameters
 			# for name, param in model.named_parameters():
 			# 	if param.requires_grad:
 			# 		print(name, param.grad)
-		# elif rank == 1:
-		# 	with open(os.path.join(data_dir_output, "neural_network", job_id, avg_loss_filename), "a") as f:
-		# 		f.write(f'{iepoch + 1}, {torch.stack(all_train_losses).mean():.6f}, {torch.stack(all_val_losses).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}\n')
-		# elif rank == 4: 
-		# 	with open(os.path.join(data_dir_output, "neural_network", job_id, avg_NSE_filename), "a") as f:
-		# 		f.write(f'{iepoch + 1}, {torch.stack(all_train_NSE).mean():.6f}, {torch.stack(all_val_NSE).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}\n')
-		
-		######################
-		## Para per 2 epoch ##
-		######################
-		# elif rank == 5:
-		# # 	# 	print(f"Epoch {iepoch+1}, Clamped Sigmoid Parameters: {sigmoid_para_val.item():.2f}")
-		# # 	# try to track the parameters change during training process
-		# # 	# if iepoch in [0, 5, 10, 15, 20, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000, 3100, 3200, 3300, 3400, 3500, 3600, 3700, 3800, 3900, 4000, 4100, 4200, 4300, 4400, 4500, 4600, 4700, 4800, 4900, 5000]:
-		# 	if iepoch % 5 == 0:
-		# 		eval_start_time = time.time()
-		# 		model.eval()
-		# 		# print("Starting time to predict parameters: {}".format(datetime.now()))
-		# 		with torch.no_grad():
-		# 			temp_soc_simu, temp_pred_para = model(val_x.to(device), val_z.to(device), whether_predict=0)
-		# 		# save validation parameters 
-		# 		val_pred_soc[val_profile_id, :] = temp_soc_simu.detach().cpu()
-		# 		val_pred_para[val_profile_id, :] = temp_pred_para.detach().cpu()
-		# 		# print("Ending time to predict parameters: {}".format(datetime.now()))
-		# 		# save data
-		# 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_val_pred_soc_' + job_id + "_" + str(iepoch) + '.csv', val_pred_soc.detach().numpy(), delimiter = ',')
-		# 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_para_' + job_id + "_" + str(iepoch) + '.csv', val_pred_para.detach().numpy(), delimiter = ',')
-		# 		# print time
-		# 		print('Epoch {} - Rank {}: {:.5f}'.format(iepoch, rank, time.time() - eval_start_time))
-			
 
-		# 	# elif rank == 6:
-		# 	# try to track the parameters change during training process
-		# 	if iepoch in [0, 5, 10, 15, 20, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900]:
-		# 		model.eval()
-		# 		with torch.no_grad():
-		# 			temp_train_soc_simu, temp_train_pred_para = model(train_x.to(device), train_z.to(device))
-		# 		# save validation parameters
-		# 		train_pred_para[train_profile_id, :] = temp_train_pred_para.detach().cpu()
-		# 		# save data
-		# 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_train_pred_para_' + job_id + "_" + str(iepoch) + '.csv', train_pred_para.detach().numpy(), delimiter = ',')
+
+
+			# elif rank == 1:
+			# 	with open(os.path.join(data_dir_output, "neural_network", job_id, avg_loss_filename), "a") as f:
+			# 		f.write(f'{iepoch + 1}, {torch.stack(all_train_losses).mean():.6f}, {torch.stack(all_val_losses).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}\n')
+			# elif rank == 4: 
+			# 	with open(os.path.join(data_dir_output, "neural_network", job_id, avg_NSE_filename), "a") as f:
+			# 		f.write(f'{iepoch + 1}, {torch.stack(all_train_NSE).mean():.6f}, {torch.stack(all_val_NSE).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}\n')
+			
+			######################
+			## Para per 2 epoch ##
+			######################
+			# elif rank == 5:
+			# # 	# 	print(f"Epoch {iepoch+1}, Clamped Sigmoid Parameters: {sigmoid_para_val.item():.2f}")
+			# # 	# try to track the parameters change during training process
+			# # 	# if iepoch in [0, 5, 10, 15, 20, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000, 3100, 3200, 3300, 3400, 3500, 3600, 3700, 3800, 3900, 4000, 4100, 4200, 4300, 4400, 4500, 4600, 4700, 4800, 4900, 5000]:
+			# 	if iepoch % 5 == 0:
+			# 		eval_start_time = time.time()
+			# 		model.eval()
+			# 		# print("Starting time to predict parameters: {}".format(datetime.now()))
+			# 		with torch.no_grad():
+			# 			temp_soc_simu, temp_pred_para = model(val_x.to(device), val_z.to(device), whether_predict=0)
+			# 		# save validation parameters 
+			# 		val_pred_soc[val_profile_id, :] = temp_soc_simu.detach().cpu()
+			# 		val_pred_para[val_profile_id, :] = temp_pred_para.detach().cpu()
+			# 		# print("Ending time to predict parameters: {}".format(datetime.now()))
+			# 		# save data
+			# 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_val_pred_soc_' + job_id + "_" + str(iepoch) + '.csv', val_pred_soc.detach().cpu().numpy(), delimiter = ',')
+			# 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_para_' + job_id + "_" + str(iepoch) + '.csv', val_pred_para.detach().cpu().numpy(), delimiter = ',')
+			# 		# print time
+			# 		print('Epoch {} - Rank {}: {:.5f}'.format(iepoch, rank, time.time() - eval_start_time))
+				
+
+			# 	# elif rank == 6:
+			# 	# try to track the parameters change during training process
+			# 	if iepoch in [0, 5, 10, 15, 20, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900]:
+			# 		model.eval()
+			# 		with torch.no_grad():
+			# 			temp_train_soc_simu, temp_train_pred_para = model(train_x.to(device), train_z.to(device))
+			# 		# save validation parameters
+			# 		train_pred_para[train_profile_id, :] = temp_train_pred_para.detach().cpu()
+			# 		# save data
+			# 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_train_pred_para_' + job_id + "_" + str(iepoch) + '.csv', train_pred_para.detach().cpu().numpy(), delimiter = ',')
 
 		elif rank == 0: 
 			if iepoch == 0:
@@ -1826,14 +1842,14 @@ def worker(rank, world_size):
 
 				
 				# save prediction and model
-				# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().numpy(), delimiter = ',')
-				# np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().numpy(), delimiter = ',')
+				# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().cpu().numpy(), delimiter = ',')
+				# np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().cpu().numpy(), delimiter = ',')
 				# torch.save(model, data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt')
 				# print(f'Best model updated at epoch {iepoch + 1}')
 				
 				# save prediction and model
-				# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().numpy(), delimiter = ',')
-				# np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().numpy(), delimiter = ',')
+				# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().cpu().numpy(), delimiter = ',')
+				# np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().cpu().numpy(), delimiter = ',')
 				checkpoint_best_model = {
 					'epoch': iepoch,
 					'model_state_dict': model.state_dict(),
@@ -1859,12 +1875,12 @@ def worker(rank, world_size):
 					temp_soc_simu, temp_pred_para = model(val_x.to(device), val_z.to(device), whether_predict=0)
 					grid_simu_soc, grid_pred_para = model(torch.tensor(predict_data_x, dtype=torch.float32, device=device), torch.tensor(predict_data_z, dtype=torch.float32, device=device), whether_predict = 1)
 				# save validation parameters 
-				val_pred_soc[val_profile_id, :] = temp_soc_simu.detach().cpu()
-				val_pred_para[val_profile_id, :] = temp_pred_para.detach().cpu()
+				val_pred_soc[val_profile_id, :] = temp_soc_simu.detach()
+				val_pred_para[val_profile_id, :] = temp_pred_para.detach()
 				# print("Ending time to predict parameters: {}".format(datetime.now()))
 				# save data
-				np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_val_pred_soc_' + job_id + "_" + str(iepoch) + '.csv', val_pred_soc.detach().numpy(), delimiter = ',')
-				np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_para_' + job_id + "_" + str(iepoch) + '.csv', val_pred_para.detach().numpy(), delimiter = ',')
+				np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_val_pred_soc_' + job_id + "_" + str(iepoch) + '.csv', val_pred_soc.detach().cpu().numpy(), delimiter = ',')
+				np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_para_' + job_id + "_" + str(iepoch) + '.csv', val_pred_para.detach().cpu().numpy(), delimiter = ',')
 				
 				# Bulk simulation for the grid data
 				carbon_input_best, cpool_steady_state_best, cpools_layer_best, soc_layer_best, total_res_time_best, \
@@ -1906,9 +1922,13 @@ def worker(rank, world_size):
 		
 		# Ensure all processes reach this point before proceeding
 		dist.barrier()
-		# # Add a learning rate scheduler
-		scheduler.step()
-		
+
+		# Add a learning rate scheduler
+		if args.use_swa == 1 and iepoch > swa_start:
+			swa_model.update_parameters(model)
+			swa_scheduler.step()
+		else:
+			scheduler.step()
 
 		# Add a early stopping condition
 		if val_NSE_history[iepoch, :] < best_val_NSE:
@@ -1933,6 +1953,7 @@ def worker(rank, world_size):
 				whether_checkpoint = True
 				checkpoint = {
 					'epoch': iepoch,
+					'swa_model_state_dict': swa_model.state_dict(),
 					'model_state_dict': model.state_dict(),
 					'optimizer_state_dict': optimizer.state_dict(),
 					'best_val_loss': best_val_loss,
@@ -1947,48 +1968,81 @@ def worker(rank, world_size):
 					'epochs_without_improvement': epochs_without_improvement,
 				}
 				torch.save(checkpoint, data_dir_output + 'neural_network/' + job_id + '/checkpoint_' + job_id + '.pt')
-				# Create a file to submit the job again
-				with open(job_submit_path + 'Resume' + job_id + '.submit', 'w') as f:
-					f.write(f'#!/bin/bash\n')
-					f.write(f'#PBS -A UOKL0017\n')
-					f.write(f'#PBS -N DDP_BINN_Resume\n')
-					f.write(f'#PBS -q main\n')
-					f.write(f'#PBS -l walltime=12:00:00\n')
-					f.write(f'#PBS -l select=1:ncpus=128\n\n')
-					f.write(f'# Use scratch for temporary files to avoid space limits in /tmp\n')
-					f.write(f'export TMPDIR=/glade/scratch/$USER/temp\n')
-					f.write(f'mkdir -p $TMPDIR\n\n')
-					f.write(f'# Load modules to match compile-time environment\n')
-					f.write(f'module purge\n')
-					f.write(f'module load conda\n')
-					f.write(f'module load cuda\n\n')
-					f.write(f'# Activate environment in conda\n')
-					f.write(f'conda activate BINN_310_CPU\n\n')
-					f.write(f'# Start the Python Code\n')
-					f.write(f'python -u /glade/u/home/haodixu/BINN/Server_Script/binns_DDP.py --lr ' + str(args.lr) + ' --weight_decay ' + str(args.weight_decay) + ' --batch_size ' + str(args.batch_size) + \
-			 			' --seed ' + str(args.seed) + ' --n_epochs ' + str(args.n_epochs) + ' --patience ' + str(args.patience) + ' --model ' + str(args.model) + ' --lambda_lipschitz ' + str(args.lambda_lipschitz) + \
-						' --note ' + str(args.note) + ' --categorical ' + str(args.categorical) + ' --use_bn ' + ' --embed_dim ' + str(args.embed_dim) + ' --num_CPU ' + str(args.num_CPU) + ' --whether_resume 1\n')
 
-				# submit the job again
-				submit_command = ['qsub', 
-					  '-v', f"PREVIOUS_JOB_ID={job_id}",
-					  job_submit_path + 'Resume' + job_id + '.submit']
-				# Submit the job and get the new job ID
-				try:
-					submit_output = subprocess.check_output(submit_command, universal_newlines=True)
-					new_job_id = submit_output.strip()
-					print(f"New job submitted. New Job ID is {new_job_id}")
-				except subprocess.CalledProcessError as e:
-					print(f"Failed to submit job: {e.output}")
+
+				if args.scheduler == 'slurm':
+					# Create a file to submit the job again
+					with open(job_submit_path + 'Resume' + job_id + '.submit', 'w') as f:
+						f.write(f'#!/bin/bash\n')
+						f.write(f'#SBATCH -p aida\n')
+						f.write(f'#SBATCH -J binn_resume\n')
+						f.write(f'#SBATCH -c {args.num_CPU*2}\n')
+						f.write(f'#SBATCH -N 1 -n 1\n')
+						f.write(f'#SBATCH --mem=50GB\n')
+						f.write(f'#SBATCH -t 12:00:00\n')
+
+						f.write(f'source ~/.bashrc\n')
+						f.write(f'module load cuda\n')
+						f.write(f'conda activate binn\n\n')
+						f.write(f'python {" ".join(sys.argv)} --whether_resume 1\n')
+
+					# submit the job again
+					submit_command = ['sbatch', 
+						f'--export=PREVIOUS_JOB_ID={job_id}',
+						job_submit_path + 'Resume' + job_id + '.submit']
+					# Submit the job and get the new job ID
+					try:
+						submit_output = subprocess.check_output(submit_command, universal_newlines=True)
+						new_job_id = submit_output.strip()
+						print(f"New job submitted. New Job ID is {new_job_id}")
+					except subprocess.CalledProcessError as e:
+						print(f"Failed to submit job: {e.output}")
+
+				else:
+					# Create a file to submit the job again
+					with open(job_submit_path + 'Resume' + job_id + '.submit', 'w') as f:
+						f.write(f'#!/bin/bash\n')
+						f.write(f'#PBS -A UOKL0017\n')
+						f.write(f'#PBS -N DDP_BINN_Resume\n')
+						f.write(f'#PBS -q main\n')
+						f.write(f'#PBS -l walltime=12:00:00\n')
+						f.write(f'#PBS -l select=1:ncpus=128\n\n')
+						f.write(f'# Use scratch for temporary files to avoid space limits in /tmp\n')
+						f.write(f'export TMPDIR=/glade/scratch/$USER/temp\n')
+						f.write(f'mkdir -p $TMPDIR\n\n')
+						f.write(f'# Load modules to match compile-time environment\n')
+						f.write(f'module purge\n')
+						f.write(f'module load conda\n')
+						f.write(f'module load cuda\n\n')
+						f.write(f'# Activate environment in conda\n')
+						f.write(f'conda activate BINN_310_CPU\n\n')
+						f.write(f'# Start the Python Code\n')
+						f.write(f'python -u /glade/u/home/haodixu/BINN/Server_Script/binns_DDP.py --lr ' + str(args.lr) + ' --weight_decay ' + str(args.weight_decay) + ' --batch_size ' + str(args.batch_size) + \
+							' --seed ' + str(args.seed) + ' --n_epochs ' + str(args.n_epochs) + ' --patience ' + str(args.patience) + ' --model ' + str(args.model) + ' --lambda_lipschitz ' + str(args.lambda_lipschitz) + \
+							' --note ' + str(args.note) + ' --categorical ' + str(args.categorical) + ' --use_bn ' + ' --embed_dim ' + str(args.embed_dim) + ' --num_CPU ' + str(args.num_CPU) + ' --whether_resume 1\n')
+
+					# submit the job again
+					submit_command = ['qsub', 
+						'-v', f"PREVIOUS_JOB_ID={job_id}",
+						job_submit_path + 'Resume' + job_id + '.submit']
+					# Submit the job and get the new job ID
+					try:
+						submit_output = subprocess.check_output(submit_command, universal_newlines=True)
+						new_job_id = submit_output.strip()
+						print(f"New job submitted. New Job ID is {new_job_id}")
+					except subprocess.CalledProcessError as e:
+						print(f"Failed to submit job: {e.output}")
 			break
 
 
 
-	print(f"Rank {rank} finished processing data.")
+	print(f"Rank {rank} finished training.")
 
 
 	# Ensure all processes reach the end
 	dist.barrier()
+
+	print("FINISHED TRAINING - now making visualizations")
 
 
 
@@ -1998,11 +2052,16 @@ def worker(rank, world_size):
 	# best_guess_model = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt').to(device)
 	# best_guess_model.eval()
 	new_checkpoint = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt', map_location=device)
-	best_guess_model = model  # Do not need to create a new model
 	# # best_guess_model = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt').to(device)
 	# best_guess_model = nn_model(var_idx_to_emb).to(device)
 	# best_guess_model = DDP(best_guess_model)
-	best_guess_model.load_state_dict(new_checkpoint['model_state_dict'])
+	if args.use_swa == 1:
+		torch.optim.swa_utils.update_bn(train_loader, swa_model) 
+		best_guess_model = swa_model
+		best_guess_model.load_state_dict(new_checkpoint['swa_model_state_dict'])
+	else:
+		best_guess_model = model  # Do not need to create a new model
+		best_guess_model.load_state_dict(new_checkpoint['model_state_dict'])
 	print("Loaded model for rank: {}".format(rank))
 
 	dist.barrier()
@@ -2024,12 +2083,12 @@ def worker(rank, world_size):
 		best_guess_model.eval()
 		print("Rank 0 model set to eval at time {}".format(datetime.now()))
 		with torch.no_grad():
-			best_guess_val_y_hat, best_guess_val_pred_para, best_guess_val_input = best_guess_model(val_x.to(device), val_z.to(device), whether_predict=0)
+			best_guess_val_y_hat, best_guess_val_pred_para = best_guess_model(val_x.to(device), val_z.to(device), whether_predict=0)
 			print("Rank 0 finished validation prediction at time {}".format(datetime.now()))
-			best_guess_train_y_hat, best_guess_train_pred_para, best_guess_train_input = best_guess_model(train_x.to(device), train_z.to(device), whether_predict=0)
+			best_guess_train_y_hat, best_guess_train_pred_para = best_guess_model(train_x.to(device), train_z.to(device), whether_predict=0)
 			print("Rank 0 finished training prediction at time {}".format(datetime.now()))
 			if test_split_ratio != 0:
-				best_guess_test_y_hat, best_guess_test_pred_para, best_guess_test_input = best_guess_model(test_x.to(device), test_z.to(device), whether_predict=0)
+				best_guess_test_y_hat, best_guess_test_pred_para = best_guess_model(test_x.to(device), test_z.to(device), whether_predict=0)
 				test_loss, test_NSE = fun_loss(best_guess_test_y_hat, test_y.to(device), best_guess_test_pred_para)
 				print(f'Test loss: {test_loss.item():.2f}, Test NSE: {test_NSE.item():.2f}')
 		# end with torch.no_grad():
@@ -2066,7 +2125,6 @@ def worker(rank, world_size):
 
 		best_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
 		best_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
-		best_input = torch.tensor(np.ones((wosis_profile_info.shape[0], model.module.new_input_size))*np.nan, dtype = torch.float32, device=device)
 		upper_depth_all = np.ones((wosis_profile_info.shape[0], 200))*np.nan
 		lower_depth_all = np.ones((wosis_profile_info.shape[0], 200))*np.nan
 
@@ -2076,7 +2134,6 @@ def worker(rank, world_size):
 
 		best_simu_soc[test_profile_id, :] = best_guess_test_y_hat
 		best_pred_para[test_profile_id, :] = best_guess_test_pred_para
-		best_input[test_profile_id, :] = best_guess_test_input
 
 
 		# save data
@@ -2372,19 +2429,19 @@ def worker(rank, world_size):
 															best_pred_para[test_profile_id_num, i], PLOT_DIR,
 															"test_para_{}_{}".format(para_name, job_id), us_only=True)
 
-		# TODO Choose a location. Compute input similarity to it for all profiles.
-		for profile_idx in [0]:
-			profile_id_curr = test_profile_id_num[profile_idx]
-			input_curr = best_guess_test_input[profile_idx]
-			distances = []
-			for i in range(len(best_guess_test_input.shape[0])):
-				dist_curr_i = torch.norm(input_curr - best_guess_test_input[i])
-				distances.append(dist_curr_i)
+		# # TODO Choose a location. Compute input similarity to it for all profiles.
+		# for profile_idx in [0]:
+		# 	profile_id_curr = test_profile_id_num[profile_idx]
+		# 	input_curr = best_guess_test_input[profile_idx]
+		# 	distances = []
+		# 	for i in range(len(best_guess_test_input.shape[0])):
+		# 		dist_curr_i = torch.norm(input_curr - best_guess_test_input[i])
+		# 		distances.append(dist_curr_i)
 
-			visualization_utils.plot_observations_world_map(test_lons[test_profile_id_num],
-												   		    test_lats[test_profile_id_num],
-															distances, PLOT_DIR,
-															"test_dist_with_profile_lat={}_lon{}".format(test_lons[profile_id_curr], test_lats[profile_id_curr]), us_only=True)
+		# 	visualization_utils.plot_observations_world_map(test_lons[test_profile_id_num],
+		# 										   		    test_lats[test_profile_id_num],
+		# 													distances, PLOT_DIR,
+		# 													"test_dist_with_profile_lat={}_lon{}".format(test_lons[profile_id_curr], test_lats[profile_id_curr]), us_only=True)
 
 
 		############
@@ -2533,7 +2590,7 @@ def worker(rank, world_size):
 		print("-----------------Model Test Finished at " + str(datetime.now()) + "-----------------")
 
 		# Predict the SOC values based on Grid environmental information using the best model
-		grid_simu_soc, grid_pred_para, grid_input = best_guess_model(torch.tensor(predict_data_x, dtype=torch.float32, device=device), torch.tensor(predict_data_z, dtype=torch.float32, device=device), whether_predict = 1)
+		grid_simu_soc, grid_pred_para = best_guess_model(torch.tensor(predict_data_x, dtype=torch.float32, device=device), torch.tensor(predict_data_z, dtype=torch.float32, device=device), whether_predict = 1)
 		# Save the predicted SOC values, parameters and location data into csv files
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_simu_soc_' + job_id + '.csv', grid_simu_soc.detach().cpu().numpy(), delimiter = ',')
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_pred_para_' + job_id + '.csv', grid_pred_para.detach().cpu().numpy(), delimiter = ',')
@@ -2583,6 +2640,9 @@ def worker(rank, world_size):
 
 
 if __name__ == '__main__':
+	print(f"INSIDE MAIN, num_CPU={args.num_CPU}")
+	# multiprocessing.set_start_method('spawn', force=True)  # NOTE changed @joshuafan
+
 	# Number of CPUs requester
 	world_size = args.num_CPU
 	processes = []

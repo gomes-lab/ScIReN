@@ -24,9 +24,9 @@ def plot_losses(filename, losses, labels):
     labels represents the label for each list (loss name)
     """
 
-    epochs = list(range(len(losses[0])))
+    epochs = np.arange(len(losses[0]))
     for i in range(len(losses)):
-        plt.plot(epochs, losses[i], color='blue', label=labels[i])
+        plt.plot(epochs, losses[i], label=labels[i])
     plt.xlabel('Epoch #')
     plt.ylabel('Loss')
     plt.title('Losses')
@@ -128,6 +128,17 @@ def plot_single_scatter(ax, x, y, x_label, y_label, title, should_align=True):
 
 
 def plot_true_vs_predicted(filename, y_hat, y):
+    """
+    Wrapper method to plot a single scatterplot (true vs predicted) and write it to a file
+    """
+    assert y.shape == y_hat.shape
+    plt.figure(figsize=(10,10))
+    plot_single_scatter(plt.gca(), y_hat, y, "Predicted", "True", "True vs predicted SOC (sum across all depths)")
+    plt.savefig(filename)
+    plt.close()
+
+
+def plot_true_vs_predicted_multioutput(filename, y_hat, y):
     assert y.shape == y_hat.shape
     num_outputs = y.shape[1]
     rows = math.ceil(num_outputs / 4)
@@ -155,12 +166,15 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
 
     # Plot world map
     gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
-    world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
+    if us_only:
+        world = gpd.read_file('../INPUT_DATA/maps/cb_2018_us_state_20m.shp')
+    else:
+        world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
     ax = world.boundary.plot(color='gray', figsize=(25, 18))
     if us_only:
         ax.set_xlim(-124.8, -66.9)
         ax.set_ylim(24.5, 49.4)
-    gdf.plot(column=var_name, ax=ax, marker='o', markersize=4, legend=True, zorder=10)  # legend_kwds={'shrink': 0.7},
+    gdf.plot(column=var_name, ax=ax, marker='o', markersize=10, legend=True, zorder=10)  # legend_kwds={'shrink': 0.7},
     plt.title(title)
     if plot_dir is not None:
         plt.savefig(os.path.join(plot_dir, "map_{}.png".format(var_name)), bbox_inches='tight')
@@ -180,3 +194,5 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
         plt.close()
     else:
         plt.show()
+
+
