@@ -53,7 +53,7 @@ import multiprocessing
 from multiprocessing import Process
 
 from scipy.io import loadmat
-import netCDF4 as ncread 
+import netCDF4 as ncread
 import mat73
 
 from matplotlib import pyplot as plt
@@ -105,7 +105,7 @@ parser.add_argument("--clip_value", type=float, default=1, help="Clip value for 
 
 # Positional encoding
 parser.add_argument("--lonlat_features", action='store_true', help="Whether longitude and latitude should be passed as features")
-parser.add_argument("--pos_enc", type=str, default='none', choices=['none', 'early', 'late'], 
+parser.add_argument("--pos_enc", type=str, default='none', choices=['none', 'early', 'late'],
 					help="Whether to use positional encoding. 'early' means that positional encoding is concatenated with other features. 'late' means that it is only used as an error term for the latent parameters.")
 parser.add_argument("--k", type=int, default=20, help="Nearest neighbors for graph (GCN only)")
 # Loss terms
@@ -236,15 +236,15 @@ if args.whether_resume == 1:
 
 	# Load Checkpoint
 	checkpoint_main = torch.load(checkpoint_path, map_location=device)
-	
+
 	# Delete the job submit file
 	if os.path.exists(job_submit_path + 'Resume' + job_id + '.submit'):
 		os.remove(job_submit_path + 'Resume' + job_id + '.submit')
-	
+
 
 
 # constants
-month_num = 12 
+month_num = 12
 soil_cpool_num = 7
 soil_decom_num = 20
 
@@ -253,8 +253,8 @@ soil_decom_num = 20
 #-------------------------------
 # load wosis data
 
-# The site information for each SOC profile. 
-# Names for each column are "profile_id" "country_id" "country_name" "lon" "lat" "layer_num" “date”. 
+# The site information for each SOC profile.
+# Names for each column are "profile_id" "country_id" "country_name" "lon" "lat" "layer_num" “date”.
 nc_data_middle = ncread.Dataset(data_dir_input + 'wosis_2019_snap_shot/soc_profile_wosis_2019_snapshot_hugelius_mishra.nc') # wosis profile info
 wosis_profile_info = nc_data_middle['soc_profile_info'][:].data.transpose()
 nc_data_middle.close()
@@ -392,7 +392,7 @@ cesm2_simu_input_sum_cwd = np.sum(cesm2_simu_input_vector_cwd, axis = 2)
 
 del cesm2_simu_input_vector_litter1, cesm2_simu_input_vector_litter2, cesm2_simu_input_vector_litter3, cesm2_simu_input_vector_cwd
 
-# representative points 
+# representative points
 sample_profile_id = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_representative_profiles.mat')
 sample_profile_id = sample_profile_id['sample_profile_id']
 # convert the number to be starting from 0 in python world
@@ -403,16 +403,16 @@ sample_profile_id = sample_profile_id - 1
 
 # if use the whole dataset
 # profile_collection = np.arange(0, 20000)
-# if select 
+# if select
 # profile_collection = np.arange(0, wosis_profile_info.shape[0])
-# profile_collection = np.reshape(profile_collection, [profile_collection.shape[0], 1])	
+# profile_collection = np.reshape(profile_collection, [profile_collection.shape[0], 1])
 
 # choose the profile id with lat and lon within the range of the United States
 profile_collection = np.where(
-	(wosis_profile_info[:, 2] == 156) & 
-	(wosis_profile_info[:, 3] >= -124.763068) & 
-	(wosis_profile_info[:, 3] <= -66.949895) & 
-	(wosis_profile_info[:, 4] >= 24.5) & 
+	(wosis_profile_info[:, 2] == 156) &
+	(wosis_profile_info[:, 3] >= -124.763068) &
+	(wosis_profile_info[:, 3] <= -66.949895) &
+	(wosis_profile_info[:, 4] >= 24.5) &
 	(wosis_profile_info[:, 4] <= 49.384358)
 )[0]
 
@@ -431,9 +431,9 @@ eligible_profile = eligible_profile - 1
 # calculate average value per row in para_gr, and choose those profiles with average value less than 1.05
 # calculate average value per row in stat_r2, and choose those profiles with average value larger than 0
 # choose profile that listed in eligible_profile
-PRODA_collection = np.where((np.mean(para_gr, axis = 1) < 1.05) & 
-							(np.mean(stat_r2, axis = 1) > 0) & 
-							(np.isin(np.arange(0, wosis_profile_info.shape[0]), eligible_profile) == True) & 
+PRODA_collection = np.where((np.mean(para_gr, axis = 1) < 1.05) &
+							(np.mean(stat_r2, axis = 1) > 0) &
+							(np.isin(np.arange(0, wosis_profile_info.shape[0]), eligible_profile) == True) &
 							# Also in the column profile_id of the dataframe PRODA_para
 							(np.isin(np.arange(0, wosis_profile_info.shape[0]), PRODA_para['profile_id']) == True)
 							)[0]
@@ -493,11 +493,11 @@ for iprofile_hat in profile_range:
 	# find the lon and lat info of soil profile
 	lon_profile = wosis_profile_info[iprofile, 3]
 	lat_profile = wosis_profile_info[iprofile, 4]
-	
+
 	lat_loc = np.where(abs(lat_profile - lat_grid) == min(abs(lat_profile - lat_grid)))[0][0]
 	lon_loc = np.where(abs(lon_profile - lon_grid) == min(abs(lon_profile - lon_grid)))[0][0]
-	
-	# info of the node depth of profile  
+
+	# info of the node depth of profile
 	wosis_layer_depth = wosis_soc_info[loc_profile, 4]
 	# observed C info (gC/m3)
 	wosis_layer_obs = wosis_soc_info[loc_profile, 6]
@@ -511,32 +511,32 @@ for iprofile_hat in profile_range:
 	valid_soc_loc = np.where((np.isnan(wosis_layer_obs) == False) & (np.isnan(wosis_layer_depth) == False) & (np.isnan(wosis_layer_upper_depth) == False) & (np.isnan(wosis_layer_lower_depth) == False))
 	# valid layer number
 	num_layers = len(valid_soc_loc[0])
-	
+
 	if num_layers > 0:
 		wosis_layer_depth = wosis_layer_depth[valid_soc_loc]/100 # convert unit from cm to m
 		wosis_layer_obs = wosis_layer_obs[valid_soc_loc]
 		wosis_layer_upper_depth = wosis_layer_upper_depth[valid_soc_loc]/100
 		wosis_layer_lower_depth = wosis_layer_lower_depth[valid_soc_loc]/100
-		
+
 		obs_depth_matrix[iprofile_hat, 0:num_layers] = wosis_layer_depth
 		obs_soc_matrix[iprofile_hat, 0:num_layers] = wosis_layer_obs
 		obs_upper_depth_matrix[iprofile_hat, 0:num_layers] = wosis_layer_upper_depth
 		obs_lower_depth_matrix[iprofile_hat, 0:num_layers] = wosis_layer_lower_depth
-		
-	
-	
+
+
+
 	# end if num_layers > 0:
-	
+
 	# interpolation
 	# if num_layers > 1:
 	# 	wosis_layer_depth = wosis_layer_depth[valid_soc_loc]/100 # convert unit from cm to m
 	# 	wosis_layer_obs = wosis_layer_obs[valid_soc_loc]
-	# 	
+	#
 	# 	wosis_layer_depth = wosis_layer_depth + (np.random.rand(num_layers)-0.5)*10**(-7)
 	# 	sort_index = np.argsort(wosis_layer_depth)
 	# 	wosis_layer_depth = wosis_layer_depth[sort_index]
 	# 	wosis_layer_obs = wosis_layer_obs[sort_index]
-	# 	
+	#
 	# 	interp_soc = pchip_interpolate(wosis_layer_depth, wosis_layer_obs, zsoi)
 	# 	interp_soc[interp_soc <= 0] = np.nan
 	# 	interp_start_loc = np.where(abs(wosis_layer_depth[0] - zsoi) == min(abs(wosis_layer_depth[0] - zsoi)))[0]
@@ -547,7 +547,7 @@ for iprofile_hat in profile_range:
 	# elif num_layers == 1:
 	# 	wosis_layer_depth = wosis_layer_depth[valid_soc_loc]/100 # convert unit from cm to m
 	# 	wosis_layer_obs = wosis_layer_obs[valid_soc_loc]
-	# 	
+	#
 	# 	closest_loc = np.where(abs(wosis_layer_depth[0] - zsoi) == min(abs(wosis_layer_depth[0] - zsoi)))[0]
 	# 	obs_soc_matrix[iprofile_hat, closest_loc] = wosis_layer_obs[0]
 	# elif num_layers == 0:
@@ -555,7 +555,7 @@ for iprofile_hat in profile_range:
 	# # end if num_layers > 3:
 
 	obs_lon_lat_loc[iprofile_hat, :] = [lon_loc, lat_loc]
-	
+
 	# input vector
 	model_force_input_vector_cwd[iprofile_hat, :] = cesm2_simu_input_sum_cwd[lat_loc, lon_loc, :]
 	model_force_input_vector_litter1[iprofile_hat, :] = cesm2_simu_input_sum_litter1[lat_loc, lon_loc, :]
@@ -575,7 +575,7 @@ for iprofile_hat in profile_range:
 	# soil temperature and water potential
 	model_force_soil_temp_profile[iprofile_hat, :, :] = cesm2_simu_soil_temperature[lat_loc, lon_loc, 0:soil_decom_num, :]
 	model_force_soil_water_profile[iprofile_hat, :, :] = cesm2_simu_w_scalar[lat_loc, lon_loc, 0:soil_decom_num, :]
-	
+
 # end
 # check the overall number of layers in the profile
 print("Number of layers in profile: " + str(layer_num_record))
@@ -622,7 +622,7 @@ env_info_names = ['ProfileNum', 'ProfileID', 'LayerNum', 'Lon', 'Lat', 'Date', \
 'nbedrock', \
 'R_Squared']
 
-categorical_vars = [['ESA_Land_Cover'], ['Texture_USDA_0cm', 'Texture_USDA_30cm', 'Texture_USDA_100cm'], 
+categorical_vars = [['ESA_Land_Cover'], ['Texture_USDA_0cm', 'Texture_USDA_30cm', 'Texture_USDA_100cm'],
 					['USDA_Suborder'], ['WRB_Subgroup'], ['Koppen_Climate_2018']]  # Variables inside a sub-list share the same categories
 categorical_vars_flattened = [item for sublist in categorical_vars for item in sublist]
 
@@ -744,7 +744,7 @@ current_data_c = np.stack([lons, lats], axis=1)  # [profile, 2]: lon/lat of each
 # 	categorical = (col_name in categorical_vars_flattened)
 # 	visualization_utils.plot_observations_world_map(lons, lats, envir_var_values, PLOT_DIR, col_name, categorical=categorical)
 
-# # Plot SOC observation labels within each layer. If a profile has multiple observations 
+# # Plot SOC observation labels within each layer. If a profile has multiple observations
 # # in a layer, pick the first one
 # layer_top = 0
 # for layer_idx in range(len(zisoi)):
@@ -807,7 +807,7 @@ print("Shape of obs lower depth matrix", obs_lower_depth_matrix.shape)
 
 # Select PRODA parameters so that the Profile_IDs match the current data
 PRODA_para = PRODA_para.loc[PRODA_para['profile_id'].isin(current_data_profile_id)]
-PRODA_para = PRODA_para.sort_values(by='profile_id')                 
+PRODA_para = PRODA_para.sort_values(by='profile_id')
 print("Shape of PRODA para", PRODA_para.shape)
 
 
@@ -904,9 +904,9 @@ original_lats_grid = grid_env_info[:, 1].copy()
 
 
 # column names
-# environmental info of global grids 
+# environmental info of global grids
 # Difference: does not include first 3 columns 'ProfileNum', 'ProfileID', 'LayerNum' and the last column 'R_Squared'
-# Therefore, we choose to use the original categorical column names 
+# Therefore, we choose to use the original categorical column names
 grid_env_info_names = [\
 	'Lon', 'Lat', 'Date', \
 	'Rmean', 'Rmax', 'Rmin', \
@@ -961,7 +961,7 @@ grid_env_info["original_lat"] = original_lats_grid
 grid_env_info = grid_env_info.dropna(axis=0, how='any')
 
 # Select the rows with lon and lat values within continental US
-grid_env_info_US = grid_env_info[(grid_env_info["original_lon"] >= -124.763068) 
+grid_env_info_US = grid_env_info[(grid_env_info["original_lon"] >= -124.763068)
 								& (grid_env_info["original_lon"] <= -66.949895)
 								& (grid_env_info["original_lat"] >= 24.521694)
 								& (grid_env_info["original_lat"] <= 49.384358)]
@@ -969,9 +969,9 @@ grid_env_info_num = grid_env_info_US.shape[0]
 
 # Include forcing data for the grid env info
 # Initialize the forcing data for the grid env info to nan and then fill in the values row by row
-forcing_var = ['Input_CWD', 'Input_Litter1', 'Input_Litter2', 
-			   'Input_Litter3', 'Altmax_Last_Year', 'Altmax_Current', 
-			   'Nbedrock', 'Xio', 'Xin', 'Sand_Content', 'Soil_Temperature', 
+forcing_var = ['Input_CWD', 'Input_Litter1', 'Input_Litter2',
+			   'Input_Litter3', 'Altmax_Last_Year', 'Altmax_Current',
+			   'Nbedrock', 'Xio', 'Xin', 'Sand_Content', 'Soil_Temperature',
 			   'Soil_Water']
 
 model_force_pred_input_vector_cwd = np.ones([grid_env_info_num, month_num])*np.nan
@@ -1039,7 +1039,7 @@ nn_training_name = job_id + '_' + model_name
 # writer = SummaryWriter(data_dir_output + 'tensorboard/' + nn_training_name)
 
 #---------------------------------------------------
-# define the loss function                          
+# define the loss function
 #---------------------------------------------------
 def binns_loss(y_pred, y_true, pred_para, plot_path=""):
 	# process modeling
@@ -1079,8 +1079,8 @@ def binns_loss(y_pred, y_true, pred_para, plot_path=""):
 
 
 #---------------------------------------------------
-# simplified loss function that only takes in pred/true 
-# and returns a single value (smooth l1)     
+# simplified loss function that only takes in pred/true
+# and returns a single value (smooth l1)
 #---------------------------------------------------
 def binns_loss_simple(y_pred, y_true):
 	# process modeling
@@ -1133,7 +1133,7 @@ class nn_model(nn.Module):
 			self.spatial_encoder = GridCellSpatialRelationEncoder(
 				spa_embed_dim=self.num_params,
 				coord_dim=2, # Longitude and latitude
-				frequency_num=16, 
+				frequency_num=16,
 				max_radius=360,
 				min_radius=1e-06,
 				freq_init="geometric",
@@ -1146,8 +1146,8 @@ class nn_model(nn.Module):
 		self.l1 = nn.Linear(self.new_input_size, 128)
 		# torch.nn.init.xavier_uniform_(self.l1.weight)
 		# nn.init.zeros_(self.l1.bias)
-		
-		
+
+
 		# second layer
 		self.l2 = nn.Linear(128, 128)
 		# torch.nn.init.xavier_uniform_(self.l2.weight)
@@ -1235,7 +1235,7 @@ class nn_model(nn.Module):
 			## embedding layer ##
 			emb = embedding_layer(predictor[:, idx].int())
 			emb = F.normalize(emb, p=2, dim=1) # Normalize embeddings
-			
+
 			## one-hot encoding ##
 			# emb = 0.1*F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)
 			########################
@@ -1383,7 +1383,7 @@ for group in categorical_vars:
 global model
 if args.model == 'old_mlp':
 	model_class = nn_model
-	model_kwargs = {"var_idx_to_emb": var_idx_to_emb, 
+	model_kwargs = {"var_idx_to_emb": var_idx_to_emb,
 					"vertical_mixing": args.vertical_mixing,
 					"pos_enc": args.pos_enc}
 elif args.model == 'new_mlp' or args.model == "lipmlp":
@@ -1483,8 +1483,8 @@ if args.whether_resume == 0:
 	best_model_epoch = torch.tensor(0) # epoch with the best model so far
 
 	# Early stopping parameters
-	best_val_loss = float('inf') 
-	best_val_NSE = float('inf') 
+	best_val_loss = float('inf')
+	best_val_NSE = float('inf')
 	patience = args.patience
 	epochs_without_improvement = 0
 
@@ -1508,7 +1508,7 @@ if args.whether_resume == 0:
 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_soc.detach().cpu().numpy(), delimiter = ',')
 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_para.detach().cpu().numpy(), delimiter = ',')
 
-else: 
+else:
 	# record the loss history
 	train_loss_history = checkpoint_worker['train_loss_history']
 	val_loss_history = checkpoint_worker['val_loss_history']
@@ -1517,7 +1517,7 @@ else:
 
 	# Early stopping parameters
 	best_val_loss = checkpoint_worker['best_val_loss']
-	best_val_NSE = checkpoint_worker['best_val_NSE'] 
+	best_val_NSE = checkpoint_worker['best_val_NSE']
 	patience = args.patience
 	epochs_without_improvement = checkpoint_worker['epochs_without_improvement']
 
@@ -1610,7 +1610,7 @@ for iepoch in range(start_epoch, num_epoch):
 		# 	# ---------------------------------------------------------------------
 		# 	# Adverserial update
 		# 	# ---------------------------------------------------------------------
-		# 	# get initialization for Lipschitz Training set      
+		# 	# get initialization for Lipschitz Training set
 		# 	if ((cache['counter'] % conf.reg_incremental) == 0) or (not ('init' in cache)):
 		# 		if verbosity > 0:
 		# 			print('The Lipschitz set was reset')
@@ -1646,7 +1646,7 @@ for iepoch in range(start_epoch, num_epoch):
 		# Compute gradients wrt process parameters
 		# print("Para shape", batch_pred_para.shape)  # [batch, num_para]
 		# gradients = torch.autograd.grad(outputs=obj, inputs=batch_pred_para,
-		# 									grad_outputs=torch.ones(obj.size()).to(device), 
+		# 									grad_outputs=torch.ones(obj.size()).to(device),
 		# 								create_graph=True, retain_graph=True)[0]
 		# print("Gradients shape", gradients.shape)  # [batch, num_para]
 		# print(gradients)
@@ -1660,7 +1660,7 @@ for iepoch in range(start_epoch, num_epoch):
 					 # "c_reg": c_reg_loss,
 					 "spectral": spectral_loss,
 					 "cure": cure_loss}
-		
+
 		if args.loss_weighting in ["manual", "two_stage", "relobralo"]:
 			total_loss = 0.
 			for idx, loss in enumerate(args.losses):
@@ -1723,7 +1723,7 @@ for iepoch in range(start_epoch, num_epoch):
 
 	# training time
 	train_time = time.time() - epoch_start
-	
+
 	# print(f'Epoch {iepoch + 1}, Rank {rank}, train loss: {torch.tensor(loss_record_train).mean():.1f}, time: {(time.time()-epoch_start):.2f}')
 	# print(f"-----------------Epoch {iepoch + 1} - Rank {rank} - Model Weights: {model_without_ddp.l1.weight.data} - {model_without_ddp.l2.weight.data} - {model_without_ddp.l3.weight.data} - {model_without_ddp.l4.weight.data} - {model_without_ddp.l5.weight.data}-----------------")
 
@@ -1766,7 +1766,7 @@ for iepoch in range(start_epoch, num_epoch):
 		# 	# ---------------------------------------------------------------------
 		# 	# Adverserial update
 		# 	# ---------------------------------------------------------------------
-		# 	# get initialization for Lipschitz Training set      
+		# 	# get initialization for Lipschitz Training set
 		# 	if ((cache['counter'] % conf.reg_incremental) == 0) or (not ('init' in cache)):
 		# 		if verbosity > 0:
 		# 			print('The Lipschitz set was reset')
@@ -1806,7 +1806,7 @@ for iepoch in range(start_epoch, num_epoch):
 				print(batch_y_hat)
 			loss_record_val[loss].append(loss_dict[loss])
 		NSE_record_val.append(val_NSE.item())
-	# end for batch_info in val_loader: 
+	# end for batch_info in val_loader:
 
 	# record the time
 	hist_time = time.time() - start_time
@@ -1872,10 +1872,10 @@ for iepoch in range(start_epoch, num_epoch):
 	# elif rank == 1:
 	# 	with open(os.path.join(data_dir_output, "neural_network", job_id, avg_loss_filename), "a") as f:
 	# 		f.write(f'{iepoch + 1}, {torch.stack(all_train_losses).mean():.6f}, {torch.stack(all_val_losses).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}\n')
-	# elif rank == 4: 
+	# elif rank == 4:
 	# 	with open(os.path.join(data_dir_output, "neural_network", job_id, avg_NSE_filename), "a") as f:
 	# 		f.write(f'{iepoch + 1}, {torch.stack(all_train_NSE).mean():.6f}, {torch.stack(all_val_NSE).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}\n')
-	
+
 	######################
 	## Para per 2 epoch ##
 	######################
@@ -1889,7 +1889,7 @@ for iepoch in range(start_epoch, num_epoch):
 	# 		# print("Starting time to predict parameters: {}".format(datetime.now()))
 	# 		with torch.no_grad():
 	# 			temp_soc_simu, temp_pred_para = model(val_x.to(device), val_z.to(device), whether_predict=0)
-	# 		# save validation parameters 
+	# 		# save validation parameters
 	# 		val_pred_soc[val_profile_id, :] = temp_soc_simu.detach().cpu()
 	# 		val_pred_para[val_profile_id, :] = temp_pred_para.detach().cpu()
 	# 		# print("Ending time to predict parameters: {}".format(datetime.now()))
@@ -1898,7 +1898,7 @@ for iepoch in range(start_epoch, num_epoch):
 	# 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_para_' + job_id + "_" + str(iepoch) + '.csv', val_pred_para.detach().cpu().numpy(), delimiter = ',')
 	# 		# print time
 	# 		print('Epoch {} - Rank {}: {:.5f}'.format(iepoch, rank, time.time() - eval_start_time))
-		
+
 
 	# 	# elif rank == 6:
 	# 	# try to track the parameters change during training process
@@ -1934,7 +1934,7 @@ for iepoch in range(start_epoch, num_epoch):
 		}
 		if args.use_swa:
 			checkpoint_best_model['swa_model_state_dict'] = swa_model.state_dict()
-		
+
 		best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt'
 		torch.save(checkpoint_best_model, best_model_path)
 
@@ -1943,7 +1943,7 @@ for iepoch in range(start_epoch, num_epoch):
 		# with torch.no_grad():
 		# 	temp_soc_simu, temp_pred_para = model(val_x.to(device), val_z.to(device), whether_predict=0)
 		# 	grid_simu_soc, grid_pred_para = model(torch.tensor(predict_data_x, dtype=torch.float32, device=device), torch.tensor(predict_data_z, dtype=torch.float32, device=device), whether_predict = 1)
-		# # save validation parameters 
+		# # save validation parameters
 		# val_pred_soc[val_profile_id, :] = temp_soc_simu.detach()
 		# val_pred_para[val_profile_id, :] = temp_pred_para.detach()
 		# # print("Ending time to predict parameters: {}".format(datetime.now()))
@@ -1977,31 +1977,31 @@ for iepoch in range(start_epoch, num_epoch):
 		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Bulk_Simulation/nn_bulk_simu_litter_fraction_' + job_id + "_" + str(iepoch) + '.csv', litter_fraction_best.detach().cpu().numpy(), delimiter = ',')
 
 		# print('Epoch {} finish evaluating the best model: {:.5f}'.format(iepoch, time.time() - eval_start_time))
-		
-		
+
+
 		# np.savetxt(data_dir_output + 'neural_network/val_loss_history_' + time_stamp + '.csv', val_loss_history, delimiter = ',')
 		# np.savetxt(data_dir_output + 'neural_network/train_loss_history_' + time_stamp + '.csv', train_loss_history, delimiter = ',')
 	# end if iepoch == 0:
-	
+
 	# save the training and validation loss history
 	loss_file = os.path.join(data_dir_output, "neural_network", job_id, avg_loss_filename)
 	if iepoch == 0:  # Write the header if the file doesn't exist yet
 		with open(loss_file, mode='w') as f:
 			csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-			csv_writer.writerow(['epoch'] + [f'{loss}_loss_train' for loss in args.losses] + 
+			csv_writer.writerow(['epoch'] + [f'{loss}_loss_train' for loss in args.losses] +
 								[f'{loss}_loss_val' for loss in args.losses] +
 								['epoch_time', 'cumulative_time', 'best_model_epoch'])
 	with open(loss_file, mode='a+') as f:
 		csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
 		best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt'
 		csv_writer.writerow([iepoch] + [train_loss_history[loss][iepoch, 0] for loss in args.losses] +
-							[val_loss_history[loss][iepoch, 0] for loss in args.losses] + 
+							[val_loss_history[loss][iepoch, 0] for loss in args.losses] +
 							[round(train_time, 2), round(hist_time, 2),best_model_epoch.item()])
-	
+
 	# NSE file
 	with open(os.path.join(data_dir_output, "neural_network", job_id, avg_NSE_filename), "a") as f:
 		f.write(f'{iepoch}, {torch.tensor(NSE_record_train).mean():.6f}, {torch.tensor(NSE_record_val).mean():.6f}, {train_time:.2f}, {hist_time:.2f}, {best_model_epoch.item()}\n')
-	
+
 	# Ensure all processes reach this point before proceeding
 	# dist.barrier()
 
@@ -2074,7 +2074,7 @@ for iepoch in range(start_epoch, num_epoch):
 				f.write(f'python {" ".join(sys.argv)} --whether_resume 1\n')
 
 			# submit the job again
-			submit_command = ['sbatch', 
+			submit_command = ['sbatch',
 				f'--export=PREVIOUS_JOB_ID={job_id}',
 				job_submit_path + 'Resume' + job_id + '.submit']
 			# Submit the job and get the new job ID
@@ -2109,7 +2109,7 @@ for iepoch in range(start_epoch, num_epoch):
 					' --note ' + str(args.note) + ' --categorical ' + str(args.categorical) + ' --use_bn ' + ' --embed_dim ' + str(args.embed_dim) + ' --num_CPU ' + str(args.num_CPU) + ' --whether_resume 1\n')
 
 			# submit the job again
-			submit_command = ['qsub', 
+			submit_command = ['qsub',
 				'-v', f"PREVIOUS_JOB_ID={job_id}",
 				job_submit_path + 'Resume' + job_id + '.submit']
 			# Submit the job and get the new job ID
@@ -2138,7 +2138,7 @@ print("FINISHED TRAINING - now making visualizations")
 new_checkpoint = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt', map_location=device)
 if args.use_swa:
 	# Update batchnorm stats of averaged model (required when using SWA)
-	misc_utils.update_bn_custom(train_loader, swa_model, device) 
+	misc_utils.update_bn_custom(train_loader, swa_model, device)
 	best_guess_model = swa_model
 	best_guess_model.load_state_dict(new_checkpoint['swa_model_state_dict'])
 else:
@@ -2167,19 +2167,19 @@ with torch.no_grad():
 
 	# Get predictions for train examples, compute loss & plot
 	best_guess_train_y_hat, best_guess_train_pred_para = best_guess_model(train_x.to(device), train_z.to(device), train_c.to(device), whether_predict=0)
-	train_l1_loss, _, _, train_NSE = fun_loss(best_guess_train_y_hat, train_y.to(device), best_guess_train_pred_para, 
+	train_l1_loss, _, _, train_NSE = fun_loss(best_guess_train_y_hat, train_y.to(device), best_guess_train_pred_para,
 												plot_path=os.path.join(PLOT_DIR, "true_vs_predicted_train.png"))
 	print(f'Train loss: {train_l1_loss.item():.2f}, Train NSE: {train_NSE.item():.2f}')
 
 	# Get predictions for validation examples, compute loss & plot
 	best_guess_val_y_hat, best_guess_val_pred_para = best_guess_model(val_x.to(device), val_z.to(device), val_c.to(device), whether_predict=0)
-	val_l1_loss, _, _, val_NSE = fun_loss(best_guess_val_y_hat, val_y.to(device), best_guess_val_pred_para, 
+	val_l1_loss, _, _, val_NSE = fun_loss(best_guess_val_y_hat, val_y.to(device), best_guess_val_pred_para,
 											plot_path=os.path.join(PLOT_DIR, "true_vs_predicted_val.png"))
 	print(f'Val loss: {val_l1_loss.item():.2f}, Val NSE: {val_NSE.item():.2f}')
 
 	if test_split_ratio != 0:
 		best_guess_test_y_hat, best_guess_test_pred_para = best_guess_model(test_x.to(device), test_z.to(device), test_c.to(device), whether_predict=0)
-		test_loss, _, _, test_NSE = fun_loss(best_guess_test_y_hat, test_y.to(device), best_guess_test_pred_para, 
+		test_loss, _, _, test_NSE = fun_loss(best_guess_test_y_hat, test_y.to(device), best_guess_test_pred_para,
 										plot_path=os.path.join(PLOT_DIR, "true_vs_predicted_test.png"))
 		print(f'Test loss: {test_loss.item():.2f}, Test NSE: {test_NSE.item():.2f}')
 
@@ -2197,7 +2197,7 @@ with torch.no_grad():
 			csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
 			best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt'
 			csv_writer.writerow([job_id, command_string, args.lr, args.weight_decay, args.seed, best_model_path, best_val_NSE.item(), best_val_loss.item(), test_NSE.item(), test_loss.item()])
-		
+
 	# create folder for the results
 	os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Validation', exist_ok=True)
 	os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Train', exist_ok=True)
@@ -2335,7 +2335,7 @@ with torch.no_grad():
 	for i in range(binn_obs_soc.shape[0]):
 		if np.isnan(binn_obs_soc[i, :]).all() or torch.isnan(best_simu_soc[i, :]).all():
 			continue
-		else: 
+		else:
 			# Get the predicted and observed SOC values for this profile
 			obs_soc = binn_obs_soc[i, :]
 			simu_soc = best_simu_soc[i, :]
@@ -2504,7 +2504,7 @@ with torch.no_grad():
 	for i in range(val_simu_soc.shape[0]):
 		if np.isnan(binn_obs_soc[i, :]).all() or torch.isnan(val_simu_soc[i, :]).all():
 			continue
-		else: 
+		else:
 			# Get the predicted and observed SOC values for this profile
 			obs_soc = binn_obs_soc[i, :]
 			# print(obs_soc)
@@ -2648,7 +2648,7 @@ with torch.no_grad():
 	for i in range(train_simu_soc.shape[0]):
 		if np.isnan(binn_obs_soc[i, :]).all() or torch.isnan(train_simu_soc[i, :]).all():
 			continue
-		else: 
+		else:
 			# Get the predicted and observed SOC values for this profile
 			obs_soc = binn_obs_soc[i, :]
 			simu_soc = train_simu_soc[i, :]
@@ -2679,8 +2679,8 @@ with torch.no_grad():
 	# Grid prediction
 	#########################
 	# Predict the SOC values based on Grid environmental information using the best model
-	grid_simu_soc, grid_pred_para = best_guess_model(torch.tensor(predict_data_x, dtype=torch.float32, device=device), 
-												    torch.tensor(predict_data_z, dtype=torch.float32, device=device), 
+	grid_simu_soc, grid_pred_para = best_guess_model(torch.tensor(predict_data_x, dtype=torch.float32, device=device),
+												    torch.tensor(predict_data_z, dtype=torch.float32, device=device),
 												    torch.tensor(predict_data_c, dtype=torch.float32, device=device),
 												    whether_predict = 1)
 	# Save the predicted SOC values, parameters and location data into csv files
@@ -2699,14 +2699,14 @@ with torch.no_grad():
 	# Map of each grid covariate
 	for i, covariate in enumerate(var4nn):
 		visualization_utils.plot_observations_world_map(grid_env_info_US["original_lon"],
-												        grid_env_info_US["original_lat"], 
+												        grid_env_info_US["original_lat"],
 														predict_data_x[:, i, 0, 0], PLOT_DIR,
 														"grid_covariate_{}_{}".format(covariate, job_id), us_only=True)
 
 	# Map of each grid parameter (predictions)
 	for i, para_name in enumerate(para_names):  # in range(best_pred_para.shape[1]):
 		visualization_utils.plot_observations_world_map(grid_env_info_US["original_lon"],
-												        grid_env_info_US["original_lat"], 
+												        grid_env_info_US["original_lat"],
 														grid_pred_para[:, i].detach().cpu().numpy(), PLOT_DIR,
 														"grid_para_{}_{}".format(para_name, job_id), us_only=True)
 
@@ -2754,4 +2754,4 @@ with torch.no_grad():
 	# 	for p in processes:
 	# 		p.join()
 
-		
+

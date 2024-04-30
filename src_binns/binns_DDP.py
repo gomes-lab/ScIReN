@@ -1432,7 +1432,7 @@ def worker(rank, world_size):
 		dist.init_process_group('gloo', rank=rank, world_size=world_size, timeout=timedelta(hours=12))  # gloo for CPU
 	else:
 		dist.init_process_group('nccl', rank=rank, world_size=world_size, timeout=timedelta(hours=12))  # gloo for CPU
-	
+
 
 	# Create embeddings for categorical variables (each int maps to a different category)
 	var_idx_to_emb = dict()  # Column index to Embedding layer to use
@@ -1605,11 +1605,8 @@ def worker(rank, world_size):
 		model.train()
 		train_loader.sampler.set_epoch(iepoch)  # Set sampler's epoch number, so we use a different order per epoch
 
-		batch_start = time.time()
-		torch.autograd.set_detect_anomaly(True)
 		for batch_info in train_loader:
 			batch_x, batch_y, batch_z, batch_profile_id = batch_info
-
 			if batch_x.shape[0] == 1 and args.use_bn:  # Batch size of 1 during training does not work with BatchNorm
 				continue
 
@@ -1686,7 +1683,7 @@ def worker(rank, world_size):
 			# 		# Use idx:idx+1 to keep shape
 			# 		u_reg = u[cache["idx"]:cache["idx"] + 1].detach()
 			# 		v_reg = v[cache["idx"]:cache["idx"] + 1].detach()
-	
+
 			# 	# Compute the Lipschitz constant
 			# 	c_reg_loss = reg.lip_constant(conf, model, u_reg, v_reg, mean=conf.reg_all)
 			# 	obj = smooth_l1_loss + c_reg_loss * args.lambda_lipschitz
@@ -1707,7 +1704,7 @@ def worker(rank, world_size):
 			# Compute gradients wrt process parameters
 			# print("Para shape", batch_pred_para.shape)  # [batch, num_para]
 			# gradients = torch.autograd.grad(outputs=obj, inputs=batch_pred_para,
-			# 									grad_outputs=torch.ones(obj.size()).to(device), 
+			# 									grad_outputs=torch.ones(obj.size()).to(device),
 			# 								create_graph=True, retain_graph=True)[0]
 			# print("Gradients shape", gradients.shape)  # [batch, num_para]
 			# print(gradients)
@@ -1747,7 +1744,6 @@ def worker(rank, world_size):
 
 			# writer.add_scalar('training loss', obj.item(), iepoch)
 			# record prediction
-			batch_start = time.time()
 
 			# flush all printed output
 			sys.stdout.flush()
@@ -1969,7 +1965,7 @@ def worker(rank, world_size):
 			# 		# print("Starting time to predict parameters: {}".format(datetime.now()))
 			# 		with torch.no_grad():
 			# 			temp_soc_simu, temp_pred_para = model(val_x.to(device), val_z.to(device), whether_predict=0)
-			# 		# save validation parameters 
+			# 		# save validation parameters
 			# 		val_pred_soc[val_profile_id, :] = temp_soc_simu.detach().cpu()
 			# 		val_pred_para[val_profile_id, :] = temp_pred_para.detach().cpu()
 			# 		# print("Ending time to predict parameters: {}".format(datetime.now()))
@@ -1978,7 +1974,7 @@ def worker(rank, world_size):
 			# 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_para_' + job_id + "_" + str(iepoch) + '.csv', val_pred_para.detach().cpu().numpy(), delimiter = ',')
 			# 		# print time
 			# 		print('Epoch {} - Rank {}: {:.5f}'.format(iepoch, rank, time.time() - eval_start_time))
-				
+
 
 			# 	# elif rank == 6:
 			# 	# try to track the parameters change during training process
@@ -2162,7 +2158,7 @@ def worker(rank, world_size):
 						f.write(f'python {" ".join(sys.argv)} --whether_resume 1\n')
 
 					# submit the job again
-					submit_command = ['sbatch', 
+					submit_command = ['sbatch',
 						f'--export=PREVIOUS_JOB_ID={job_id}',
 						job_submit_path + 'Resume' + job_id + '.submit']
 					# Submit the job and get the new job ID
@@ -2197,7 +2193,7 @@ def worker(rank, world_size):
 							' --note ' + str(args.note) + ' --categorical ' + str(args.categorical) + ' --use_bn ' + ' --embed_dim ' + str(args.embed_dim) + ' --num_CPU ' + str(args.num_CPU) + ' --whether_resume 1\n')
 
 					# submit the job again
-					submit_command = ['qsub', 
+					submit_command = ['qsub',
 						'-v', f"PREVIOUS_JOB_ID={job_id}",
 						job_submit_path + 'Resume' + job_id + '.submit']
 					# Submit the job and get the new job ID
@@ -2231,7 +2227,7 @@ def worker(rank, world_size):
 	# best_guess_model = nn_model(var_idx_to_emb).to(device)
 	# best_guess_model = DDP(best_guess_model)
 	if args.use_swa == 1:
-		torch.optim.swa_utils.update_bn(train_loader, swa_model) 
+		torch.optim.swa_utils.update_bn(train_loader, swa_model)
 		best_guess_model = swa_model
 		best_guess_model.load_state_dict(new_checkpoint['swa_model_state_dict'])
 	else:
