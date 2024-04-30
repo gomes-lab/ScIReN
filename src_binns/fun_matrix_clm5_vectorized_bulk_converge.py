@@ -804,7 +804,7 @@ def kk_matrix_vectorized(xit, xiw, xio, xin, efolding, tau4cwd, tau4l1, tau4l2, 
 	xi_tw = t_scalar*w_scalar*o_scalar
 
 	diagonal_vector = torch.concatenate([kcwd * xi_tw * depth_scalar,
-									     kl1 * xi_tw * depth_scalar * n_scalar,
+										 kl1 * xi_tw * depth_scalar * n_scalar,
 										 kl2 * xi_tw * depth_scalar * n_scalar,
 										 kl3 * xi_tw * depth_scalar * n_scalar,
 										 ks1 * xi_tw * depth_scalar,
@@ -868,7 +868,7 @@ def tri_matrix_alternative_vectorized(nbedrock, slope, intercept, intercept_leac
 	zero_matrix = torch.zeros(n_soil_layer, n_soil_layer, device=device)
 
 	tri_ma = torch.block_diag(zero_matrix, tri_ma_middle, tri_ma_middle, tri_ma_middle,
-				              tri_ma_middle, tri_ma_middle, tri_ma_middle)  # First is zero matrix since CWD vertical mixing is not allowed
+							  tri_ma_middle, tri_ma_middle, tri_ma_middle)  # First is zero matrix since CWD vertical mixing is not allowed
 
 	return tri_ma
 
