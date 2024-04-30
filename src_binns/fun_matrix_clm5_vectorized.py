@@ -10,10 +10,10 @@ def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_de
 	# convert tensor to numpy
 	para = tensor_para
 	# para = (tensor_para - (-1)) /(1 - (-1)) # conversion from Hardttanh [-1, 1] to [0, 1]
-	frocing_steady_state = tensor_frocing_steady_state 
+	frocing_steady_state = tensor_frocing_steady_state
 	obs_layer_depth = tensor_obs_layer_depth
 
-	# depth of the node                                                   
+	# depth of the node
 	zsoi = torch.tensor([1.000000000000000E-002, 4.000000000000000E-002, 9.000000000000000E-002, \
 		0.160000000000000, 0.260000000000000, 0.400000000000000, \
 		0.580000000000000, 0.800000000000000, 1.06000000000000, \
@@ -23,7 +23,7 @@ def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_de
 		6.94000000000000, 8.03000000000000, 9.79500000000000, \
 		13.3277669529664, 19.4831291701244, 28.8707244343160, \
 		41.9984368640029]).to(device)
-	
+
 
 	n_soil_layer = 20
 
@@ -31,7 +31,6 @@ def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_de
 	profile_num = para.shape[0]
 	simu_ouput = (torch.ones((profile_num, 200))*np.nan).to(device)
 	# calculate soc solution for each profile
-	single_example_start = time.time()
 	for iprofile in range(0, profile_num):
 		profile_para = para[iprofile, :]
 		profile_force_steady_state = frocing_steady_state[iprofile, :, :, :]
@@ -41,11 +40,11 @@ def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_de
 		if torch.isnan(torch.sum(profile_para)) == False and \
 			torch.isnan(torch.sum(profile_force_steady_state[0:12, 0, 1:8])) == False and \
 			torch.isnan(torch.sum(profile_force_steady_state[0:20, 0:12, 8:13])) == False:
-			
+
 			# print(profile_para)
 			# model simulation
 			profile_simu_soc = fun_matrix_clm5(profile_para, profile_force_steady_state, vertical_mixing)
-			
+
 			for ilayer in range(0, len(valid_layer_loc)):
 				layer_depth = profile_obs_layer_depth[valid_layer_loc[ilayer]]
 				depth_diff = zsoi[0:n_soil_layer] - layer_depth
@@ -74,14 +73,10 @@ def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_de
 					*(layer_depth - zsoi[node_depth_lower_loc])
 			# end for
 		# end if
-
-		# if iprofile == 0:
-		# 	print("Single example", time.time()-single_example_start)
-
 	#end for iprofile
 	# print("fun_model_simu", time.time()-start_time)
 	return simu_ouput
-	
+
 # end def fun_model_simu
 
 # Model prediction of the soil carbon profile using the CLM5 model
@@ -90,9 +85,9 @@ def fun_model_prediction(tensor_para, tensor_frocing_steady_state, vertical_mixi
 	# convert tensor to numpy
 	para = tensor_para
 	# para = (tensor_para - (-1)) /(1 - (-1)) # conversion from Hardttanh [-1, 1] to [0, 1]
-	frocing_steady_state = tensor_frocing_steady_state 
+	frocing_steady_state = tensor_frocing_steady_state
 
-	# depth of the node                                                   
+	# depth of the node
 	zsoi = torch.tensor([1.000000000000000E-002, 4.000000000000000E-002, 9.000000000000000E-002, \
 		0.160000000000000, 0.260000000000000, 0.400000000000000, \
 		0.580000000000000, 0.800000000000000, 1.06000000000000, \
@@ -102,7 +97,7 @@ def fun_model_prediction(tensor_para, tensor_frocing_steady_state, vertical_mixi
 		6.94000000000000, 8.03000000000000, 9.79500000000000, \
 		13.3277669529664, 19.4831291701244, 28.8707244343160, \
 		41.9984368640029]).to(device)
-	
+
 
 	n_soil_layer = 20
 
@@ -117,11 +112,11 @@ def fun_model_prediction(tensor_para, tensor_frocing_steady_state, vertical_mixi
 		if torch.isnan(torch.sum(profile_para)) == False and \
 			torch.isnan(torch.sum(profile_force_steady_state[0:12, 0, 1:8])) == False and \
 			torch.isnan(torch.sum(profile_force_steady_state[0:20, 0:12, 8:13])) == False:
-			
+
 			# print(profile_para)
 			# model simulation
 			profile_simu_soc = fun_matrix_clm5(profile_para, profile_force_steady_state, vertical_mixing)
-			
+
 			# save simulation results
 			simu_ouput[iprofile, 0:20] = profile_simu_soc
 
@@ -134,9 +129,9 @@ def fun_model_sensitivity(tensor_para, tensor_frocing_steady_state):
 	# convert tensor to numpy
 	para = tensor_para
 	# para = (tensor_para - (-1)) /(1 - (-1)) # conversion from Hardttanh [-1, 1] to [0, 1]
-	frocing_steady_state = tensor_frocing_steady_state 
+	frocing_steady_state = tensor_frocing_steady_state
 
-	# depth of the node                                                   
+	# depth of the node
 	zsoi = torch.tensor([1.000000000000000E-002, 4.000000000000000E-002, 9.000000000000000E-002, \
 		0.160000000000000, 0.260000000000000, 0.400000000000000, \
 		0.580000000000000, 0.800000000000000, 1.06000000000000, \
@@ -146,7 +141,7 @@ def fun_model_sensitivity(tensor_para, tensor_frocing_steady_state):
 		6.94000000000000, 8.03000000000000, 9.79500000000000, \
 		13.3277669529664, 19.4831291701244, 28.8707244343160, \
 		41.9984368640029]).to(device)
-	
+
 
 	n_soil_layer = 20
 
@@ -166,18 +161,18 @@ def fun_model_sensitivity(tensor_para, tensor_frocing_steady_state):
 		if torch.isnan(torch.sum(profile_para)) == False and \
 			torch.isnan(torch.sum(profile_force_steady_state[0:12, 0, 1:8])) == False and \
 			torch.isnan(torch.sum(profile_force_steady_state[0:20, 0:12, 8:13])) == False:
-			
+
 			# print(profile_para)
 			# model simulation
 			profile_simu_soc = fun_matrix_clm5(profile_para, profile_force_steady_state)
-			
+
 
 			# save simulation results
 			simu_ouput[iprofile, 0:20] = profile_simu_soc
 
 	#end for iprofile
 	return simu_ouput
-	
+
 # end def fun_model_simu
 
 
@@ -197,7 +192,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	global timestep_num, season_num, month_num, \
 		kelvin_to_celsius, use_vertsoilc, npool, npool_vr, n_soil_layer, \
 		days_per_year, secspday, days_per_month, days_per_season, days_per_timestep
-		
+
 	season_num = 4
 	month_num = 12
 	kelvin_to_celsius = 273.15
@@ -209,7 +204,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	secspday = 24*60*60
 	days_per_month = torch.tensor([[31, 30, 31, 28, 31, 30, 31, 31, 30, 31, 30, 31]]).transpose(0, 1).to(device)
 	days_per_season = torch.tensor([[92, 89, 92, 92]]).transpose(0, 1).to(device)
-	
+
 	timestep_num = month_num
 	days_per_timestep = days_per_season
 
@@ -228,7 +223,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 		1.04000000000000, 1.14000000000000, 2.39000000000000, \
 		4.67553390593274, 7.63519052838329, 11.1400000000000, \
 		15.1154248593737]).to(device)
-	
+
 	# depth of the interface
 	zisoi = torch.tensor([2.000000000000000E-002, 6.000000000000000E-002, \
 		0.120000000000000, 0.200000000000000, 0.320000000000000, \
@@ -242,7 +237,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 
 	zisoi_0 = 0;
 
-	# depth of the node                                                   
+	# depth of the node
 	zsoi = torch.tensor([1.000000000000000E-002, 4.000000000000000E-002, 9.000000000000000E-002, \
 		0.160000000000000, 0.260000000000000, 0.400000000000000, \
 		0.580000000000000, 0.800000000000000, 1.06000000000000, \
@@ -268,7 +263,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	dz_matrix.diagonal()[120:140] = dz[0:20]
 	dz_matrix_diagonal = dz_matrix.diagonal().view(npool_vr, 1)
 
-	
+
 	#---------------------------------------------------
 	# steady state forcing
 	#---------------------------------------------------
@@ -279,13 +274,13 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	altmax_lastyear_profile_steady_state = frocing_steady_state[0:12, 0, 5]
 	altmax_current_profile_steady_state = frocing_steady_state[0:12, 0, 6]
 	nbedrock_steady_state = frocing_steady_state[0:12, 0, 7].type(torch.int)
-	
+
 	xio_steady_state = frocing_steady_state[0:20, 0:12, 8]
 	xin_steady_state = frocing_steady_state[0:20, 0:12, 9]
 	sand_vector_steady_state = frocing_steady_state[0:20, 0:12, 10]
 	soil_temp_profile_steady_state = frocing_steady_state[0:20, 0:12, 11]
 	soil_water_profile_steady_state = frocing_steady_state[0:20, 0:12, 12]
-	
+
 	#---------------------------------------------------
 	# define parameters to be optimised
 	#---------------------------------------------------
@@ -339,14 +334,14 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	fs3s1 = para[17]*(0.9 - 0.0001) + 0.0001
 	# fraction from cwd to l2, 0.76
 	fcwdl2 = para[18]*(1 - 0.5) + 0.5
-	
+
 	# water scaling factor
 	w_scaling = para[19]*(5 - 0.0001) + 0.0001
 	# beta to describe the shape of vertical profile
 	# beta = 0.95
 	# or fix it at first ~ 0.6/0.7
+	# beta = para[20] *(0.9 - 0.5) + 0.5
 	beta = para[20]*(0.9999 - 0.5) + 0.5
-	# beta = para[20] *(0.9999 - 0.5) + 0.5
 	# beta = 0.7 *(0.9 - 0.5) + 0.5
 	# beta = 0.8
 
@@ -387,7 +382,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	# 			xit_old[ilayer, itimestep] = q10**((273.15 - 298.15)/10)*(fq10**((soil_temp_profile_steady_state[ilayer, itimestep] - (0 + kelvin_to_celsius))/10))
 	# 		# end if soil_temp_profile[ilayer, itimestep] >= 0 + kelvin_to_celsius:
 	# 	# end for layer
-		
+
 	# 	catanf_30 = catanf(torch.tensor(30.0).to(device))
 	# 	normalization_tref = torch.tensor(15).to(device)
 	# 	if normalize_q10_to_century_tfunc == True:
@@ -402,7 +397,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 
 	# New way to calculate xit (vectorized))
 	xit_above_freezing = torch.pow(q10, ((soil_temp_profile_steady_state - (kelvin_to_celsius + 25))/10))  # Above freezing case first
-	xit_below_freezing = torch.pow(q10, ((273.15 - 298.15)/10)) * torch.pow(fq10, ((soil_temp_profile_steady_state - (0 + kelvin_to_celsius))/10))	
+	xit_below_freezing = torch.pow(q10, ((273.15 - 298.15)/10)) * torch.pow(fq10, ((soil_temp_profile_steady_state - (0 + kelvin_to_celsius))/10))
 	freezing_mask = (soil_temp_profile_steady_state < (0 + kelvin_to_celsius)).detach().int()  # Create a mask which is True when the soil temperatue is below freezing
 	xit = xit_above_freezing * (1-freezing_mask) + xit_below_freezing * freezing_mask  # [freezing_mask] = xit_below_freezing[freezing_mask].clone()
 	catanf_30 = catanf(torch.tensor(30.0).to(device))
@@ -435,8 +430,8 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	# assert torch.equal(a_ma_old, a_ma)
 	# assert a_ma.requires_grad
 
-	kk_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device) 
-	tri_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device) 
+	kk_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device)
+	tri_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device)
 
 	for itimestep in range(timestep_num):
 		# decomposition matrix
@@ -451,15 +446,15 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 		# print("kk_ma old", time.time() - start)
 		# start = time.time()
 		kk_ma = kk_matrix_vectorized(timesteply_xit, timesteply_xiw, timesteply_xio, timesteply_xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3)
-		# print("kk_ma_vectorized", time.time() - start)
 		# check whether kk_ma requires grad
 		# print("kk_ma requires grad", kk_ma.requires_grad)
 		# assert torch.equal(kk_ma_old, kk_ma)
+		# print("kk_ma_vectorized", time.time() - start)
 		# assert kk_ma.requires_grad
 
 		kk_ma_middle[:, :, itimestep] = kk_ma
 
-		# tri matrix	
+		# tri matrix
 		timesteply_nbedrock = nbedrock_steady_state[itimestep]
 		timesteply_altmax_current_profile = altmax_current_profile_steady_state[itimestep]
 		timesteply_altmax_lastyear_profile = altmax_lastyear_profile_steady_state[itimestep]
@@ -484,17 +479,17 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	# check whether kk_ma requires grad
 	# print("kk_ma requires grad", kk_ma.requires_grad)
 	# print("tri_ma requires grad", tri_ma.requires_grad)
-	
+
 	#---------------------------------------------------
 	# steady state vertical profile, input allocation
 	#---------------------------------------------------
 	# in the original beta model in Jackson et al 1996, the unit for the depth of the soil is cm (dmax*100)
 	m_to_cm = 100
 
-	vertical_prof = (torch.ones(n_soil_layer)*np.nan).to(device) 
+	vertical_prof = (torch.ones(n_soil_layer)*np.nan).to(device)
 	if torch.mean(altmax_lastyear_profile_steady_state) > 0:
 		# # Old way of calculating vertical_prof
-		# vertical_prof_old = (torch.ones(n_soil_layer)*np.nan).to(device) 
+		# vertical_prof_old = (torch.ones(n_soil_layer)*np.nan).to(device)
 		# for j in range(n_soil_layer): #1:n_soil_layer
 		# 	if j == 0: # first layer
 		# 		vertical_prof_old[j] = (beta**((zisoi_0)*m_to_cm) - beta**(zisoi[j]*m_to_cm))/dz[j]
@@ -504,7 +499,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 		# # end for j in range(n_soil_layer):
 
 		# New way to calculate vertical_prof (vectorized)
-		vertical_prof = (torch.ones(n_soil_layer)*np.nan).to(device) 
+		vertical_prof = (torch.ones(n_soil_layer)*np.nan).to(device)
 		vertical_prof[0] = (beta**((zisoi_0)*m_to_cm) - beta**(zisoi[0]*m_to_cm))/dz[0]
 		vertical_prof[1:n_soil_layer] = (beta**((zisoi[0:n_soil_layer-1])*m_to_cm) - beta**(zisoi[1:n_soil_layer]*m_to_cm))/dz[1:n_soil_layer]
 		# assert torch.equal(vertical_prof_old, vertical_prof)
@@ -515,11 +510,11 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	# end if np.mean(altmax_lastyear_profile_steady_state) > 0:
 
 	vertical_input = dz[0:n_soil_layer]*vertical_prof/sum(vertical_prof*dz[0:n_soil_layer])
-	
+
 	#---------------------------------------------------
 	# steady state analytical solution of soc
 	#---------------------------------------------------
-	matrix_in = (torch.ones([npool_vr, 1])*np.nan).to(device) 
+	matrix_in = (torch.ones([npool_vr, 1])*np.nan).to(device)
 	# total input amount
 	input_tot_cwd = torch.nansum(input_vector_cwd_steady_state)/days_per_year # (gc/m2/day)
 	input_tot_litter1 = torch.nansum(input_vector_litter1_steady_state)/days_per_year # (gc/m2/day)
@@ -539,7 +534,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	# matrix_in[40:60, 0] = input_tot_litter2*vertical_input
 	# matrix_in[60:80, 0] = input_tot_litter3*vertical_input
 	# matrix_in[80:140, 0] = 0
-	
+
 	# analytical solution of soc pools
 	try:
 		# torch 1.7
@@ -580,25 +575,25 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 			print(matrix_in)
 		if torch.det(torch.matmul(a_ma, kk_ma)-tri_ma) == 0:
 			print("a_ma*kk_ma - tri_ma is singular")
-		
 
-		# cpool_steady_state = torch.linalg.lstsq((torch.matmul(a_ma, kk_ma)-tri_ma), (-matrix_in)).solution 
+
+		# cpool_steady_state = torch.linalg.lstsq((torch.matmul(a_ma, kk_ma)-tri_ma), (-matrix_in)).solution
 		cpool_steady_state = (torch.ones([140, 1])*(-1.0)).to(device)*torch.sum(para)/torch.sum(para)
 	# end try
-	# cpool_steady_state = (torch.ones([140, 1])*(-9999.)).to(device)*torch.sum(para)/torch.sum(para) 
+	# cpool_steady_state = (torch.ones([140, 1])*(-9999.)).to(device)*torch.sum(para)/torch.sum(para)
 	# end try
 	soc_layer = torch.cat((cpool_steady_state[80:100, :], cpool_steady_state[100:120, :], cpool_steady_state[120:140, :]), dim = 1)
 	soc_layer = torch.sum(soc_layer, axis = 1) # unit gC/m3
 
-	
-	
+
+
 	# if soc_layer[-1] > soc_layer[0]:
 	# 	soc_layer =  (torch.ones(20)*(-9999.*3))
 	# # end if soc_layer[-1] > soc_layer[0]:
-	
+
 	outcome = soc_layer
 	return outcome
-	
+
 #end def fun_forward_simu_clm5
 
 
@@ -615,7 +610,7 @@ def a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, san
 	a_ma_vr = torch.diag(-1*torch.ones(nspools_vr)).to(device)
 
 	fcwdl3 = 1 - fcwdl2
-	
+
 	transfer_fraction = [fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, fcwdl3]
 	for j in range(nlevdecomp):
 		a_ma_vr[(3-1)*nlevdecomp+j,(1-1)*nlevdecomp+j] = transfer_fraction[8]
@@ -630,13 +625,13 @@ def a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, san
 		a_ma_vr[(7-1)*nlevdecomp+j,(6-1)*nlevdecomp+j] = transfer_fraction[6]
 	# end for ilayer
 	return a_ma_vr
-	
+
 # end def a_matrix
 
 # If a_ma is a block matrix where each A_{ij} is (nlevdecomp x nlevdecomp),
 # returns a VIEW of relevant block A_{ij}.
 # The returned tensor shares the same memory as a_ma!!!
-# For consistency with the paper (Lu et al. 2020), i and j are indexed from 1. 
+# For consistency with the paper (Lu et al. 2020), i and j are indexed from 1.
 def get_view(a_ma, nlevdecomp, i, j):
 	return a_ma[(i-1)*nlevdecomp:i*nlevdecomp, (j-1)*nlevdecomp:j*nlevdecomp]
 
@@ -644,7 +639,7 @@ def get_view(a_ma, nlevdecomp, i, j):
 # If a_ma is a block matrix where each A_{ij} is (nlevdecomp x nlevdecomp),
 # fills in the diagonal of block A_{ij} with "value".
 # "value" is assumed to be a tensor with a single element.
-# For consistency with the paper (Lu et al. 2020), i and j are indexed from 1. 
+# For consistency with the paper (Lu et al. 2020), i and j are indexed from 1.
 # Modifies a_ma in place.
 def fill_submatrix_diagonal(a_ma, nlevdecomp, i, j, value):
 	# diag_vector = value.repeat(nlevdecomp)   #TODO - just changed @joshuafan
@@ -682,15 +677,15 @@ def a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, 
 
 def kk_matrix(xit, xiw, xio, xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3):
 	device = xit.device
-	
+
 	n_soil_layer = 20
 	days_per_year = 365
 	# env scalars
-	n_scalar = xin[:n_soil_layer] # nitrogen 
+	n_scalar = xin[:n_soil_layer] # nitrogen
 	t_scalar = xit[:n_soil_layer] # temperature
 	w_scalar = xiw[:n_soil_layer] # water
 	o_scalar = xio[:n_soil_layer] # oxygen
-	
+
 	# decomposition rate
 	kl1 = 1/(days_per_year * tau4l1)
 	kl2 = 1/(days_per_year  * tau4l2)
@@ -704,7 +699,7 @@ def kk_matrix(xit, xiw, xio, xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau
 
 	depth_scalar = torch.exp(-zsoi/decomp_depth_efolding)
 	xi_tw = t_scalar*w_scalar*o_scalar
-	
+
 	kk_ma_vr = (torch.zeros([npool_vr, npool_vr])).to(device)
 	for j in range(n_soil_layer):
 		kk_ma_vr[0*n_soil_layer+j, 0*n_soil_layer+j] = kcwd * xi_tw[j] * depth_scalar[j]
@@ -724,15 +719,15 @@ def kk_matrix(xit, xiw, xio, xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau
 
 def kk_matrix_vectorized(xit, xiw, xio, xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3):
 	device = xit.device
-	
+
 	n_soil_layer = 20
 	days_per_year = 365
 	# env scalars
-	n_scalar = xin[:n_soil_layer] # nitrogen 
+	n_scalar = xin[:n_soil_layer] # nitrogen
 	t_scalar = xit[:n_soil_layer] # temperature
 	w_scalar = xiw[:n_soil_layer] # water
 	o_scalar = xio[:n_soil_layer] # oxygen
-	
+
 	# decomposition rate
 	kl1 = 1/(days_per_year * tau4l1)
 	kl2 = 1/(days_per_year  * tau4l2)
@@ -758,7 +753,7 @@ def kk_matrix_vectorized(xit, xiw, xio, xin, efolding, tau4cwd, tau4l1, tau4l2, 
 	return torch.diag(diagonal_vector)
 	# return kk_ma_vr
 
-						
+
 # only diffusion
 def tri_matrix_alternative(nbedrock, slope, intercept, device):
 	# slope = -1.2
@@ -814,12 +809,12 @@ def tri_matrix_alternative_vectorized(nbedrock, slope, intercept, intercept_leac
 
 	tri_ma = torch.block_diag(zero_matrix, tri_ma_middle, tri_ma_middle, tri_ma_middle,
 				              tri_ma_middle, tri_ma_middle, tri_ma_middle)  # First is zero matrix since CWD vertical mixing is not allowed
-	
+
 	return tri_ma
 
 # Import the improved code
-def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, cryoturb_diffusion_k,):
-	
+def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, cryoturb_diffusion_k):
+
 	device = nbedrock.device
 
 	nlevdecomp = n_soil_layer
@@ -856,7 +851,7 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	f_m1 = torch.zeros(nlevdecomp+1).to(device) # water flux for previous j
 	pe_p1 = torch.zeros(nlevdecomp+1).to(device) # Peclet # for next j
 	pe_m1 = torch.zeros(nlevdecomp+1).to(device) # Peclet # for previous j
-	
+
 	w_p1 = torch.zeros(nlevdecomp+1).to(device)
 	w_m1 = torch.zeros(nlevdecomp+1).to(device)
 
@@ -932,7 +927,7 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	# w_p1[:-2] = (zsoi[:nlevdecomp+1][1:-1] - zisoi[:nlevdecomp+1][:-2]) / dz_node[:nlevdecomp+1][1:-1]  # Skip the last two layers for w_p1
 	# Try to avoid inplace operations
 	w_p1 = torch.cat([(zsoi[:nlevdecomp+1][1:-1] - zisoi[:nlevdecomp+1][:-2]) / dz_node[:nlevdecomp+1][1:-1], w_p1[-2:]])
-	
+
 
 	# Harmonic mean for internal layers, with adjustments for boundary conditions
 	inner_layers = (diffus[1:] > 0) & (diffus[:-1] > 0)  # Boolean mask for layers where both adjacent diffusivities are > 0
@@ -950,7 +945,7 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 
 
 	# Layer lower than nbedrock-1: d_p1_zp1 = d_m1_zm1
-	
+
 
 	# Bottom layer - assume no gradient in dz
 	# w_m1[-1] = (zisoi[:nlevdecomp+1][-2] - zsoi[:nlevdecomp+1][-2]) / dz_node[:nlevdecomp+1][-1]
@@ -1031,16 +1026,16 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	# 			tri_ma[j+(i)*nlevdecomp,j+(i)*nlevdecomp] = -c_tri_dz[j]
 	# 			# print(i, j, 1+(i)*nlevdecomp, tri_ma[1+(i)*nlevdecomp,1+(i)*nlevdecomp])
 
-	# 		# end if j == 0: 
+	# 		# end if j == 0:
 	# 		if j == (nlevdecomp-1):  # bottom boundary
 	# 			tri_ma[nlevdecomp-1+(i)*nlevdecomp,nlevdecomp-1+(i)*nlevdecomp] = -a_tri_dz[nlevdecomp-1]
 	# 		# end if j == (nlevdecomp-1):
 	# 		if j < (nlevdecomp-1): # avoid tranfer from for example, litr3_20th layer to soil1_1st layer
 	# 			tri_ma[j+(i)*nlevdecomp,j+1+(i)*nlevdecomp] = c_tri_dz[j]
 
-	# 		# end if j < (nlevdecomp-1): 
+	# 		# end if j < (nlevdecomp-1):
 
-		
+
 	# 		if j > 0: # avoid tranfer from for example,soil1_1st layer to litr3_20th layer
 	# 			tri_ma[j+(i)*nlevdecomp,j-1+(i)*nlevdecomp] = a_tri_dz[j]
 
@@ -1080,7 +1075,7 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	# Fill off-diagonals for c_tri_dz
 	off_diag_indices_right = torch.arange(19, 139)  # Right off-diagonal
 	tri_ma[torch.arange(19, 139), torch.arange(20, 140)] = expanded_c[off_diag_indices_right]
-	
+
 
 	# Fill off-diagonals for a_tri_dz
 	off_diag_indices_left = torch.arange(20, 140)  # Left off-diagonal
@@ -1088,12 +1083,12 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 
 	# Adjust for upper boundary conditions across blocks
 	tri_ma[upper_boundary_indices, upper_boundary_indices-1] = 0
-	
+
 	# Adjust for bottom boundary conditions across blocks
 	bottom_boundary_indices = torch.arange(39, 120, 20)
 	tri_ma[bottom_boundary_indices, bottom_boundary_indices+1] = 0
 
-	
+
 
 
 
@@ -1105,20 +1100,20 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	# 			tri_ma[1+(i)*nlevdecomp,1+(i)*nlevdecomp] = -c_tri_dz[1]
 	# 			# print(i, j, 1+(i)*nlevdecomp, tri_ma[1+(i)*nlevdecomp,1+(i)*nlevdecomp])
 
-	# 		# end if j == 0: 
+	# 		# end if j == 0:
 	# 		if j == (nlevdecomp-1):  # bottom boundary
 	# 			tri_ma[nlevdecomp-1+(i)*nlevdecomp,nlevdecomp-1+(i)*nlevdecomp] = -a_tri_dz[nlevdecomp-1]
 	# 		# end if j == (nlevdecomp-1):
 	# 		if j < (nlevdecomp-1): # avoid tranfer from for example, litr3_20th layer to soil1_1st layer
 	# 			tri_ma[j+(i)*nlevdecomp,j+1+(i)*nlevdecomp] = c_tri_dz[j]
 
-	# 		# end if j < (nlevdecomp-1): 
+	# 		# end if j < (nlevdecomp-1):
 
-		
+
 	# 		if j > 0: # avoid tranfer from for example,soil1_1st layer to litr3_20th layer
 	# 			tri_ma[j+(i)*nlevdecomp,j-1+(i)*nlevdecomp] = a_tri_dz[j]
 
-	
+
 
 	return tri_ma
 
@@ -1158,7 +1153,7 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 	f_m1 = torch.zeros(nlevdecomp+1).to(device) # water flux for previous j
 	pe_p1 = torch.zeros(nlevdecomp+1).to(device) # Peclet # for next j
 	pe_m1 = torch.zeros(nlevdecomp+1).to(device) # Peclet # for previous j
-	
+
 	w_p1 = torch.zeros(nlevdecomp+1).to(device)
 	w_m1 = torch.zeros(nlevdecomp+1).to(device)
 	#------ first get diffusivity / advection terms -------
@@ -1210,7 +1205,7 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 	#		diffus[j] = som_diffus_coef[j]
 	#	# end abs(som_diffus_coef[j])  < epsilon:
 	## end for j in range(nlevdecomp+1):
-	
+
 	# Set Pe (Peclet #) and D/dz throughout column
 	for j in range(nlevdecomp+1):
 		if abs(som_adv_coef[j])  < epsilon:
@@ -1218,26 +1213,26 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 		else:
 			adv_flux[j] = som_adv_coef[j]
 		# end if abs(som_adv_coef[j])  < epsilon:
-		
+
 		if abs(som_diffus_coef[j])  < epsilon:
 			diffus[j] = epsilon
 		else:
 			diffus[j] = som_diffus_coef[j]
 		# end if abs(som_diffus_coef[j])  < epsilon:
-		
-		
+
+
 		# Calculate the D and F terms in the Patankar algorithm
 		if j == 0:
 			d_m1_zm1[j] = 0.
 			w_m1[j] = 0.
 			w_p1[j] = (zsoi[j+1] - zisoi[j]) / dz_node[j+1]
-			
+
 			if diffus[j+1] > 0. and diffus[j] > 0.:
 				d_p1_zp1[j] = 1. / ((1. - w_p1[j].clone()) / diffus[j].clone() + w_p1[j].clone() / diffus[j+1].clone()) # Harmonic mean of diffus
 			else:
 				d_p1_zp1[j] = 0.
 			# end diffus[j+1] > 0. and diffus[j] > 0.:
-			
+
 			d_p1_zp1[j] = d_p1_zp1[j] / dz_node[j+1]
 			f_m1[j] = adv_flux[j]  # Include infiltration here
 			f_p1[j] = adv_flux[j+1]
@@ -1253,7 +1248,7 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 			else:
 				d_m1_zm1[j] = 0.
 			# end diffus[j] > 0. and diffus[j-1] > 0.:
-			
+
 			d_m1_zm1[j] = d_m1_zm1[j] / dz_node[j]
 			d_p1_zp1[j] = d_m1_zm1[j] # Set to be the same
 			f_m1[j] = adv_flux[j]
@@ -1265,7 +1260,7 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 			# Use distance from j-1 node to interface with j divided by distance between nodes
 			w_m1[j] = (zisoi[j-1] - zsoi[j-1]) / dz_node[j]
 			w_p1[j] = (zsoi[j+1] - zisoi[j]) / dz_node[j+1]
-			
+
 			if diffus[j-1] > 0. and diffus[j] > 0.:
 				d_m1_zm1[j] = 1. / ((1. - w_m1[j].clone()) / diffus[j].clone() + w_m1[j].clone() / diffus[j-1].clone()) # Harmonic mean of diffus
 			else:
@@ -1277,7 +1272,7 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 			else:
 				d_p1_zp1[j] = (1. - w_m1[j].clone()) * diffus[j].clone() + w_p1[j].clone() * diffus[j+1].clone() # Arithmetic mean of diffus
 			# end if diffus[j+1] > 0. and diffus[j] > 0.:
-			
+
 			d_m1_zm1[j] = d_m1_zm1[j] / dz_node[j]
 			d_p1_zp1[j] = d_p1_zp1[j] / dz_node[j+1]
 			f_m1[j] = adv_flux[j]
@@ -1285,8 +1280,8 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 			# pe_m1[j] = f_m1[j].clone() / d_m1_zm1[j] # Peclet #
 			# pe_p1[j] = f_p1[j].clone() / d_p1_zp1[j] # Peclet #
 		# end j == 0:
-	# end for j in range(nlevdecomp+1): 
-	
+	# end for j in range(nlevdecomp+1):
+
 	# Peclet #
 	for j in range(nlevdecomp+1):
 		if d_m1_zm1[j] == 0.:
@@ -1325,16 +1320,16 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 			# a_tri(j) = -1.
 			# b_tri(j) = 1.
 			# c_tri(j) = 0.
-		# end if j == 0: 
+		# end if j == 0:
 	# end for j in range(nlevdecomp+2)
-	
+
 	for j in range(nlevdecomp):
 		# elements for vertical matrix match unit g/m3,  Tri/dz
 		a_tri_dz[j] = a_tri_e[j] / dz[j]
 		b_tri_dz[j] = b_tri_e[j] / dz[j]
 		c_tri_dz[j] = c_tri_e[j] / dz[j]
 	# end for j in range(nlevdecomp):
-	
+
 
 	for i in range(1, npool):
 		start_idx = i * nlevdecomp
@@ -1360,7 +1355,7 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 
 			tri_ma[diag_indices[:-1], upper_diag_indices] = c_tri_dz[:-1]
 			tri_ma[diag_indices[1:], lower_diag_indices] = a_tri_dz[1:]
-	
+
 	return tri_ma
 
 # end def tri_matrix
