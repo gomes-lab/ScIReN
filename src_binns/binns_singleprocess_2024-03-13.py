@@ -10,9 +10,10 @@ import random
 import warnings
 import subprocess
 import argparse
-from mlp import mlp_wrapper
+from mlp import GCN_BINN, mlp_wrapper
 from torch.optim.swa_utils import AveragedModel, SWALR
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from pe_gcn_model import GridCellSpatialRelationEncoder
 
 # sys.path.append('C:/Users/hx293/Research_Data/BINN/')
 # sys.path.append('/glade/u/home/haodixu/BINN')
@@ -83,7 +84,7 @@ parser = argparse.ArgumentParser()
 
 # Model architecture and note
 parser.add_argument("--note", type=str, default="", help="Optional name to give to the model")
-parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp'], help="Model type")
+parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp', 'gcn'], help="Model type")
 parser.add_argument("--categorical", type=str, default="embedding", choices=["embedding", "one_hot"], help="Which embedding to use for categorical variables")
 parser.add_argument("--embed_dim", type=int, default=5, help="Embedding dim for each categorical variable (if using embeddings)")
 parser.add_argument("--use_bn", action='store_true', help="Whether to use batchnorm")
@@ -102,6 +103,11 @@ parser.add_argument("--weight_decay", type=float, default=1e-4)
 parser.add_argument("--use_swa", action='store_true', help="Whether to use Stochastic Weight Averaging")
 parser.add_argument("--clip_value", type=float, default=1, help="Clip value for gradient clipping")
 
+# Positional encoding
+parser.add_argument("--lonlat_features", action='store_true', help="Whether longitude and latitude should be passed as features")
+parser.add_argument("--pos_enc", type=str, default='none', choices=['none', 'early', 'late'], 
+					help="Whether to use positional encoding. 'early' means that positional encoding is concatenated with other features. 'late' means that it is only used as an error term for the latent parameters.")
+parser.add_argument("--k", type=int, default=20, help="Nearest neighbors for graph (GCN only)")
 # Loss terms
 parser.add_argument("--losses", nargs="+", choices=["l1", "l2", "param_reg", "spectral", "lipmlp", "cure"], default=["l1", "param_reg"])
 parser.add_argument("--loss_weighting", choices=["manual", "relobralo", "IMTL", "two_stage"])
@@ -154,10 +160,8 @@ else:
 device = torch.device(dev)
 print(datetime.now(), '------------all packages loaded------------ device:', dev)
 
-time_stamp = str(datetime.now()).replace(':', '_').replace(' ', '_').replace('.', '_')
-job_begin_time = time.time()
-
 # @joshuafan: Create a "job id" using timestamp, note, and PBS jobid
+job_begin_time = time.time()
 if args.whether_resume == 0:
 	# If not resuming, create a new job id
 	job_id = time.strftime("%Y%m%d-%H%M%S")  # Convert datetime to string: https://stackoverflow.com/questions/10607688/how-to-create-a-file-name-with-the-current-date-time-in-python
@@ -302,6 +306,11 @@ para_names = ['slope', 'intercept', 'q10', 'efolding', 'taucwd', 'taul1', 'taul2
 if args.vertical_mixing == 'simple_two_intercepts':
 	para_names.append('intercept_leach')
 # para_names = ['diffus', 'cryo', 'q10', 'efolding', 'taucwd', 'taul1', 'taul2', 'tau4s1', 'tau4s2', 'tau4s3', 'fl1s1', 'fl2s1', 'fl3s2', 'fs1s2', 'fs1s3', 'fs2s1', 'fs2s3', 'fs3s1', 'fcwdl2', 'w-scaling', 'beta']
+
+# parameters index for retrieval test
+# If choosing all parameters
+para_index = np.arange(0, len(para_names))
+# para_index = [0, 2, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20]
 
 # soil depths info
 # width between two interfaces
@@ -629,7 +638,6 @@ col_max_min = col_max_min['col_max_min']
 for group in categorical_vars:
 	for var in group:
 		idx = env_info_names.index(var)
-		# print("Var {} Nans {}".format(var, np.count_nonzero(np.isnan(env_info[:, idx]))))
 		col_max_min[idx, :] = np.nan
 
 # warnings.filterwarnings("error")
@@ -653,7 +661,7 @@ env_info = df(env_info)
 
 
 env_info.columns = env_info_names
-env_info["original_lon"] = original_lons
+env_info["original_lon"] = original_lons  # Save original lon/lat (before rescaling)
 env_info["original_lat"] = original_lats
 
 # # @joshuafan added temporarily
@@ -695,13 +703,19 @@ var4nn = ['Lon', 'Lat', \
 'cesm2_vegc', \
 'nbedrock']
 
+# If desired, remove lon/lat as features
+if not args.lonlat_features:
+	var4nn.remove('Lon')
+	var4nn.remove('Lat')
+	print(f"Not using Lon/Lat as features. Remaining features: {var4nn}")
 
 
 #---------------------------------------------------
 # training data
 #---------------------------------------------------
-current_data_x = np.ones((len(profile_collection), 60, 12, 13))*np.nan
-current_data_x[:, 0:60, 0, 0] = np.array(env_info.loc[profile_collection[:, 0], var4nn])
+assert len(var4nn) >= 20
+current_data_x = np.ones((len(profile_collection), len(var4nn), 12, 13))*np.nan
+current_data_x[:, 0:len(var4nn), 0, 0] = np.array(env_info.loc[profile_collection[:, 0], var4nn])
 current_data_x[:, 0:12, 0, 1] = model_force_input_vector_cwd
 current_data_x[:, 0:12, 0, 2] = model_force_input_vector_litter1
 current_data_x[:, 0:12, 0, 3] = model_force_input_vector_litter2
@@ -722,6 +736,8 @@ current_data_z = obs_depth_matrix
 
 lons = np.array(env_info.loc[profile_collection[:, 0], "original_lon"])
 lats = np.array(env_info.loc[profile_collection[:, 0], "original_lat"])
+current_data_c = np.stack([lons, lats], axis=1)  # [profile, 2]: lon/lat of each site
+
 
 # for col_idx, col_name in enumerate(var4nn):
 # 	envir_var_values = current_data_x[:, col_idx, 0, 0]
@@ -758,7 +774,7 @@ lats = np.array(env_info.loc[profile_collection[:, 0], "original_lat"])
 
 
 nan_loc = np.nanmean(current_data_y, axis = 1) + \
-			np.sum(current_data_x[:, 0:60, 0, 0], axis = 1) + \
+			np.sum(current_data_x[:, 0:len(var4nn), 0, 0], axis = 1) + \
 			np.sum(model_force_input_vector_cwd, axis = 1) + \
 			np.sum(model_force_input_vector_litter1, axis = 1) + \
 			np.sum(model_force_input_vector_litter2, axis = 1) + \
@@ -777,12 +793,14 @@ valid_profile_loc = np.where(np.isnan(nan_loc) == False)[0] ### Why change the s
 current_data_y = current_data_y[valid_profile_loc, :]
 current_data_z = current_data_z[valid_profile_loc, :]
 current_data_x = current_data_x[valid_profile_loc, :, :, :]
+current_data_c = current_data_c[valid_profile_loc, :]
 current_data_profile_id = profile_collection[valid_profile_loc, 0]
 obs_upper_depth_matrix = obs_upper_depth_matrix[valid_profile_loc, :]
 obs_lower_depth_matrix = obs_lower_depth_matrix[valid_profile_loc, :]
 print("Shape of current data x", current_data_x.shape)
 print("Shape of current data y", current_data_y.shape)
 print("Shape of current data z", current_data_z.shape)
+print("Shape of current data c", current_data_c.shape)
 print("Shape of obs upper depth matrix", obs_upper_depth_matrix.shape)
 print("Shape of obs lower depth matrix", obs_lower_depth_matrix.shape)
 # env_info = env_info.loc[valid_profile_loc, :]
@@ -805,6 +823,9 @@ if args.whether_resume == 0:
 
 		train_z = torch.tensor(current_data_z[train_loc, :], dtype = torch.float32)
 		val_z = torch.tensor(current_data_z[val_loc, :], dtype = torch.float32)
+
+		train_c = torch.tensor(current_data_c[train_loc, :], dtype = torch.float32)
+		val_c = torch.tensor(current_data_c[val_loc, :], dtype = torch.float32)
 
 		train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype = torch.float32)
 		# train_x = train_x.requires_grad_(True)
@@ -831,6 +852,10 @@ if args.whether_resume == 0:
 		val_z = torch.tensor(current_data_z[val_loc, :], dtype=torch.float32)
 		test_z = torch.tensor(current_data_z[test_loc, :], dtype=torch.float32)
 
+		train_c = torch.tensor(current_data_c[train_loc, :], dtype=torch.float32)
+		val_c = torch.tensor(current_data_c[val_loc, :], dtype=torch.float32)
+		test_c = torch.tensor(current_data_c[test_loc, :], dtype=torch.float32)
+
 		train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype=torch.float32)
 		# train_x = train_x.requires_grad_(True)
 		val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype=torch.float32)
@@ -855,6 +880,10 @@ else:
 	val_z = torch.tensor(current_data_z[val_loc, :], dtype=torch.float32)
 	test_z = torch.tensor(current_data_z[test_loc, :], dtype=torch.float32)
 
+	train_c = torch.tensor(current_data_c[train_loc, :], dtype=torch.float32)
+	val_c = torch.tensor(current_data_c[val_loc, :], dtype=torch.float32)
+	test_c = torch.tensor(current_data_c[test_loc, :], dtype=torch.float32)
+
 	train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype=torch.float32)
 	val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype=torch.float32)
 	test_x = torch.tensor(current_data_x[test_loc, :, :, :], dtype=torch.float32)
@@ -864,38 +893,13 @@ else:
 	test_profile_id = torch.tensor(current_data_profile_id[test_loc], dtype=torch.long)
 
 
-
-# test
-# torch.autograd.set_detect_anomaly(True)
-
-# pred_para = torch.rand((len(train_loc), len(para_names)), requires_grad = True)
-# soc_simu = fun_model_simu(pred_para[0:32, :], train_y[0:32, :, :, :])
-# soc_true =  train_y[0:32, :, 0, 0]
-# 
-# 
-# soc_simu_vector = torch.reshape(soc_simu, [1, -1])
-# soc_true_vector = torch.reshape(soc_true, [1, -1])
-# 
-# valid_loc = torch.where(torch.isnan(soc_simu_vector+soc_true_vector) == False) 
-# 
-# soc_simu_vector = soc_simu_vector[valid_loc]
-# soc_true_vector = soc_true_vector[valid_loc]
-# 
-# modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/torch.sum((soc_true_vector - torch.mean(soc_true_vector))**2)
-# 
-# modeling_inefficiency.backward(retain_graph=True)
-
-# print(datetime.now(), '------------nn data prepared------------')
-
-
-
 #---------------------------------------------------
 # Grid env info for prediction
 #---------------------------------------------------
 # load grid env info
 grid_env_info = loadmat(data_dir_input + 'wosis_2019_snap_shot/world_grid_envinfo_present.mat')
 grid_env_info = grid_env_info['EnvInfo']
-original_lons_grid = grid_env_info[:, 0].copy()
+original_lons_grid = grid_env_info[:, 0].copy()  # Save original lon/lat (before rescaling)
 original_lats_grid = grid_env_info[:, 1].copy()
 
 
@@ -1002,8 +1006,8 @@ for irow in np.arange(0, grid_env_info_num):
 # end
 
 # wrapping up for the nn prediction
-predict_data_x = np.ones((grid_env_info_num, 60, 12, 13))*np.nan
-predict_data_x[:, 0:60, 0, 0] = np.array(grid_env_info_US.loc[:, var4nn])
+predict_data_x = np.ones((grid_env_info_num, len(var4nn), 12, 13))*np.nan
+predict_data_x[:, 0:len(var4nn), 0, 0] = np.array(grid_env_info_US.loc[:, var4nn])
 predict_data_x[:, 0:12, 0, 1] = model_force_pred_input_vector_cwd
 predict_data_x[:, 0:12, 0, 2] = model_force_pred_input_vector_litter1
 predict_data_x[:, 0:12, 0, 3] = model_force_pred_input_vector_litter2
@@ -1019,6 +1023,7 @@ predict_data_x[:, 0:20, 0:12, 12] = model_force_pred_soil_water_profile
 
 # create dummy z since it is not used in the prediction
 predict_data_z = np.ones((grid_env_info_num))*np.nan
+predict_data_c = np.stack([original_lons_grid, original_lats_grid], axis=1)
 
 # print(datetime.now(), '------------grid env info prepared------------')
 print(datetime.now(), '------------ FINISHED ALL PREPROCESSING ------------')
@@ -1044,8 +1049,6 @@ def binns_loss(y_pred, y_true, pred_para, plot_path=""):
 	# predicted parameters
 	pred_para = pred_para
 
-	# print("Shape of model input", model_input.shape)
-	# New input has shape: [32, 193]
 	# flatten simulation
 	soc_simu_vector = torch.reshape(soc_simu, [1, -1])
 	soc_true_vector = torch.reshape(soc_true, [1, -1])
@@ -1102,27 +1105,45 @@ def binns_loss_simple(y_pred, y_true):
 #---------------------------------------------------
 # define model
 class nn_model(nn.Module):
-	def __init__(self, var_idx_to_emb, vertical_mixing):
+	def __init__(self, var_idx_to_emb, vertical_mixing, pos_enc):
 		super().__init__()
 
 		# Dict from categorical variable index -> Embedding layer we use
 		self.var_idx_to_emb = var_idx_to_emb
 		self.vertical_mixing = vertical_mixing
+		self.pos_enc = pos_enc
 
 		# List of non-categorical variable indices
 		self.non_categorical_indices = list(set(list(range(len(var4nn)))).difference(var_idx_to_emb.keys()))
-		# print("Categorical indices", var_idx_to_emb.keys())
-		# print("Noncategorical indices", self.non_categorical_indices)
-		new_input_size = len(self.non_categorical_indices)
+		self.new_input_size = len(self.non_categorical_indices)
 		for idx, emb in self.var_idx_to_emb.items():
 			## for embedding layer ##
-			new_input_size += emb.embedding_dim
+			self.new_input_size += emb.embedding_dim
 			# ## for one-hot encoding ##
-			# new_input_size += emb
+			# self.new_input_size += emb
+
+		# Number of parameters (output dim of MLP)
+		if self.vertical_mixing == 'simple_two_intercepts':
+			self.num_params = 22
+		else:
+			self.num_params = 21
+
+		# Spatial Encoder from PE-GNN
+		if pos_enc != "none":
+			self.spatial_encoder = GridCellSpatialRelationEncoder(
+				spa_embed_dim=self.num_params,
+				coord_dim=2, # Longitude and latitude
+				frequency_num=16, 
+				max_radius=360,
+				min_radius=1e-06,
+				freq_init="geometric",
+				ffn=True # Enable feedforward network for final spatial embeddings
+			)
+			self.new_input_size += self.num_params  # Add the spatial embeddings
 
 		# Neural network layers
 		# first layer
-		self.l1 = nn.Linear(new_input_size, 128)
+		self.l1 = nn.Linear(self.new_input_size, 128)
 		# torch.nn.init.xavier_uniform_(self.l1.weight)
 		# nn.init.zeros_(self.l1.bias)
 		
@@ -1145,13 +1166,9 @@ class nn_model(nn.Module):
 
 
 		# fifth layer
-		if self.vertical_mixing == 'simple_two_intercepts':
-			self.l5 = nn.Linear(128, 22)
-		else:
-			self.l5 = nn.Linear(128, 21) # 21 parameters
+		self.l5 = nn.Linear(128, self.num_params)
 		# torch.nn.init.xavier_uniform_(self.l5.weight)
 		# nn.init.zeros_(self.l5.bias)
-
 
 		# Dropout layers
 		self.dropout = nn.Dropout(0)
@@ -1206,10 +1223,11 @@ class nn_model(nn.Module):
 		# torch.nn.init.xavier_uniform_(self.transform_h3_to_h4.weight)
 		# nn.init.zeros_(self.transform_h3_to_h4.bias)
 
-	def forward(self, input_var, wosis_depth, whether_predict, return_input=False):
+	def forward(self, input_var, wosis_depth, coords, whether_predict, return_input=False):
 		predictor = input_var[:, :, 0, 0]
 		forcing = input_var[:, :, :, :]
 		obs_depth = wosis_depth
+		coords = coords.unsqueeze(1).detach().cpu().numpy()  # coords should be a numpy array
 
 		# Compute embeddings for all categorical variables
 		embs = []
@@ -1224,6 +1242,11 @@ class nn_model(nn.Module):
 			embs.append(emb)
 		all_embs = torch.concatenate(embs, dim=1)
 		new_input = torch.concatenate([predictor[:, self.non_categorical_indices], all_embs], dim=1)
+
+		# Spatial Encoding
+		if self.pos_enc == "early":
+			spatial_embeddings = self.spatial_encoder(coords).squeeze(1) # Remove the channel dimension. [batch, params]
+			new_input = torch.concatenate([spatial_embeddings, new_input], dim=1)
 
 		# hidden layers
 		h1 = self.l1(new_input)
@@ -1245,11 +1268,18 @@ class nn_model(nn.Module):
 		h4 = self.bn4(h4)
 		h4 = self.leaky_relu(h4) # + h3 # residual connection
 		h4 = self.dropout(h4)
+		mlp_output = self.l5(h4)
+
 		# Clamp temp_sigmoid to be between 10 and 200
-		# clamped_temp_sigmoid = torch.clamp(self.temp_sigmoid, 10, 200)
 		clamped_temp_sigmoid = 10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range
-		# h5 = torch.sigmoid(self.l5(h4) / clamped_temp_sigmoid)
-		h5 = self.sigmoid(self.l5(h4)/clamped_temp_sigmoid)
+
+		# Positional encoder correction (if using)
+		if self.pos_enc == "late":
+			spatial_embeddings = self.spatial_encoder(coords).squeeze(1) # Remove the channel dimension. [batch, params]
+			mlp_output += spatial_embeddings
+
+		# Pass parameters through sigmoid to constrain their range
+		h5 = self.sigmoid(mlp_output / clamped_temp_sigmoid)
 
 		# # check if h5 is nan
 		# if torch.isnan(h5).any():
@@ -1305,17 +1335,18 @@ class nn_model(nn.Module):
 
 # Helper function to combine the training data into a single tensor
 class MergeDataset(Dataset):
-	def __init__(self, data_x, data_y, data_z, profile_id):
+	def __init__(self, data_x, data_y, data_z, data_c, profile_id):
 		self.data_x = data_x
 		self.data_y = data_y
 		self.data_z = data_z
+		self.data_c = data_c
 		self.profile_id = profile_id
 
 	def __len__(self):
 		return len(self.data_x)
 
 	def __getitem__(self, idx):
-		return self.data_x[idx], self.data_y[idx], self.data_z[idx], self.profile_id[idx]
+		return self.data_x[idx], self.data_y[idx], self.data_z[idx], self.data_c[idx], self.profile_id[idx]
 
 
 # Start training
@@ -1353,12 +1384,14 @@ global model
 if args.model == 'old_mlp':
 	model_class = nn_model
 	model_kwargs = {"var_idx_to_emb": var_idx_to_emb, 
-					"vertical_mixing": args.vertical_mixing}
+					"vertical_mixing": args.vertical_mixing,
+					"pos_enc": args.pos_enc}
 elif args.model == 'new_mlp' or args.model == "lipmlp":
 	model_class = mlp_wrapper
 	model_kwargs = {"input_vars": len(var4nn),
 				 	"var_idx_to_emb": var_idx_to_emb,
 					"vertical_mixing": args.vertical_mixing,
+					"pos_enc": args.pos_enc,
 					"lipschitz": False,
 					"one_hot": (args.categorical == "one_hot"),
 					"use_bn": args.use_bn,
@@ -1366,6 +1399,19 @@ elif args.model == 'new_mlp' or args.model == "lipmlp":
 					"device": device}
 	if args.model == "lipmlp":
 		model_kwargs["lipschitz"] = True
+elif args.model == 'gcn':
+	model_class = GCN_BINN
+	model_kwargs = {"input_vars": len(var4nn),
+				 	"var_idx_to_emb": var_idx_to_emb,
+					"vertical_mixing": args.vertical_mixing,
+					"pos_enc": args.pos_enc,
+					"k": args.k,
+					"one_hot": (args.categorical == "one_hot"),
+					"losses": args.losses,
+					"device": device}
+else:
+	raise ValueError("Invalid args.model")
+
 
 if args.loss_weighting not in ["manual", "two_stage", "relobralo"]:
 	weighting = weighting_method.__dict__[args.loss_weighting]
@@ -1406,19 +1452,17 @@ if args.whether_resume == 1:
 	checkpoint_worker = torch.load(checkpoint_path, map_location=device)
 	state_dict = checkpoint_worker['model_state_dict']
 	model.load_state_dict(state_dict)
+	optimizer.load_state_dict(checkpoint_worker['optimizer_state_dict'])
 	if args.use_swa:
 		swa_model.load_state_dict(checkpoint_worker['swa_model_state_dict'])
 
 
-# if rank == 0:
-# 	print(model.parameters)
-# for name, param in model_without_ddp.named_parameters():
-# 	print(f"{name}: {param.size()}")
+# Loss function
 fun_loss = binns_loss
 
 # Initialize datasets
-train_dataset = MergeDataset(train_x, train_y, train_z, train_profile_id)
-val_dataset = MergeDataset(val_x, val_y, val_z, val_profile_id)
+train_dataset = MergeDataset(train_x, train_y, train_z, train_c, train_profile_id)
+val_dataset = MergeDataset(val_x, val_y, val_z, val_c, val_profile_id)
 
 # # Use DistributedSampler for distributed training
 # train_sampler = DistributedSampler(train_dataset)
@@ -1458,7 +1502,7 @@ if args.whether_resume == 0:
 	val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
 	model.eval()
 	with torch.no_grad():
-		temp_SOC, temp_pred_para = model(val_x.to(device), val_z.to(device), whether_predict=0)
+		temp_SOC, temp_pred_para = model(val_x.to(device), val_z.to(device), val_c.to(device), whether_predict=0)
 	val_pred_soc[val_profile_id, :] = temp_SOC.detach()
 	val_pred_para[val_profile_id, :] = temp_pred_para.detach()
 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_soc.detach().cpu().numpy(), delimiter = ',')
@@ -1505,6 +1549,7 @@ for iepoch in range(start_epoch, num_epoch):
 	# clear gradients
 	optimizer.zero_grad()
 	model.zero_grad()
+
 	# -------------------------------------training
 	loss_record_train = {loss: list() for loss in args.losses}
 	NSE_record_train = list()
@@ -1515,32 +1560,25 @@ for iepoch in range(start_epoch, num_epoch):
 	batch_start = time.time()
 	#torch.autograd.set_detect_anomaly(True) <- helps debug gradient anomalies but is VERY SLOW
 	for batch_info in train_loader:
-		batch_x, batch_y, batch_z, batch_profile_id = batch_info
+		batch_x, batch_y, batch_z, batch_c, batch_profile_id = batch_info
 
 		if batch_x.shape[0] == 1 and args.use_bn:  # Batch size of 1 during training does not work with BatchNorm
 			continue
 
 		ibatch = ibatch + 1
-		# if ibatch % 50 == 0:
-		# 	print(f'Rank {rank} batch {ibatch}: time so far {time.time()-epoch_start}')
-
-		# batch_size = batch_x.size(0)
-		# batch_x = batch_x.view(batch_size, -1).to(device)
 		batch_x = batch_x.to(device)
 		batch_y = batch_y.to(device)
+		batch_c = batch_c.to(device)
+
 		#------------ 1 forward
 		# train_nn_start = time.time()
-		batch_y_hat, batch_pred_para = model(batch_x, batch_z, whether_predict=0)
+		batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0)
 		# train_nn_end = time.time()
 		# print("Forward time", train_nn_end-train_nn_start)
 
 		# Check if batch_pred_para is nan or inf
 		if torch.isnan(batch_pred_para).any() or torch.isinf(batch_pred_para).any():
 			whether_break = torch.tensor(1).to(device)
-			# change NaN to 0 and inf to 1 to avoid error in loss.backward()
-			# batch_pred_para[torch.isnan(batch_pred_para)] = 0
-			# batch_pred_para[torch.isinf(batch_pred_para)] = 1
-			# check which parameter is nan or inf in batch_pred_para
 			for ipara in range(batch_pred_para.shape[0]):
 				if torch.isnan(batch_pred_para[ipara]).any() or torch.isinf(batch_pred_para[ipara]).any():
 					print(f"Epoch {iepoch} batch {ibatch} parameter {ipara} is {batch_pred_para[ipara]}")
@@ -1549,16 +1587,8 @@ for iepoch in range(start_epoch, num_epoch):
 		if torch.any(batch_pred_para < 0.00001) or torch.any(batch_pred_para > 0.99999):
 			print("Extreme param values")
 			print(batch_pred_para)
-
-		# num_cores = os.cpu_count()
-		# print(f'Number of cores: {num_cores}')
-		# print("Train memory usage", psutil.cpu_percent(interval=None, percpu=True))
 		# process = psutil.Process()
 		# print("Train memory usage", process.memory_info().rss / 1e9, "GB")  # in bytes
-
-		# record the predicted para and modelled soc
-		# middle_simu_soc[batch_profile_id, :] = batch_y_hat
-		# middle_pred_para[batch_profile_id, :] = batch_pred_para
 
 		#------------ 2 compute the objective function
 		# train_loss_start = time.time()
@@ -1620,7 +1650,6 @@ for iepoch in range(start_epoch, num_epoch):
 		# 								create_graph=True, retain_graph=True)[0]
 		# print("Gradients shape", gradients.shape)  # [batch, num_para]
 		# print(gradients)
-		# print("Profile IDs", batch_profile_id)
 
 		#------------ 4 accumulate partical derivatives of objective respect to parameters
 		# backward_start = time.time()
@@ -1633,7 +1662,7 @@ for iepoch in range(start_epoch, num_epoch):
 					 "cure": cure_loss}
 		
 		if args.loss_weighting in ["manual", "two_stage", "relobralo"]:
-			total_loss = 0. # torch.tensor(0.)
+			total_loss = 0.
 			for idx, loss in enumerate(args.losses):
 				total_loss = total_loss + args.lambdas[idx] * loss_dict[loss]
 			total_loss.backward()
@@ -1652,22 +1681,21 @@ for iepoch in range(start_epoch, num_epoch):
 		# print("Layer output grad", model_without_ddp.mlp.layer_output.weight.grad)
 		# print("First layer", model_without_ddp.mlp.layers[0].weight.grad)
 
-		# Fetch weight & gradient of model param
-		if torch.any(torch.isnan(model_without_ddp.mlp.layer_output.weight)):
-			print("Weight was nan")
-			print("Weight", model_without_ddp.mlp.layer_output.weight)
-			exit(1)
-		if torch.any(torch.isnan(model_without_ddp.mlp.layer_output.weight.grad)):
-			print("Grad was nan")
-			print("grad", model_without_ddp.mlp.layer_output.weight.grad)
-			exit(1)
+		# # Fetch weight & gradient of model param
+		# if torch.any(torch.isnan(model_without_ddp.mlp.layer_output.weight)):
+		# 	print("Weight was nan")
+		# 	print("Weight", model_without_ddp.mlp.layer_output.weight)
+		# 	exit(1)
+		# if torch.any(torch.isnan(model_without_ddp.mlp.layer_output.weight.grad)):
+		# 	print("Grad was nan")
+		# 	print("grad", model_without_ddp.mlp.layer_output.weight.grad)
+		# 	exit(1)
 
 		# clip gradients
 		# torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_value)
 		# torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=args.clip_value)
 
 		#------------ 5 step in the opposite direction of the gradient
-		# with torch.no_grad(): para = pata - eta*para.grad # eta is learning rate
 		# optimizer_start = time.time()
 		optimizer.step()
 		# optimizer_end = time.time()
@@ -1676,13 +1704,9 @@ for iepoch in range(start_epoch, num_epoch):
 			loss_record_train[loss].append(loss_dict[loss].item())
 		NSE_record_train.append(train_NSE.item())
 
-		# writer.add_scalar('training loss', obj.item(), iepoch)
-		# record prediction
-		# print("Batch time", time.time()-batch_start)
-		batch_start = time.time()
-
 		# flush all printed output
 		sys.stdout.flush()
+		batch_start = time.time()
 
 	# end for batch_info in train_loader:
 
@@ -1716,18 +1740,13 @@ for iepoch in range(start_epoch, num_epoch):
 	model.eval()
 	batch_start = time.time()
 	for batch_info in val_loader:
-		batch_x, batch_y, batch_z, batch_profile_id = batch_info
+		batch_x, batch_y, batch_z, batch_c, batch_profile_id = batch_info
 		ibatch = ibatch + 1
-		# batch_size = batch_x.size(0)
-		# batch_x = batch_x.view(batch_size, -1).to(device)
 		batch_x = batch_x.to(device)
 		batch_y = batch_y.to(device)
 		# 1 forward
 		with torch.no_grad():
-			batch_y_hat, batch_pred_para = model(batch_x, batch_z, whether_predict=0)
-			# record the predicted para and modelled soc
-			# middle_simu_soc[batch_profile_id, :] = batch_y_hat
-			# middle_pred_para[batch_profile_id, :] = batch_pred_para
+			batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0)
 
 		# 2 compute the objective function
 		l1_loss, l2_loss, param_reg_loss, val_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
@@ -1894,23 +1913,10 @@ for iepoch in range(start_epoch, num_epoch):
 
 
 	if val_NSE_history[iepoch, :] <= best_val_NSE:  # @joshuafan: removed the iepoch==0 condition
-		# best_simu_soc = middle_simu_soc
-		# best_pred_para = middle_pred_para
-		
 		print(f'Best model updated at epoch {iepoch}')
-		
 		best_model_epoch = torch.tensor(iepoch, device=device)
 
-		
-		# save prediction and model
-		# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().cpu().numpy(), delimiter = ',')
-		# np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().cpu().numpy(), delimiter = ',')
-		# torch.save(model, data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt')
-		# print(f'Best model updated at epoch {iepoch + 1}')
-		
-		# save prediction and model
-		# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().cpu().numpy(), delimiter = ',')
-		# np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().cpu().numpy(), delimiter = ',')
+		# save best model
 		checkpoint_best_model = {
 			'epoch': iepoch,
 			'model_state_dict': model.state_dict(),
@@ -1987,7 +1993,7 @@ for iepoch in range(start_epoch, num_epoch):
 								['epoch_time', 'cumulative_time', 'best_model_epoch'])
 	with open(loss_file, mode='a+') as f:
 		csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-		best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt'
+		best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt'
 		csv_writer.writerow([iepoch] + [train_loss_history[loss][iepoch, 0] for loss in args.losses] +
 							[val_loss_history[loss][iepoch, 0] for loss in args.losses] + 
 							[round(train_time, 2), round(hist_time, 2),best_model_epoch.item()])
@@ -2160,23 +2166,22 @@ with torch.no_grad():
 	print("Rank 0 model set to eval at time {}".format(datetime.now()))
 
 	# Get predictions for train examples, compute loss & plot
-	best_guess_train_y_hat, best_guess_train_pred_para = best_guess_model(train_x.to(device), train_z.to(device), whether_predict=0)
+	best_guess_train_y_hat, best_guess_train_pred_para = best_guess_model(train_x.to(device), train_z.to(device), train_c.to(device), whether_predict=0)
 	train_l1_loss, _, _, train_NSE = fun_loss(best_guess_train_y_hat, train_y.to(device), best_guess_train_pred_para, 
 												plot_path=os.path.join(PLOT_DIR, "true_vs_predicted_train.png"))
 	print(f'Train loss: {train_l1_loss.item():.2f}, Train NSE: {train_NSE.item():.2f}')
 
 	# Get predictions for validation examples, compute loss & plot
-	best_guess_val_y_hat, best_guess_val_pred_para = best_guess_model(val_x.to(device), val_z.to(device), whether_predict=0)
+	best_guess_val_y_hat, best_guess_val_pred_para = best_guess_model(val_x.to(device), val_z.to(device), val_c.to(device), whether_predict=0)
 	val_l1_loss, _, _, val_NSE = fun_loss(best_guess_val_y_hat, val_y.to(device), best_guess_val_pred_para, 
 											plot_path=os.path.join(PLOT_DIR, "true_vs_predicted_val.png"))
 	print(f'Val loss: {val_l1_loss.item():.2f}, Val NSE: {val_NSE.item():.2f}')
 
 	if test_split_ratio != 0:
-		best_guess_test_y_hat, best_guess_test_pred_para = best_guess_model(test_x.to(device), test_z.to(device), whether_predict=0)
+		best_guess_test_y_hat, best_guess_test_pred_para = best_guess_model(test_x.to(device), test_z.to(device), test_c.to(device), whether_predict=0)
 		test_loss, _, _, test_NSE = fun_loss(best_guess_test_y_hat, test_y.to(device), best_guess_test_pred_para, 
 										plot_path=os.path.join(PLOT_DIR, "true_vs_predicted_test.png"))
 		print(f'Test loss: {test_loss.item():.2f}, Test NSE: {test_NSE.item():.2f}')
-# end with torch.no_grad():
 
 	# @joshuafan: Summary csv file of all results. Create this if it doesn't exist
 	if args.n_epochs >= 1:
@@ -2192,8 +2197,6 @@ with torch.no_grad():
 			csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
 			best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt'
 			csv_writer.writerow([job_id, command_string, args.lr, args.weight_decay, args.seed, best_model_path, best_val_NSE.item(), best_val_loss.item(), test_NSE.item(), test_loss.item()])
-
-	# write prediction results
 		
 	# create folder for the results
 	os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Validation', exist_ok=True)
@@ -2301,10 +2304,10 @@ with torch.no_grad():
 	test_lats[test_profile_id_num] = np.array(env_info.loc[test_profile_id_num, "original_lat"])
 	print("Finished getting lat/lon data")
 	# print the range of test_lons and test_lats
-	print("test_lons.min(): ", test_lons.min())
-	print("test_lons.max(): ", test_lons.max())
-	print("test_lats.min(): ", test_lats.min())
-	print("test_lats.max(): ", test_lats.max())
+	print("test_lons.min(): ", test_lons[test_profile_id_num] .min())
+	print("test_lons.max(): ", test_lons[test_profile_id_num] .max())
+	print("test_lats.min(): ", test_lats[test_profile_id_num] .min())
+	print("test_lats.max(): ", test_lats[test_profile_id_num] .max())
 
 	# get the upper and lower depth of the test profiles
 	test_upper_depth = np.ones((wosis_profile_info.shape[0], 200))*np.nan
@@ -2470,10 +2473,10 @@ with torch.no_grad():
 	val_lons[val_profile_id_num] = np.array(env_info.loc[val_profile_id_num, "original_lon"])
 	val_lats[val_profile_id_num] = np.array(env_info.loc[val_profile_id_num, "original_lat"])
 	# print the range of val_lons and val_lats
-	print("val_lons.min(): ", val_lons.min())
-	print("val_lons.max(): ", val_lons.max())
-	print("val_lats.min(): ", val_lats.min())
-	print("val_lats.max(): ", val_lats.max())
+	print("val_lons.min(): ", val_lons[val_profile_id_num].min())
+	print("val_lons.max(): ", val_lons[val_profile_id_num].max())
+	print("val_lats.min(): ", val_lats[val_profile_id_num].min())
+	print("val_lats.max(): ", val_lats[val_profile_id_num].max())
 
 	# get the upper and lower depth of the validation profiles
 	val_upper_depth = np.ones((wosis_profile_info.shape[0], 200))*np.nan
@@ -2676,7 +2679,10 @@ with torch.no_grad():
 	# Grid prediction
 	#########################
 	# Predict the SOC values based on Grid environmental information using the best model
-	grid_simu_soc, grid_pred_para = best_guess_model(torch.tensor(predict_data_x, dtype=torch.float32, device=device), torch.tensor(predict_data_z, dtype=torch.float32, device=device), whether_predict = 1)
+	grid_simu_soc, grid_pred_para = best_guess_model(torch.tensor(predict_data_x, dtype=torch.float32, device=device), 
+												    torch.tensor(predict_data_z, dtype=torch.float32, device=device), 
+												    torch.tensor(predict_data_c, dtype=torch.float32, device=device),
+												    whether_predict = 1)
 	# Save the predicted SOC values, parameters and location data into csv files
 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_simu_soc_' + job_id + '.csv', grid_simu_soc.detach().cpu().numpy(), delimiter = ',')
 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_pred_para_' + job_id + '.csv', grid_pred_para.detach().cpu().numpy(), delimiter = ',')

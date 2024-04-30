@@ -562,7 +562,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	## I matrix ##
 	cum_fraction_input = torch.cumsum(vertical_input, dim = 0).to(device)
 	# for the value over 1, set it to nan
-	cum_fraction_input[cum_fraction_input > 1] = np.nan
+	cum_fraction_input[cum_fraction_input >= 1] = np.nan
 	bulk_I = torch.nanmean(torch.exp(torch.log(1 - cum_fraction_input)/(zsoi[0:n_soil_layer]*100)), axis = 0).to(device)
 
 	## K matrix ##
@@ -921,8 +921,10 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	#------ first get diffusivity / advection terms -------
 	# Convert conditions to tensor operations
 	active_layer_depth = torch.tensor(max(altmax.item(), altmax_lastyear.item())).to(device)
-	is_active_layer = zisoi[:nbedrock+1] < active_layer_depth
-	is_below_active_layer_and_cryoturb = (zisoi[:nbedrock+1] >= active_layer_depth) & (zisoi[:nbedrock+1] <= torch.min(torch.tensor(max_depth_cryoturb), zisoi[nbedrock+1]))
+	# is_active_layer = zisoi[:nbedrock+1] < active_layer_depth
+	# is_below_active_layer_and_cryoturb = (zisoi[:nbedrock+1] >= active_layer_depth) & (zisoi[:nbedrock+1] <= torch.min(torch.tensor(max_depth_cryoturb), zisoi[nbedrock+1]))
+	is_active_layer = zisoi[:nlevdecomp+1] < active_layer_depth
+	is_below_active_layer_and_cryoturb = (zisoi[:nlevdecomp+1] >= active_layer_depth) & (zisoi[:nlevdecomp+1] <= torch.min(torch.tensor(max_depth_cryoturb), zisoi[nlevdecomp+1]))
 	is_bedrock_layer = torch.arange(nlevdecomp+1).to(device) > nbedrock
 
 	# Initialize coefficients with zeros
@@ -1104,9 +1106,9 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	# 	tri_ma[idx+1, idx] = a_tri_dz[1:]
 
 	# Expand a_tri_dz, b_tri_dz, c_tri_dz
-	expanded_a = torch.cat([torch.zeros(20), a_tri_dz.repeat(npool-1)])
-	expanded_b = torch.cat([torch.zeros(20), b_tri_dz.repeat(npool-1)])
-	expanded_c = torch.cat([torch.zeros(20), c_tri_dz.repeat(npool-1)])
+	expanded_a = torch.cat([torch.zeros(20, device=device), a_tri_dz.repeat(npool-1)])
+	expanded_b = torch.cat([torch.zeros(20, device=device), b_tri_dz.repeat(npool-1)])
+	expanded_c = torch.cat([torch.zeros(20, device=device), c_tri_dz.repeat(npool-1)])
 
 	# Fill diagonal with expanded_b
 	tri_ma.fill_diagonal_(0)  # Ensure diagonal is clear before setting
