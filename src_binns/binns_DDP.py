@@ -366,10 +366,10 @@ sample_profile_id = sample_profile_id - 1
 
 # choose the profile id with lat and lon within the range of the United States
 profile_collection = np.where(
-	(wosis_profile_info[:, 2] == 156) & 
-	(wosis_profile_info[:, 3] >= -124.763068) & 
-	(wosis_profile_info[:, 3] <= -66.949895) & 
-	(wosis_profile_info[:, 4] >= 24.5) & 
+	(wosis_profile_info[:, 2] == 156) &
+	(wosis_profile_info[:, 3] >= -124.763068) &
+	(wosis_profile_info[:, 3] <= -66.949895) &
+	(wosis_profile_info[:, 4] >= 24.5) &
 	(wosis_profile_info[:, 4] <= 49.384358)
 )[0]
 
