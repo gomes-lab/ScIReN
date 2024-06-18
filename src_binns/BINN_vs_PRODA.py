@@ -1,4 +1,5 @@
-# Distributed Data Parallel (DDP) training script for BINN
+# Distributed Data Parallel (DDP) training script for BINN, use same testing dataset as PRODA
+# PRODA 
 # Initializer script for DDP, automatically resubmit jobs after 11.5 hours (call DDP_resume.py)
 # Import the required libraries
 import csv
@@ -72,6 +73,7 @@ from fun_matrix_clm5_vectorized import fun_model_simu, fun_model_prediction
 import visualization_utils
 from fun_matrix_clm5_vectorized_bulk_converge import fun_bulk_simu
 # from fun_matrix_clm5_vectorized_prediction import fun_model_prediction
+from fun_matrix_clm5_PRODA_vectorized import fun_PRODA_simu
 
 ################################################
 # @joshuafan: Command-line arguments
@@ -91,6 +93,7 @@ parser.add_argument("--categorical", type=str, default="embedding", choices=["em
 parser.add_argument("--embed_dim", type=int, default=5, help="Embedding dim for each categorical variable (if using embeddings)")
 parser.add_argument("--use_bn", action='store_true', help="Whether to use batchnorm")
 parser.add_argument("--whether_resume", type=int, default=0, help="Whether to resume training from a previous model")
+parser.add_argument("--PRODA_idx", type=int, default=1)
 
 
 args = parser.parse_args()
@@ -135,13 +138,12 @@ if args.whether_resume == 0:
 	job_id = time.strftime("%Y%m%d-%H%M%S")  # Convert datetime to string: https://stackoverflow.com/questions/10607688/how-to-create-a-file-name-with-the-current-date-time-in-python
 	if args.note != "":
 		job_id += ("_" + args.note)
+		job_id += ("_PRODA_idx_" + str(args.PRODA_idx))
 	pbs_job_id = os.environ.get('PBS_JOBID')
 	if pbs_job_id is not None:
 		pbs_job_id = pbs_job_id.split('.')[0]
 		job_id += ("_" + pbs_job_id)
 	print(f"New job ID: {job_id}")
-	if args.seed != 0:
-		job_id += ("_seed_" + str(args.seed))
 else:
 	# If resuming, use the same job id as before
 	job_id = os.environ.get('PREVIOUS_JOB_ID')
@@ -173,6 +175,12 @@ is_resubmit = 0
 job_submit_path = '/glade/u/home/haodixu/BINN/PBS_Submit/Bulk_Converge/'
 data_dir_input = '/glade/u/home/haodixu/BINN/ENSEMBLE/INPUT_DATA/'
 data_dir_output = '/glade/work/haodixu/BINN/BINNS/OUTPUT_DATA/'
+########################################################
+# neural network (BINNS)
+########################################################
+nn_split_ratio = 0.1
+test_split_ratio = 0.1
+
 os.makedirs(os.path.join(data_dir_output, "neural_network"), exist_ok=True)
 os.makedirs(os.path.join(data_dir_output, "neural_network", job_id), exist_ok=True)
 # create folder for the model parameters
@@ -186,6 +194,11 @@ os.makedirs(PLOT_DIR, exist_ok=True)
 os.makedirs(os.path.join(data_dir_output, "neural_network", job_id, "Prediction"), exist_ok=True)
 # create folder for the bulk simulation
 os.makedirs(os.path.join(data_dir_output, "neural_network", job_id, "Bulk_Simulation"), exist_ok=True)
+# create folder for the results
+os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Validation', exist_ok=True)
+os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Train', exist_ok=True)
+if test_split_ratio != 0:
+	os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Test', exist_ok=True)
 
 # Load checkpoint if resuming
 if args.whether_resume == 1:
@@ -396,6 +409,13 @@ profile_collection = np.intersect1d(profile_collection, PRODA_collection)
 # Choose random 2000 profiles for testing
 # profile_collection = np.random.choice(profile_collection, 10, replace=False)
 
+## Compare with PRODA with same testing dataset ##
+# load PRODA test dataset
+PRODA_test = pd.read_csv(data_dir_input + 'PRODA_test_results/nn_site_loc_cesm2_clm5_cen_vr_v2_whole_time_exp_pc_cesm2_23_cross_valid_0_' + str(args.PRODA_idx) + '.csv', header = None)
+PRODA_test = PRODA_test - 1
+PRODA_test_para = pd.read_csv(data_dir_input + 'PRODA_test_results/nn_para_result_cesm2_clm5_cen_vr_v2_whole_time_exp_pc_cesm2_23_cross_valid_0_' + str(args.PRODA_idx) + '.csv', header = None)
+
+
 ###############################################################################################################
 
 profile_collection = np.reshape(profile_collection, [profile_collection.shape[0], 1])
@@ -403,6 +423,16 @@ profile_collection = np.reshape(profile_collection, [profile_collection.shape[0]
 profile_range = np.arange(0, len(profile_collection))
 
 print('number of profiles: ', len(profile_collection))
+
+test_overlap_loc = np.where(np.isin(PRODA_test, profile_collection) == True)[0]
+test_profile_id = PRODA_test.iloc[test_overlap_loc, :]
+PRODA_test_para = PRODA_test_para.iloc[test_overlap_loc, :]
+test_profile_id = np.reshape(test_profile_id, [test_profile_id.shape[0], 1])
+
+print('Number of profiles in the testing dataset: ', len(test_profile_id))
+print("Shape of PRODA_test_para: ", PRODA_test_para.shape)
+# Convert to numpy array
+PRODA_test_para = PRODA_test_para.to_numpy()
 
 print(datetime.now(), '------------all input data loaded------------')
 
@@ -532,11 +562,7 @@ for iprofile_hat in profile_range:
 # check the overall number of layers in the profile
 print("Number of layers in profile: " + str(layer_num_record))
 print(datetime.now(), '------------soc data prepared------------')
-########################################################
-# neural network (BINNS)
-########################################################
-nn_split_ratio = 0.1
-test_split_ratio = 0.1
+
 #---------------------------------------------------
 # env info
 #---------------------------------------------------
@@ -791,37 +817,34 @@ if args.whether_resume == 0:
 		train_profile_id = torch.tensor(current_data_profile_id[train_loc], dtype = torch.long)
 		val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype = torch.long)
 	else:
-		# Determine the number of training samples based on the ratios
-		train_loc = np.random.choice(np.arange(0, len(current_data_x[:, 0])), size=round((1 - nn_split_ratio - test_split_ratio) * len(current_data_x[:, 0])), replace=False)
-		# The remaining data after removing the training samples
-		remaining_loc = np.setdiff1d(np.arange(0, len(current_data_x[:, 0])), train_loc)
-		# Split the remaining data into validation and test sets
-		num_val_samples = round(nn_split_ratio / (nn_split_ratio + test_split_ratio) * len(remaining_loc))
-		val_loc = np.random.choice(remaining_loc, size=num_val_samples, replace=False)
-		test_loc = np.setdiff1d(remaining_loc, val_loc)
+		# Determine test loc based on the profile id
+		test_loc = np.where(np.isin(current_data_profile_id, test_profile_id))[0]
+		remaining_loc = np.setdiff1d(np.arange(0, len(current_data_x[:, 0]), 1), test_loc)
+		train_size = round((1-nn_split_ratio) * len(remaining_loc))
+		# Split the remaining data into train and val
+		train_loc = np.random.choice(remaining_loc, size = train_size, replace = False)
+		val_loc = np.setdiff1d(remaining_loc, train_loc)
 
-		train_y = torch.tensor(current_data_y[train_loc, :], dtype=torch.float32)
-		val_y = torch.tensor(current_data_y[val_loc, :], dtype=torch.float32)
-		test_y = torch.tensor(current_data_y[test_loc, :], dtype=torch.float32)
+		train_y = torch.tensor(current_data_y[train_loc, :], dtype = torch.float32)
+		val_y = torch.tensor(current_data_y[val_loc, :], dtype = torch.float32)
+		test_y = torch.tensor(current_data_y[test_loc, :], dtype = torch.float32)
 
-		train_z = torch.tensor(current_data_z[train_loc, :], dtype=torch.float32)
-		val_z = torch.tensor(current_data_z[val_loc, :], dtype=torch.float32)
-		test_z = torch.tensor(current_data_z[test_loc, :], dtype=torch.float32)
+		train_z = torch.tensor(current_data_z[train_loc, :], dtype = torch.float32)
+		val_z = torch.tensor(current_data_z[val_loc, :], dtype = torch.float32)
+		test_z = torch.tensor(current_data_z[test_loc, :], dtype = torch.float32)
 
-		train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype=torch.float32)
-		# train_x = train_x.requires_grad_(True)
-		val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype=torch.float32)
-		# val_x = val_x.requires_grad_(True)
-		test_x = torch.tensor(current_data_x[test_loc, :, :, :], dtype=torch.float32)
-		# test_x = test_x.requires_grad_(True)
+		train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype = torch.float32)
+		val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype = torch.float32)
+		test_x = torch.tensor(current_data_x[test_loc, :, :, :], dtype = torch.float32)
 
-		train_profile_id = torch.tensor(current_data_profile_id[train_loc], dtype=torch.long)
-		val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype=torch.long)
-		test_profile_id = torch.tensor(current_data_profile_id[test_loc], dtype=torch.long)
+		train_profile_id = torch.tensor(current_data_profile_id[train_loc], dtype = torch.long)
+		val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype = torch.long)
+		test_profile_id = torch.tensor(current_data_profile_id[test_loc], dtype = torch.long)
 
 		print("Shape of train data", train_x.shape)
 		print("Shape of val data", val_x.shape)
 		print("Shape of test data", test_x.shape)
+		
 else:
 	# load train, val, and test indices
 	train_loc = checkpoint_main['train_indices']
@@ -2078,7 +2101,7 @@ def worker(rank, world_size):
 				with open(job_submit_path + 'Resume' + job_id + '.submit', 'w') as f:
 					f.write(f'#!/bin/bash\n')
 					f.write(f'#PBS -A UOKL0017\n')
-					f.write(f'#PBS -N DDP_BINN_Resume\n')
+					f.write(f'#PBS -N DDP_BINN_Compare_W_PRODA\n')
 					f.write(f'#PBS -q main\n')
 					f.write(f'#PBS -l walltime=12:00:00\n')
 					f.write(f'#PBS -l select=1:ncpus=128\n\n')
@@ -2092,9 +2115,10 @@ def worker(rank, world_size):
 					f.write(f'# Activate environment in conda\n')
 					f.write(f'conda activate BINN_310_CPU\n\n')
 					f.write(f'# Start the Python Code\n')
-					f.write(f'python -u /glade/u/home/haodixu/BINN/Server_Script/binns_DDP.py --lr ' + str(args.lr) + ' --weight_decay ' + str(args.weight_decay) + ' --batch_size ' + str(args.batch_size) + \
+					f.write(f'python -u /glade/u/home/haodixu/BINN/Server_Script/BINN_vs_PRODA.py --lr ' + str(args.lr) + ' --weight_decay ' + str(args.weight_decay) + ' --batch_size ' + str(args.batch_size) + \
 			 			' --seed ' + str(args.seed) + ' --n_epochs ' + str(args.n_epochs) + ' --patience ' + str(args.patience) + ' --model ' + str(args.model) + ' --lambda_lipschitz ' + str(args.lambda_lipschitz) + \
-						' --note ' + str(args.note) + ' --categorical ' + str(args.categorical) + ' --use_bn ' + ' --embed_dim ' + str(args.embed_dim) + ' --num_CPU ' + str(args.num_CPU) + ' --whether_resume 1\n')
+						' --note ' + str(args.note) + ' --categorical ' + str(args.categorical) + ' --use_bn ' + ' --embed_dim ' + str(args.embed_dim) + ' --num_CPU ' + str(args.num_CPU) + \
+						' --PRODA_idx' + str(args.PRODA_idx) + ' --whether_resume 1\n')
 
 				# submit the job again
 				submit_command = ['qsub', 
@@ -2157,7 +2181,7 @@ def worker(rank, world_size):
 		# end with torch.no_grad():
 
 		# @joshuafan: Summary csv file of all results. Create this if it doesn't exist
-		results_summary_file = os.path.join(data_dir_output, "neural_network/results_summary.csv")
+		results_summary_file = os.path.join(data_dir_output, "neural_network/results_summary_BINN_vs_PRODA.csv")
 		if not os.path.isfile(results_summary_file):
 			with open(results_summary_file, mode='w') as f:
 				csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
@@ -2173,11 +2197,7 @@ def worker(rank, world_size):
 
 		# write prediction results
 			
-		# create folder for the results
-		os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Validation', exist_ok=True)
-		os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Train', exist_ok=True)
-		if test_split_ratio != 0:
-			os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Test', exist_ok=True)
+		
 
 		#############
 		# Test Data #
@@ -2451,6 +2471,11 @@ def worker(rank, world_size):
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_upper_depth_' + job_id + '.csv', test_upper_depth, delimiter = ',')
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_lower_depth_' + job_id + '.csv', test_lower_depth, delimiter = ',')
 
+		# Save PRODA predicted parameters
+		test_PRODA_pred_para = np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan
+		test_PRODA_pred_para[test_profile_id, :] = PRODA_test_para
+		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/PRODA_test_para_' + job_id + '.csv', test_PRODA_pred_para, delimiter = ',')
+
 		# initialize the scaled difference
 		scaled_diff = np.ones((wosis_profile_info.shape[0]))*np.nan
 
@@ -2664,10 +2689,23 @@ def worker(rank, world_size):
 
 
 		print("-----------------Model Prediction Finished at " + str(datetime.now()) + "-----------------")
+	elif rank == 1:
+		# Run simulations with PRODA test parameters, and save the results
+		PRODA_simu_test = fun_PRODA_simu(torch.tensor(PRODA_test_para, dtype=torch.float32, device=device), test_x.to(device), test_z.to(device))
+
+		# Initialize tensors to store the results
+		PRODA_test_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
+		
+		# Store the results
+		PRODA_test_soc[test_profile_id, :] = PRODA_simu_test
+
+		# Save the results
+		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/PRODA_test_soc_' + job_id + '.csv', PRODA_test_soc.detach().cpu().numpy(), delimiter = ',')
+
 
 	# end if rank == 0:
 	else:
-		if whether_break.item() == 1:
+		if whether_break.item() == 1: 
 			print("Rank {} finished".format(rank))
 			return
 		
