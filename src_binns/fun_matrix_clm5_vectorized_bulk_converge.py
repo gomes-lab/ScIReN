@@ -5,6 +5,7 @@ import traceback
 import math
 
 def fun_bulk_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_depth, vertical_mixing):
+	print("BULK Para", tensor_para[0:5])
 	device = tensor_para.device
 	# convert tensor to numpy
 	para = tensor_para
@@ -292,48 +293,47 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	xio = xio_steady_state
 	xin = xin_steady_state
 
-	# Old way of calculating xit
-	# start = time.time()
-	xit_old = (torch.ones(n_soil_layer, timestep_num)*np.nan).to(device)
-	for itimestep in range(timestep_num):
-		# temperature related function xit
-		# calculate rate constant scalar for soil temperature
-		# assuming that the base rate constants are assigned for non-moisture
-		# limiting conditions at 25 C.
-		for ilayer in range(n_soil_layer):
-			if soil_temp_profile_steady_state[ilayer, itimestep] >= (0 + kelvin_to_celsius):
-				xit_old[ilayer, itimestep] = q10**((soil_temp_profile_steady_state[ilayer, itimestep] - (kelvin_to_celsius + 25))/10)
-			else:
-				xit_old[ilayer, itimestep] = q10**((273.15 - 298.15)/10)*(fq10**((soil_temp_profile_steady_state[ilayer, itimestep] - (0 + kelvin_to_celsius))/10))
-			# end if soil_temp_profile[ilayer, itimestep] >= 0 + kelvin_to_celsius:
-		# end for layer
+	# # Old way of calculating xit
+	# # start = time.time()
+	# xit_old = (torch.ones(n_soil_layer, timestep_num)*np.nan).to(device)
+	# for itimestep in range(timestep_num):
+	# 	# temperature related function xit
+	# 	# calculate rate constant scalar for soil temperature
+	# 	# assuming that the base rate constants are assigned for non-moisture
+	# 	# limiting conditions at 25 C.
+	# 	for ilayer in range(n_soil_layer):
+	# 		if soil_temp_profile_steady_state[ilayer, itimestep] >= (0 + kelvin_to_celsius):
+	# 			xit_old[ilayer, itimestep] = q10**((soil_temp_profile_steady_state[ilayer, itimestep] - (kelvin_to_celsius + 25))/10)
+	# 		else:
+	# 			xit_old[ilayer, itimestep] = q10**((273.15 - 298.15)/10)*(fq10**((soil_temp_profile_steady_state[ilayer, itimestep] - (0 + kelvin_to_celsius))/10))
+	# 		# end if soil_temp_profile[ilayer, itimestep] >= 0 + kelvin_to_celsius:
+	# 	# end for layer
 
-		catanf_30 = catanf(torch.tensor(30.0).to(device))
-		normalization_tref = torch.tensor(15).to(device)
-		if normalize_q10_to_century_tfunc == True:
-			# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
-			normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
-			xit_old[:, itimestep] = xit_old[:, itimestep]*normalization_factor
-	xit = xit_old
+	# 	catanf_30 = catanf(torch.tensor(30.0).to(device))
+	# 	normalization_tref = torch.tensor(15).to(device)
+	# 	if normalize_q10_to_century_tfunc == True:
+	# 		# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
+	# 		normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
+	# 		xit_old[:, itimestep] = xit_old[:, itimestep]*normalization_factor
+	# xit = xit_old
 		# end if normalize_q10_to_century_tfunc == True:
 	# end for itimestep
-	# # print("XIT old", time.time()-start)
-	# # start = time.time()
+	# print("XIT old", time.time()-start)
+	# start = time.time()
 
-	# # New way to calculate xit (vectorized))
-	# xit_above_freezing = torch.pow(q10, ((soil_temp_profile_steady_state - (kelvin_to_celsius + 25))/10))  # Above freezing case first
-	# xit_below_freezing = torch.pow(q10, ((273.15 - 298.15)/10)) * torch.pow(fq10, ((soil_temp_profile_steady_state - (0 + kelvin_to_celsius))/10))
-	# freezing_mask = (soil_temp_profile_steady_state < (0 + kelvin_to_celsius)).detach().int()  # Create a mask which is True when the soil temperatue is below freezing
-	# xit = xit_above_freezing * (1-freezing_mask) + xit_below_freezing * freezing_mask  # [freezing_mask] = xit_below_freezing[freezing_mask].clone()
-	# catanf_30 = catanf(torch.tensor(30.0).to(device))
-	# normalization_tref = torch.tensor(15).to(device)
-	# if normalize_q10_to_century_tfunc == True:
-	# 	# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
-	# 	normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
-	# 	xit = xit * normalization_factor
-	# # print("XIT new", time.time() - start)
-	# # assert(torch.equal(xit_old, xit))
-
+	# New way to calculate xit (vectorized))
+	xit_above_freezing = torch.pow(q10, ((soil_temp_profile_steady_state - (kelvin_to_celsius + 25))/10))  # Above freezing case first
+	xit_below_freezing = torch.pow(q10, ((273.15 - 298.15)/10)) * torch.pow(fq10, ((soil_temp_profile_steady_state - (0 + kelvin_to_celsius))/10))
+	freezing_mask = (soil_temp_profile_steady_state < (0 + kelvin_to_celsius)).detach().int()  # Create a mask which is True when the soil temperatue is below freezing
+	xit = xit_above_freezing * (1-freezing_mask) + xit_below_freezing * freezing_mask  # [freezing_mask] = xit_below_freezing[freezing_mask].clone()
+	catanf_30 = catanf(torch.tensor(30.0).to(device))
+	normalization_tref = torch.tensor(15).to(device)
+	if normalize_q10_to_century_tfunc == True:
+		# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
+		normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
+		xit = xit * normalization_factor
+	# print("XIT new", time.time() - start)
+	# assert(torch.equal(xit_old, xit))
 
 	xiw = soil_water_profile_steady_state*w_scaling
 	xiw[xiw > 1] = 1
@@ -348,8 +348,8 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	# a_ma_old = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
 	# print("a_matrix old", time.time()-start)
 	# start = time.time()
-	# a_ma = a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
-	a_ma = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
+	a_ma = a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
+	# a_ma = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
 	# print("a_matrix_vectorized", time.time()-start)
 	# assert torch.equal(a_ma_old, a_ma)
 
@@ -502,7 +502,6 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 		if torch.det(torch.matmul(a_ma, kk_ma)-tri_ma) == 0:
 			print("a_ma*kk_ma - tri_ma is singular")
 
-
 		# cpool_steady_state = torch.linalg.lstsq((torch.matmul(a_ma, kk_ma)-tri_ma), (-matrix_in)).solution
 		cpool_steady_state = (torch.ones([140, 1])*(-1.0)).to(device)*torch.sum(para)/torch.sum(para)
 	# end try
@@ -536,19 +535,79 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 
 
 	diag_scaler_temp = torch.nanmean(diag_scaler_monthly, axis = 1).to(device)
-	diag_scaler = (torch.ones([npool_vr, npool_vr])*np.nan).to(device)
-	# Fill the diagonal of diag_scaler with diag_scaler_temp for each pool
-	diag_scaler[0:20, 0:20] = torch.diag(diag_scaler_temp[0:20])
-	diag_scaler[20:40, 20:40] = torch.diag(diag_scaler_temp[0:20])
-	diag_scaler[40:60, 40:60] = torch.diag(diag_scaler_temp[0:20])
-	diag_scaler[60:80, 60:80] = torch.diag(diag_scaler_temp[0:20])
-	diag_scaler[80:100, 80:100] = torch.diag(diag_scaler_temp[0:20])
-	diag_scaler[100:120, 100:120] = torch.diag(diag_scaler_temp[0:20])
-	diag_scaler[120:140, 120:140] = torch.diag(diag_scaler_temp[0:20])
+	diag_scaler = torch.diag(diag_scaler_temp.repeat(7))
 
-	# calculate the residence time
-	residence_time = torch.linalg.solve((torch.matmul(a_ma, kk_ma)- torch.matmul(tri_ma, dz_matrix)), (-B_matrix))
-	residence_time_baseline = torch.linalg.solve(torch.matmul((torch.matmul(a_ma, kk_ma)- torch.matmul(tri_ma, dz_matrix)), diag_scaler), (-B_matrix))
+	# # @joshuafan Changed to initialize to zeros!!!
+	# diag_scaler = (torch.zeros([npool_vr, npool_vr])).to(device)  #(torch.ones([npool_vr, npool_vr])*np.nan).to(device)
+	# # Fill the diagonal of diag_scaler with diag_scaler_temp for each pool
+	# diag_scaler[0:20, 0:20] = torch.diag(diag_scaler_temp[0:20])
+	# diag_scaler[20:40, 20:40] = torch.diag(diag_scaler_temp[0:20])
+	# diag_scaler[40:60, 40:60] = torch.diag(diag_scaler_temp[0:20])
+	# diag_scaler[60:80, 60:80] = torch.diag(diag_scaler_temp[0:20])
+	# diag_scaler[80:100, 80:100] = torch.diag(diag_scaler_temp[0:20])
+	# diag_scaler[100:120, 100:120] = torch.diag(diag_scaler_temp[0:20])
+	# diag_scaler[120:140, 120:140] = torch.diag(diag_scaler_temp[0:20])
+
+	# # calculate the residence time
+	# print("TRI", torch.diag(tri_ma[20:40, 20:40]))
+	# print(torch.diag(tri_ma[20:40, 20:40], diagonal=1))
+	# print(torch.diag(tri_ma[20:40, 20:40], diagonal=-1))
+	# print("DIAGSCALER", torch.diag(diag_scaler))
+	# torch.set_printoptions(threshold=1_000)
+	# print("A", a_ma)
+	# # print("A ma block", a_ma[40:60, 0:20])
+	# print("KK", kk_ma)
+	# print("Tri", tri_ma)
+	# print("dz_matrix", dz_matrix)
+	# # print("dz diag", torch.diag(dz_matrix))
+
+	residence_time = torch.linalg.solve((torch.matmul(a_ma, kk_ma) - tri_ma), (-B_matrix))  #torch.matmul(tri_ma, dz_matrix)
+	try:
+		residence_time_baseline = torch.linalg.solve(torch.matmul((torch.matmul(a_ma, kk_ma) - tri_ma), diag_scaler), (-B_matrix))  #torch.matmul(tri_ma, dz_matrix)
+	except Exception:
+		# traceback.print_exc()
+		# torch.set_printoptions(threshold=10_000)
+		# print("A * KK - Tri", torch.matmul(a_ma, kk_ma) - tri_ma)
+		# print("Diag scaler", diag_scaler)
+		# print("Multiplied", torch.matmul((torch.matmul(a_ma, kk_ma) - tri_ma), diag_scaler) - 1e-4)
+		# try:
+		# 	residence_time_baseline = torch.linalg.solve(torch.matmul((torch.matmul(a_ma, kk_ma) - tri_ma), diag_scaler) - 1e-4, (-B_matrix))  #torch.matmul(tri_ma, dz_matrix)
+		# except Exception:
+		# 	print("=================== Bulk exception with singular matrix SECOND TIME ====================")
+		# 	traceback.print_exc()
+		residence_time_baseline = torch.linalg.solve((torch.matmul(a_ma, kk_ma) - tri_ma) * diag_scaler, (-B_matrix))
+		print("=================== Bulk exception with singular matrix, ignoring ====================")
+		# print("CONTINUING!!!")
+		# print("Nan check", torch.sum(torch.isnan(diag_scaler)), torch.sum(torch.isnan(diag_scaler_temp)), torch.sum(torch.isnan(a_ma)), torch.sum(torch.isnan(kk_ma)), torch.sum(torch.isnan(tri_ma)), torch.sum(torch.isnan(diag_scaler)))
+		# print("Predicted Parameters: ", para)
+		# # check if the matrix is singular and print the matrix
+		# # check a_ma
+		# if torch.isnan(torch.sum(a_ma)):
+		# 	print("a_ma contains nan")
+		# if torch.det(a_ma) == 0:
+		# 	print("a_ma is singular")
+		# # check kk_ma
+		# if torch.isnan(torch.sum(kk_ma)):
+		# 	print("kk_ma contains nan")
+		# if torch.det(kk_ma) == 0:
+		# 	print("kk_ma is singular")
+		# 	print(torch.diagonal(kk_ma))
+		# # check tri_ma
+		# if torch.isnan(torch.sum(tri_ma)):
+		# 	print("tri_ma contains nan")
+		# if torch.det(tri_ma) == 0:
+		# 	print("tri_ma is singular")
+		# 	print(torch.diagonal(tri_ma, offset=0))
+		# 	print(torch.diagonal(tri_ma, offset=1))
+		# 	print(torch.diagonal(tri_ma, offset=-1))
+		# # check matrix_in
+		# if torch.isnan(torch.sum(matrix_in)):
+		# 	print("matrix_in contains nan")
+		# if torch.det(matrix_in) == 0:
+		# 	print("matrix_in is singular")
+		# 	print(matrix_in)
+		# if torch.det(torch.matmul(a_ma, kk_ma)-tri_ma) == 0:
+		# 	print("a_ma*kk_ma - tri_ma is singular")
 
 	total_res_time = torch.cat((residence_time[80:100, :], residence_time[100:120, :], residence_time[120:140, :]), dim = 1)
 	total_res_time = torch.sum(total_res_time, axis = 1)
@@ -710,6 +769,16 @@ def get_view(a_ma, nlevdecomp, i, j):
 	return a_ma[(i-1)*nlevdecomp:i*nlevdecomp, (j-1)*nlevdecomp:j*nlevdecomp]
 
 
+# If a_ma is a block matrix where each A_{ij} is (nlevdecomp x nlevdecomp),
+# fills in the diagonal of block A_{ij} with "value".
+# "value" is assumed to be a tensor with a single element.
+# For consistency with the paper (Lu et al. 2020), i and j are indexed from 1.
+# Modifies a_ma in place.
+def fill_submatrix_diagonal(a_ma, nlevdecomp, i, j, value):
+	# diag_vector = value.repeat(nlevdecomp)   #TODO - just changed @joshuafan
+	a_ma[range((i-1)*nlevdecomp, i*nlevdecomp), range((j-1)*nlevdecomp, j*nlevdecomp)] = value  # diag_vector
+
+
 def a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector):
 	device = fl1s1.device
 	nlevdecomp = n_soil_layer
@@ -720,20 +789,23 @@ def a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, 
 	a_ma_vr = torch.diag(-1*torch.ones(nspools_vr, device=device))
 
 	fcwdl3 = 1 - fcwdl2
-	transfer_fraction = [fl1s1.item(), fl2s1.item(), fl3s2.item(), fs1s2.item(), fs1s3.item(), fs2s1.item(), fs2s3.item(), fs3s1.item(), fcwdl2.item(), fcwdl3.item()]
-	# transfer_fraction = torch.stack([fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, fcwdl3])
-	get_view(a_ma_vr, nlevdecomp, 3, 1).fill_diagonal_(transfer_fraction[8])
-	get_view(a_ma_vr, nlevdecomp, 4, 1).fill_diagonal_(transfer_fraction[9])
-	get_view(a_ma_vr, nlevdecomp, 5, 2).fill_diagonal_(transfer_fraction[0])
-	get_view(a_ma_vr, nlevdecomp, 5, 3).fill_diagonal_(transfer_fraction[1])
-	get_view(a_ma_vr, nlevdecomp, 5, 6).fill_diagonal_(transfer_fraction[5])
-	get_view(a_ma_vr, nlevdecomp, 5, 7).fill_diagonal_(transfer_fraction[7])
-	get_view(a_ma_vr, nlevdecomp, 6, 4).fill_diagonal_(transfer_fraction[2])
-	get_view(a_ma_vr, nlevdecomp, 6, 5).fill_diagonal_(transfer_fraction[3])
-	get_view(a_ma_vr, nlevdecomp, 7, 5).fill_diagonal_(transfer_fraction[4])
-	get_view(a_ma_vr, nlevdecomp, 7, 6).fill_diagonal_(transfer_fraction[6])
-	return a_ma_vr
 
+	transfer_fraction = [fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, fcwdl3]
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 3, 1, transfer_fraction[8])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 4, 1, transfer_fraction[9])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 5, 2, transfer_fraction[0])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 5, 3, transfer_fraction[1])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 5, 6, transfer_fraction[5])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 5, 7, transfer_fraction[7])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 6, 4, transfer_fraction[2])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 6, 5, transfer_fraction[3])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 7, 5, transfer_fraction[4])
+	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 7, 6, transfer_fraction[6])
+
+	# # Check values
+	# print(transfer_fraction[8])
+	# print(a_ma_vr[40:60, 0:20])
+	return a_ma_vr
 
 
 def kk_matrix(xit, xiw, xio, xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3):
@@ -1168,7 +1240,7 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	return tri_ma
 
 
-def tri_matrix(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, cryoturb_diffusion_k):
+def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, cryoturb_diffusion_k):
 	device = nbedrock.device
 
 	nlevdecomp = n_soil_layer

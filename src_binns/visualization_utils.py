@@ -5,7 +5,7 @@ import pandas as pd
 import geopandas as gpd
 import numpy as np
 import torch
-from matplotlib.colors import Normalize 
+from matplotlib.colors import Normalize
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, euclidean_distances
 from scipy.interpolate import interpn
@@ -37,7 +37,7 @@ def plot_losses(filename, losses, labels):
 
 def density_scatter(x, y, ax=None, sort=True, bins=20, **kwargs):
     """Plot a scatter between x/y with density coloring (with 2d histogram).
-    
+
     Code from https://stackoverflow.com/questions/20105364/how-can-i-make-a-scatter-plot-colored-by-density-in-matplotlib
     """
 
@@ -154,7 +154,12 @@ def plot_true_vs_predicted_multioutput(filename, y_hat, y):
     plt.close()
 
 
-def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=None, categorical=False, us_only=False):
+def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=None, categorical=False, us_only=False,
+                                graph_edgeindex=None, graph_edgeweights=None, histogram=False):
+    """
+    graph_edgeindex: [2, num_edges]. Each edge is a COLUMN with the indices of the two nodes it connects.
+    graph_edgeweights: [num_edges]
+    """
     if title is None:
         title = var_name
     # Exclude NaNs and Infs
@@ -174,10 +179,32 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
     if us_only:
         ax.set_xlim(-124.8, -66.9)
         ax.set_ylim(24.5, 49.4)
-    gdf.plot(column=var_name, ax=ax, marker='o', markersize=10, legend=True, zorder=10)  # legend_kwds={'shrink': 0.7},
+
+    # Plot graph edges if given
+    if graph_edgeindex is not None:
+        # print("Edgeweights", graph_edgeweights.mean(), graph_edgeweights.std(), graph_edgeweights)
+        for e in range(graph_edgeindex.shape[1]):  # Loop through all edges
+            # Indices of the nodes the edge connects
+            node1_idx = graph_edgeindex[0, e]
+            node2_idx = graph_edgeindex[1, e]
+
+            # Weight of the edge (if provided)
+            if graph_edgeweights is not None:
+                weight = 5*graph_edgeweights[e]
+            else:
+                weight = 1
+
+            # Plot line between the two points
+            # print("Point", [lons[node1_idx], lats[node1_idx]], [lons[node2_idx], lats[node2_idx]])
+            plt.plot([lons[node1_idx], lons[node2_idx]], [lats[node1_idx], lats[node2_idx]], linewidth=weight, color='gray')
+
+    # Plot nodes (datapoints)
+    gdf.plot(column=var_name, ax=ax, marker='o', markersize=18, legend=True, zorder=10)  # legend_kwds={'shrink': 0.7},
+
+    # Plot title and save figure
     plt.title(title)
     if plot_dir is not None:
-        plt.savefig(os.path.join(plot_dir, "map_{}.png".format(var_name)), bbox_inches='tight')
+        plt.savefig(os.path.join(plot_dir, "{}_map.png".format(var_name)), bbox_inches='tight')
         plt.close()
     else:
         plt.show()
@@ -185,14 +212,17 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
     # Plot histograms of the raw values
     # filtered_values = values[~np.isnan(values)]
     # filtered_values = filtered_values[~np.isinf(filtered_values)]
-    values = values[~np.isnan(values)]
-    values = values[~np.isinf(values)]
-    plt.hist(values, bins=30)
-    plt.title(title)
-    if plot_dir is not None:
-        plt.savefig(os.path.join(plot_dir, "histogram_{}.png".format(var_name)))
-        plt.close()
-    else:
-        plt.show()
+    if histogram:
+        values = values[~np.isnan(values)]
+        values = values[~np.isinf(values)]
+        plt.hist(values, bins=30)
+        plt.title(title)
+        if plot_dir is not None:
+            if not os.path.exists(plot_dir):
+                os.makedirs(plot_dir)
+            plt.savefig(os.path.join(plot_dir, "{}_histogram.png".format(var_name)))
+            plt.close()
+        else:
+            plt.show()
 
 

@@ -4,8 +4,10 @@ import torch
 import traceback
 import math
 
+
 # Simulate the soil carbon profile using the CLM5 model at the depth of the observation layers
-def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_depth, vertical_mixing):
+# If "residual" is passed, should be of shape [batch, 20] with ML correction to PBM output
+def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_depth, vertical_mixing, residual=None):
 	device = tensor_para.device
 	# convert tensor to numpy
 	para = tensor_para
@@ -30,6 +32,7 @@ def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_de
 	# final ouputs of simulation
 	profile_num = para.shape[0]
 	simu_ouput = (torch.ones((profile_num, 200))*np.nan).to(device)
+
 	# calculate soc solution for each profile
 	for iprofile in range(0, profile_num):
 		profile_para = para[iprofile, :]
@@ -44,6 +47,9 @@ def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_de
 			# print(profile_para)
 			# model simulation
 			profile_simu_soc = fun_matrix_clm5(profile_para, profile_force_steady_state, vertical_mixing)
+			if residual is not None:
+				profile_simu_soc = profile_simu_soc * (1+residual[iprofile, :])
+
 
 			for ilayer in range(0, len(valid_layer_loc)):
 				layer_depth = profile_obs_layer_depth[valid_layer_loc[ilayer]]
@@ -534,6 +540,20 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	# matrix_in[40:60, 0] = input_tot_litter2*vertical_input
 	# matrix_in[60:80, 0] = input_tot_litter3*vertical_input
 	# matrix_in[80:140, 0] = 0
+
+
+	# print("=================== Normal example ====================")
+	# # print("A", a_ma)
+	# # print("A ma block", a_ma[40:60, 0:20])
+	# # print("KK", kk_ma)
+	# # print("Tri", tri_ma)
+	# # print("dz_matrix", dz_matrix)
+	# # print("dz diag", torch.diag(dz_matrix))
+	# # exit(1)
+	# print("TRI", torch.diag(tri_ma[20:40, 20:40]))
+	# print(torch.diag(tri_ma[20:40, 20:40], diagonal=1))
+	# print(torch.diag(tri_ma[20:40, 20:40], diagonal=-1))
+	# exit(1)
 
 	# analytical solution of soc pools
 	try:
