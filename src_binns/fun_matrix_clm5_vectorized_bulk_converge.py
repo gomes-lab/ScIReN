@@ -4,13 +4,12 @@ import torch
 import traceback
 import math
 
-def fun_bulk_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_depth):
+def fun_bulk_simu(tensor_para, tensor_frocing_steady_state):
 	device = tensor_para.device
 	# convert tensor to numpy
 	para = tensor_para
 	# para = (tensor_para - (-1)) /(1 - (-1)) # conversion from Hardttanh [-1, 1] to [0, 1]
 	frocing_steady_state = tensor_frocing_steady_state 
-	obs_layer_depth = tensor_obs_layer_depth
 
 	# depth of the node                                                   
 	zsoi = torch.tensor([1.000000000000000E-002, 4.000000000000000E-002, 9.000000000000000E-002, \
@@ -457,7 +456,7 @@ def fun_matrix_clm5(para, frocing_steady_state):
 		# cpool_steady_state = torch.div(cpool_steady_state, dz_matrix_diagonal)
 	except Exception:
 		traceback.print_exc()
-		print("Predicted Parameters: ", para)
+		print("Predicted Parameters in Bulk simu cpool: ", para)
 		# check if the matrix is singular and print the matrix
 		# check a_ma
 		if torch.isnan(torch.sum(a_ma)):
@@ -521,24 +520,69 @@ def fun_matrix_clm5(para, frocing_steady_state):
 
 
 	diag_scaler_temp = torch.nanmean(diag_scaler_monthly, axis = 1).to(device)
-	diag_scaler = (torch.ones([npool_vr, npool_vr])*np.nan).to(device)
-	# Fill the diagonal of diag_scaler with diag_scaler_temp for each pool
-	diag_scaler[0:20, 0:20] = torch.diag(diag_scaler_temp[0:20])
-	diag_scaler[20:40, 20:40] = torch.diag(diag_scaler_temp[0:20])
-	diag_scaler[40:60, 40:60] = torch.diag(diag_scaler_temp[0:20])
-	diag_scaler[60:80, 60:80] = torch.diag(diag_scaler_temp[0:20])
-	diag_scaler[80:100, 80:100] = torch.diag(diag_scaler_temp[0:20])
-	diag_scaler[100:120, 100:120] = torch.diag(diag_scaler_temp[0:20])
-	diag_scaler[120:140, 120:140] = torch.diag(diag_scaler_temp[0:20])
+	diag_scaler = torch.cat([diag_scaler_temp] * 7)
+	diag_scaler = torch.diag(diag_scaler)
+	# print("diag_scalar", diag_scalar)
+	# print("diag_scalar", diag_scalar.shape)
+
+	# diag_scaler = (torch.ones([npool_vr, npool_vr])*0).to(device)
+	# # Fill the diagonal of diag_scaler with diag_scaler_temp for each pool
+	# diag_scaler[0:20, 0:20] = torch.diag(diag_scaler_temp[0:20])
+	# diag_scaler[20:40, 20:40] = torch.diag(diag_scaler_temp[0:20])
+	# diag_scaler[40:60, 40:60] = torch.diag(diag_scaler_temp[0:20])
+	# diag_scaler[60:80, 60:80] = torch.diag(diag_scaler_temp[0:20])
+	# diag_scaler[80:100, 80:100] = torch.diag(diag_scaler_temp[0:20])
+	# diag_scaler[100:120, 100:120] = torch.diag(diag_scaler_temp[0:20])
+	# diag_scaler[120:140, 120:140] = torch.diag(diag_scaler_temp[0:20])
 
 	# calculate the residence time
-	residence_time = torch.linalg.solve((torch.matmul(a_ma, kk_ma)- torch.matmul(tri_ma, dz_matrix)), (-B_matrix))
-	residence_time_baseline = torch.linalg.solve(torch.matmul((torch.matmul(a_ma, kk_ma)- torch.matmul(tri_ma, dz_matrix)), diag_scaler), (-B_matrix))
+	residence_time = torch.linalg.solve((torch.matmul(a_ma, kk_ma)- tri_ma), (-B_matrix))
+	try: 
+		residence_time_baseline = torch.linalg.solve((torch.matmul(a_ma, kk_ma) - tri_ma)*diag_scaler, (-B_matrix))
+	except Exception:
+		traceback.print_exc()
+		print("Predicted Parameters in Bulk simu residence time: ", para)
+		# check if the matrix is singular and print the matrix
+		# check a_ma
+		if torch.isnan(torch.sum(a_ma)):
+			print("a_ma contains nan")
+		if torch.det(a_ma) == 0:
+			print("a_ma is singular")
+		# check kk_ma
+		if torch.isnan(torch.sum(kk_ma)):
+			print("kk_ma contains nan")
+		if torch.det(kk_ma) == 0:
+			print("kk_ma is singular")
+			print(torch.diagonal(kk_ma))
+		# check tri_ma
+		if torch.isnan(torch.sum(tri_ma)):
+			print("tri_ma contains nan")
+		if torch.det(tri_ma) == 0:
+			print("tri_ma is singular")
+			print(torch.diagonal(tri_ma, offset=0))
+			print(torch.diagonal(tri_ma, offset=1))
+			print(torch.diagonal(tri_ma, offset=-1))
+		# check matrix_in
+		if torch.isnan(torch.sum(B_matrix)):
+			print("B_matrix contains nan")
+		if torch.det(B_matrix) == 0:
+			print("B_matrix is singular")
+			print(B_matrix)
+		if torch.isnan(torch.sum(diag_scaler)):
+			print("diag_scaler contains nan")
+		if torch.det(diag_scaler) == 0:
+			print("diag_scaler is singular")
+			print(diag_scaler)		
+		if torch.det(torch.matmul(a_ma, kk_ma)-tri_ma) == 0:
+			print("a_ma*kk_ma - tri_ma is singular")
+		if torch.det(torch.matmul(torch.matmul(a_ma, kk_ma) - tri_ma, diag_scaler)) == 0:
+			print("a_ma*kk_ma - tri_ma is singular")
+		residence_time_baseline = (torch.ones([140, 1])*(-1.0)).to(device)*torch.sum(para)/torch.sum(para)
 
 	total_res_time = torch.cat((residence_time[80:100, :], residence_time[100:120, :], residence_time[120:140, :]), dim = 1)
 	total_res_time = torch.sum(total_res_time, axis = 1)
 
-	total_res_time_base = torch.cat((residence_time[80:100, :], residence_time[100:120, :], residence_time[120:140, :]), dim = 1)
+	total_res_time_base = torch.cat((residence_time_baseline[80:100, :], residence_time_baseline[100:120, :], residence_time_baseline[120:140, :]), dim = 1)
 	total_res_time_base = torch.sum(total_res_time_base, axis = 1)
 
 	res_time_base_pools = residence_time_baseline
