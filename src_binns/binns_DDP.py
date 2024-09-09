@@ -12,6 +12,8 @@ import subprocess
 import argparse
 from mlp import mlp_wrapper
 from pe_gcn_model import GridCellSpatialRelationEncoder
+from sklearn.model_selection import KFold
+
 
 # sys.path.append('C:/Users/hx293/Research_Data/BINN/')
 # sys.path.append('/glade/u/home/haodixu/BINN')
@@ -90,7 +92,9 @@ parser.add_argument("--lambda_lipschitz", type=float, default=1, help="If model 
 parser.add_argument("--categorical", type=str, default="embedding", choices=["embedding", "one_hot"], help="Which embedding to use for categorical variables")
 parser.add_argument("--embed_dim", type=int, default=5, help="Embedding dim for each categorical variable (if using embeddings)")
 parser.add_argument("--use_bn", action='store_true', help="Whether to use batchnorm")
+parser.add_argument("--cross_val_idx", type=int, default=0, help="Cross-validation index")
 parser.add_argument("--whether_resume", type=int, default=0, help="Whether to resume training from a previous model")
+
 
 
 args = parser.parse_args()
@@ -142,6 +146,8 @@ if args.whether_resume == 0:
 	print(f"New job ID: {job_id}")
 	if args.seed != 0:
 		job_id += ("_seed_" + str(args.seed))
+	if args.cross_val_idx != 0:
+		job_id += ("_cv_" + str(args.cross_val_idx))
 else:
 	# If resuming, use the same job id as before
 	job_id = os.environ.get('PREVIOUS_JOB_ID')
@@ -196,6 +202,9 @@ if args.whether_resume == 1:
 	
 	# Delete the job submit file
 	os.remove(job_submit_path + 'Resume' + job_id + '.submit')
+
+# k-fold cross validation
+k_folds = 10
 	
 
 
@@ -231,9 +240,9 @@ nc_data_middle.close()
 # data from nn_site_loc_full_cesm2_clm5_cen_vr_v2_whole_time_exp_pc_cesm2_23_cross_valid_0_1.csv to 9
 for i in range(1, 10):
 	# contains one column of profile id
-	nn_site_loc_temp = pd.read_csv(data_dir_input + 'PRODA_Results/nn_site_loc_full_cesm2_clm5_cen_vr_v2_whole_time_exp_pc_cesm2_23_cross_valid_0_' + str(i) + '.csv')
+	nn_site_loc_temp = pd.read_csv(data_dir_input + 'PRODA_Results/nn_site_loc_full_cesm2_clm5_cen_vr_v2_whole_time_exp_pc_cesm2_23_cross_valid_0_' + str(i) + '.csv', header=None)
 	# contains the predicted parameters (21) for each profile
-	nn_site_para_temp = pd.read_csv(data_dir_input + 'PRODA_Results/nn_para_result_full_cesm2_clm5_cen_vr_v2_whole_time_exp_pc_cesm2_23_cross_valid_0_' + str(i) + '.csv')
+	nn_site_para_temp = pd.read_csv(data_dir_input + 'PRODA_Results/nn_para_result_full_cesm2_clm5_cen_vr_v2_whole_time_exp_pc_cesm2_23_cross_valid_0_' + str(i) + '.csv', header=None)
 	# create a dataframe to store the profile id and the parameters
 	if i == 1:
 		# initialize the dataframe
@@ -764,6 +773,7 @@ print("Shape of obs lower depth matrix", obs_lower_depth_matrix.shape)
 print("Shape of env info", env_info.shape)
 # env_info = env_info.loc[valid_profile_loc, :]
 
+
 # Select PRODA parameters so that the Profile_IDs match the current data
 PRODA_para = PRODA_para.loc[PRODA_para['profile_id'].isin(current_data_profile_id)]
 PRODA_para = PRODA_para.sort_values(by='profile_id')                 
@@ -773,32 +783,67 @@ print("Shape of PRODA para", PRODA_para.shape)
 
 # Train, validation, test split
 if args.whether_resume == 0:
-	if test_split_ratio == 0:
-		train_loc = np.random.choice(np.arange(0, len(current_data_x[:, 0])), size = round((1-nn_split_ratio)*len(current_data_x[:, 0])), replace = False)
-		val_loc = np.setdiff1d(np.arange(0, len(current_data_x[:, 0])), train_loc)
+	if args.cross_val_idx == 0:
+		if test_split_ratio == 0:
+			train_loc = np.random.choice(np.arange(0, len(current_data_x[:, 0])), size = round((1-nn_split_ratio)*len(current_data_x[:, 0])), replace = False)
+			val_loc = np.setdiff1d(np.arange(0, len(current_data_x[:, 0])), train_loc)
 
-		train_y = torch.tensor(current_data_y[train_loc, :], dtype = torch.float32)
-		val_y = torch.tensor(current_data_y[val_loc, :], dtype = torch.float32)
+			train_y = torch.tensor(current_data_y[train_loc, :], dtype = torch.float32)
+			val_y = torch.tensor(current_data_y[val_loc, :], dtype = torch.float32)
 
-		train_z = torch.tensor(current_data_z[train_loc, :], dtype = torch.float32)
-		val_z = torch.tensor(current_data_z[val_loc, :], dtype = torch.float32)
+			train_z = torch.tensor(current_data_z[train_loc, :], dtype = torch.float32)
+			val_z = torch.tensor(current_data_z[val_loc, :], dtype = torch.float32)
 
-		train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype = torch.float32)
-		# train_x = train_x.requires_grad_(True)
-		val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype = torch.float32)
-		# val_x = val_x.requires_grad_(True)
+			train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype = torch.float32)
+			# train_x = train_x.requires_grad_(True)
+			val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype = torch.float32)
+			# val_x = val_x.requires_grad_(True)
 
-		train_profile_id = torch.tensor(current_data_profile_id[train_loc], dtype = torch.long)
-		val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype = torch.long)
+			train_profile_id = torch.tensor(current_data_profile_id[train_loc], dtype = torch.long)
+			val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype = torch.long)
+		else:
+			# Determine the number of training samples based on the ratios
+			train_loc = np.random.choice(np.arange(0, len(current_data_x[:, 0])), size=round((1 - nn_split_ratio - test_split_ratio) * len(current_data_x[:, 0])), replace=False)
+			# The remaining data after removing the training samples
+			remaining_loc = np.setdiff1d(np.arange(0, len(current_data_x[:, 0])), train_loc)
+			# Split the remaining data into validation and test sets
+			num_val_samples = round(nn_split_ratio / (nn_split_ratio + test_split_ratio) * len(remaining_loc))
+			val_loc = np.random.choice(remaining_loc, size=num_val_samples, replace=False)
+			test_loc = np.setdiff1d(remaining_loc, val_loc)
+
+			train_y = torch.tensor(current_data_y[train_loc, :], dtype=torch.float32)
+			val_y = torch.tensor(current_data_y[val_loc, :], dtype=torch.float32)
+			test_y = torch.tensor(current_data_y[test_loc, :], dtype=torch.float32)
+
+			train_z = torch.tensor(current_data_z[train_loc, :], dtype=torch.float32)
+			val_z = torch.tensor(current_data_z[val_loc, :], dtype=torch.float32)
+			test_z = torch.tensor(current_data_z[test_loc, :], dtype=torch.float32)
+
+			train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype=torch.float32)
+			# train_x = train_x.requires_grad_(True)
+			val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype=torch.float32)
+			# val_x = val_x.requires_grad_(True)
+			test_x = torch.tensor(current_data_x[test_loc, :, :, :], dtype=torch.float32)
+			# test_x = test_x.requires_grad_(True)
+
+			train_profile_id = torch.tensor(current_data_profile_id[train_loc], dtype=torch.long)
+			val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype=torch.long)
+			test_profile_id = torch.tensor(current_data_profile_id[test_loc], dtype=torch.long)
+
+			print("Shape of train data", train_x.shape)
+			print("Shape of val data", val_x.shape)
+			print("Shape of test data", test_x.shape)
 	else:
-		# Determine the number of training samples based on the ratios
-		train_loc = np.random.choice(np.arange(0, len(current_data_x[:, 0])), size=round((1 - nn_split_ratio - test_split_ratio) * len(current_data_x[:, 0])), replace=False)
-		# The remaining data after removing the training samples
-		remaining_loc = np.setdiff1d(np.arange(0, len(current_data_x[:, 0])), train_loc)
-		# Split the remaining data into validation and test sets
-		num_val_samples = round(nn_split_ratio / (nn_split_ratio + test_split_ratio) * len(remaining_loc))
-		val_loc = np.random.choice(remaining_loc, size=num_val_samples, replace=False)
-		test_loc = np.setdiff1d(remaining_loc, val_loc)
+		# Split the data into k-folds (defined previously)
+		# Assign the test dataset based on the cross-validation index
+		# Randomly split the remaining data into training and validation sets
+		kf = KFold(n_splits=k_folds, shuffle=True, random_state=args.seed)
+		fold_indices = list(kf.split(np.arange(len(current_data_x[:, 0]))))
+		test_loc = fold_indices[args.cross_val_idx - 1][1]
+		train_val_idx = fold_indices[args.cross_val_idx - 1][0]
+
+		train_loc = np.random.choice(train_val_idx, size=round((1 - nn_split_ratio - test_split_ratio)/(1 - test_split_ratio) * len(train_val_idx)), replace=False)
+		val_loc = np.setdiff1d(train_val_idx, train_loc)
 
 		train_y = torch.tensor(current_data_y[train_loc, :], dtype=torch.float32)
 		val_y = torch.tensor(current_data_y[val_loc, :], dtype=torch.float32)
@@ -822,6 +867,8 @@ if args.whether_resume == 0:
 		print("Shape of train data", train_x.shape)
 		print("Shape of val data", val_x.shape)
 		print("Shape of test data", test_x.shape)
+
+
 else:
 	# load train, val, and test indices
 	train_loc = checkpoint_main['train_indices']
@@ -1032,6 +1079,8 @@ predict_data_z = np.ones((grid_env_info_num))*np.nan
 print("Shape of predict data x", predict_data_x.shape)
 print("Shape of predict data z", predict_data_z.shape)
 print("Shape of grid env info US", grid_env_info_US.shape)
+
+# Flatten the data
 print(datetime.now(), '------------grid env info prepared------------')
 
 
@@ -1135,7 +1184,7 @@ def binns_loss(y_pred, y_true, pred_para):
 	# * l2_loss_func(soc_simu_vector, soc_true_vector)
 	# torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean') * 
 	l1_loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean')
-	loss = l1_loss + regularization_weight * parameter_regularization_loss
+	loss = l1_loss + regularization_weight * parameter_regularization_loss 
 	# print(modeling_inefficiency)
 
 	##########################
@@ -2094,7 +2143,8 @@ def worker(rank, world_size):
 					f.write(f'# Start the Python Code\n')
 					f.write(f'python -u /glade/u/home/haodixu/BINN/Server_Script/binns_DDP.py --lr ' + str(args.lr) + ' --weight_decay ' + str(args.weight_decay) + ' --batch_size ' + str(args.batch_size) + \
 			 			' --seed ' + str(args.seed) + ' --n_epochs ' + str(args.n_epochs) + ' --patience ' + str(args.patience) + ' --model ' + str(args.model) + ' --lambda_lipschitz ' + str(args.lambda_lipschitz) + \
-						' --note ' + str(args.note) + ' --categorical ' + str(args.categorical) + ' --use_bn ' + ' --embed_dim ' + str(args.embed_dim) + ' --num_CPU ' + str(args.num_CPU) + ' --whether_resume 1\n')
+						' --note ' + str(args.note) + ' --categorical ' + str(args.categorical) + ' --use_bn ' + ' --embed_dim ' + str(args.embed_dim) + ' --cross_val_idx' + str(args.cross_val_idx) + \
+						' --num_CPU ' + str(args.num_CPU) + ' --whether_resume 1\n')
 
 				# submit the job again
 				submit_command = ['qsub', 
@@ -2224,7 +2274,7 @@ def worker(rank, world_size):
 		carbon_input_test_profile, cpool_steady_state_test_profile, cpools_layer_test_profile, \
 			soc_layer_test_profile, total_res_time_test_profile, total_res_time_base_test_profile, res_time_base_pools_test_profile, \
 				t_scaler_test_profile, bulk_A_test_profile, w_scaler_test_profile, bulk_K_test_profile, bulk_V_test_profile, bulk_xi_test_profile, \
-					bulk_I_test_profile, litter_fraction_test_profile = fun_bulk_simu(best_guess_test_pred_para.to(device), test_x.to(device), test_z.to(device))
+					bulk_I_test_profile, litter_fraction_test_profile = fun_bulk_simu(best_guess_test_pred_para.to(device), test_x.to(device))
 		
 		# store the results
 		carbon_input_test[test_profile_id, :] = carbon_input_test_profile.detach().cpu().numpy()
@@ -2299,7 +2349,7 @@ def worker(rank, world_size):
 		carbon_input_val_profile, cpool_steady_state_val_profile, cpools_layer_val_profile, \
 			soc_layer_val_profile, total_res_time_val_profile, total_res_time_base_val_profile, res_time_base_pools_val_profile, \
 				t_scaler_val_profile, bulk_A_val_profile, w_scaler_val_profile, bulk_K_val_profile, bulk_V_val_profile, bulk_xi_val_profile, \
-					bulk_I_val_profile, litter_fraction_val_profile = fun_bulk_simu(best_guess_val_pred_para.to(device), val_x.to(device), val_z.to(device))
+					bulk_I_val_profile, litter_fraction_val_profile = fun_bulk_simu(best_guess_val_pred_para.to(device), val_x.to(device))
 		
 		# store the results
 		carbon_input_val[val_profile_id, :] = carbon_input_val_profile.detach().cpu().numpy()
@@ -2372,7 +2422,7 @@ def worker(rank, world_size):
 		carbon_input_train_profile, cpool_steady_state_train_profile, cpools_layer_train_profile, \
 			soc_layer_train_profile, total_res_time_train_profile, total_res_time_base_train_profile, res_time_base_pools_train_profile, \
 				t_scaler_train_profile, bulk_A_train_profile, w_scaler_train_profile, bulk_K_train_profile, bulk_V_train_profile, bulk_xi_train_profile, \
-					bulk_I_train_profile, litter_fraction_train_profile = fun_bulk_simu(best_guess_train_pred_para.to(device), train_x.to(device), train_z.to(device))
+					bulk_I_train_profile, litter_fraction_train_profile = fun_bulk_simu(best_guess_train_pred_para.to(device), train_x.to(device))
 		
 		# store the results
 		carbon_input_train[train_profile_id, :] = carbon_input_train_profile.detach().cpu().numpy()
@@ -2643,8 +2693,7 @@ def worker(rank, world_size):
 		carbon_input_pred, cpool_steady_state_pred, cpools_layer_pred, soc_layer_pred, total_res_time_pred, \
 			total_res_time_base_pred, res_time_base_pools_pred, t_scaler_pred, bulk_A_pred, \
 			w_scaler_pred, bulk_K_pred, bulk_V_pred, bulk_xi_pred, bulk_I_pred, litter_fraction_pred = fun_bulk_simu(grid_pred_para.to(device), \
-																											torch.tensor(predict_data_x, dtype=torch.float32, device=device), \
-																												torch.tensor(predict_data_z, dtype=torch.float32, device=device))
+																											torch.tensor(predict_data_x, dtype=torch.float32, device=device))
 		# Save the bulk simulation results into csv files
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_carbon_input_' + job_id + '.csv', carbon_input_pred.detach().cpu().numpy(), delimiter = ',')
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_pred.detach().cpu().numpy(), delimiter = ',')
