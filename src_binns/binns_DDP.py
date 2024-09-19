@@ -10,10 +10,12 @@ import random
 import warnings
 import subprocess
 import argparse
-from mlp import mlp_wrapper
+
+from mlp import GNN_BINN, Spatial_BINN, mlp_wrapper, nn_only, BINN_Hybrid
 from torch.optim.swa_utils import AveragedModel, SWALR
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from pe_gcn_model import GridCellSpatialRelationEncoder
+from spatial_utils import *
 
 # sys.path.append('C:/Users/hx293/Research_Data/BINN/')
 # sys.path.append('/glade/u/home/haodixu/BINN')
@@ -260,11 +262,12 @@ print(PRODA_para.head())
 #-------------------------------
 # CLM5 constants
 #-------------------------------
-# parameters names
-para_names = ['slope', 'intercept', 'q10', 'efolding', 'taucwd', 'taul1', 'taul2', 'tau4s1', 'tau4s2', 'tau4s3', 'fl1s1', 'fl2s1', 'fl3s2', 'fs1s2', 'fs1s3', 'fs2s1', 'fs2s3', 'fs3s1', 'fcwdl2', 'w-scaling', 'beta']
-if args.vertical_mixing == 'simple_two_intercepts':
-	para_names.append('intercept_leach')
-# para_names = ['diffus', 'cryo', 'q10', 'efolding', 'taucwd', 'taul1', 'taul2', 'tau4s1', 'tau4s2', 'tau4s3', 'fl1s1', 'fl2s1', 'fl3s2', 'fs1s2', 'fs1s3', 'fs2s1', 'fs2s3', 'fs3s1', 'fcwdl2', 'w-scaling', 'beta']
+if args.vertical_mixing == 'original':
+	para_names = ['diffus', 'cryo', 'q10', 'efolding', 'taucwd', 'taul1', 'taul2', 'tau4s1', 'tau4s2', 'tau4s3', 'fl1s1', 'fl2s1', 'fl3s2', 'fs1s2', 'fs1s3', 'fs2s1', 'fs2s3', 'fs3s1', 'fcwdl2', 'w-scaling', 'beta']
+else:
+	para_names = ['slope', 'intercept', 'q10', 'efolding', 'taucwd', 'taul1', 'taul2', 'tau4s1', 'tau4s2', 'tau4s3', 'fl1s1', 'fl2s1', 'fl3s2', 'fs1s2', 'fs1s3', 'fs2s1', 'fs2s3', 'fs3s1', 'fcwdl2', 'w-scaling', 'beta']
+	if args.vertical_mixing == 'simple_two_intercepts':
+		para_names.append('intercept_leach')
 
 # parameters index for retrieval test
 # If choosing all parameters
@@ -408,7 +411,7 @@ profile_collection = np.reshape(profile_collection, [profile_collection.shape[0]
 
 profile_range = np.arange(0, len(profile_collection))
 
-print('number of profiles: ', len(profile_collection))
+print('number of profiles: ', len(profile_collection), "min value", profile_collection.min(), "max value", profile_collection.max())
 
 print(datetime.now(), '------------all input data loaded------------')
 
@@ -736,7 +739,7 @@ lats = np.array(env_info.loc[profile_collection[:, 0], "original_lat"])
 # 	visualization_utils.plot_observations_world_map(lons, lats, this_layer_y, PLOT_DIR, col_name)
 # 	layer_top = layer_bottom
 
-
+print("Curr data X before nan_loc", current_data_x.shape)
 nan_loc = np.nanmean(current_data_y, axis = 1) + \
 			np.sum(current_data_x[:, 0:len(var4nn), 0, 0], axis = 1) + \
 			np.sum(model_force_input_vector_cwd, axis = 1) + \
@@ -751,8 +754,9 @@ nan_loc = np.nanmean(current_data_y, axis = 1) + \
 			np.sum(model_force_sand_vector, axis = (1, 2)) + \
 			np.sum(model_force_soil_temp_profile, axis = (1, 2)) + \
 			np.sum(model_force_soil_water_profile, axis = (1, 2))
-
+print("Nan_loc shape", nan_loc.shape)
 valid_profile_loc = np.where(np.isnan(nan_loc) == False)[0] ### Why change the shape from 26915 to 26934??? ###
+print("Valid profile loc shape", valid_profile_loc.shape, valid_profile_loc.min(), valid_profile_loc.max())
 
 current_data_y = current_data_y[valid_profile_loc, :]
 current_data_z = current_data_z[valid_profile_loc, :]
@@ -849,7 +853,11 @@ else:
 	val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype=torch.long)
 	test_profile_id = torch.tensor(current_data_profile_id[test_loc], dtype=torch.long)
 
-
+print("Train loc", train_loc.min(), train_loc.max())
+print("Val loc", val_loc.min(), val_loc.max())
+print("Test loc", test_loc.min(), test_loc.max())
+print("Train profile", train_profile_id.min(), train_profile_id.max(), train_profile_id.shape)
+exit(1)
 
 # test
 # torch.autograd.set_detect_anomaly(True)
@@ -1928,8 +1936,8 @@ def worker(rank, world_size):
 		# 	# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_rank_val_pred_soc_' + job_id + "_" + str(iepoch) + '.csv', val_pred_soc_all_rank.detach().cpu().numpy(), delimiter = ',')
 		# 	# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_rank_val_pred_para_' + job_id + "_" + str(iepoch) + '.csv', val_pred_para_all_rank.detach().cpu().numpy(), delimiter = ',')
 
-			# Calculate the NSE for the validation predictions
-			val_all_total_loss, val_all_NSE, val_all_l1_loss = fun_loss(temp_val_pred_soc, val_y, temp_val_pred_para)
+		# 	# Calculate the NSE for the validation predictions
+		# 	val_all_total_loss, val_all_NSE, val_all_l1_loss = fun_loss(temp_val_pred_soc, val_y, temp_val_pred_para)
 
 		# dist.barrier()
 		# # Boardcast the validation loss to all processes

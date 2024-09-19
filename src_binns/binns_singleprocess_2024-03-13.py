@@ -11,7 +11,6 @@ import warnings
 import subprocess
 import argparse
 
-from torch_cluster import knn_graph
 from mlp import GNN_BINN, Spatial_BINN, mlp_wrapper, nn_only, BINN_Hybrid
 from torch.optim.swa_utils import AveragedModel, SWALR
 from torch.optim.lr_scheduler import CosineAnnealingLR
