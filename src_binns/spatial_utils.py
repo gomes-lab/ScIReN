@@ -17,23 +17,23 @@ def latlon_to_cart(lat,lon):
   cart_coord = np.column_stack((x, y, z))
   return cart_coord
 
-def haversine(lon1, lat1, lon2, lat2):
+def haversine(lon1, lat1, lon2, lat2): 
     """
-    Calculate the great circle distance between two points
+    Calculate the great circle distance between two points 
     on the earth (specified in decimal degrees)
     """
     lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
-
+ 
     # haversine
-    dlon = lon2 - lon1
-    dlat = lat2 - lat1
+    dlon = lon2 - lon1 
+    dlat = lat2 - lat1 
     a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-    c = 2 * asin(sqrt(a))
-    r = 6371
+    c = 2 * asin(sqrt(a)) 
+    r = 6371 
     return c * r * 1000
 
 # Helper function for 2+d distance
-def newDistance(a, b, nd_dist="great_circle"):
+def newDistance(a, b, nd_dist="great_circle"):  
     # Distance options are ["great_circle" (2D only), "euclidean", "wasserstein" (for higher-dimensional coordinate embeddings)]
     if a.shape[0]==2:
       x1, y1 = a[0], a[1]
@@ -47,14 +47,14 @@ def newDistance(a, b, nd_dist="great_circle"):
       x2, y2, z2 = b[0], b[1], b[2]
       d = math.sqrt(math.pow(x2 - x1, 2) +
                   math.pow(y2 - y1, 2) +
-                  math.pow(z2 - z1, 2)* 1.0)
+                  math.pow(z2 - z1, 2)* 1.0) 
     if a.shape[0]>3:
       if nd_dist=="wasserstein":
         d = wasserstein_distance(a.reshape(-1).detach(),b.reshape(-1).detach())
         #d = sgw_cpu(a.reshape(1,-1).detach(),b.reshape(1,-1).detach())
       else:
-        d = torch.pow(a.reshape(1,1,-1) - b.reshape(1,1,-1), 2).sum(2)
-    return d
+        d = torch.pow(a.reshape(1,1,-1) - b.reshape(1,1,-1), 2).sum(2) 
+    return d 
 
 # Helper function for edge weights
 def makeEdgeWeight(x, edge_index):

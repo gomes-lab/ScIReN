@@ -68,7 +68,7 @@ class mlp(torch.nn.Module):
 
     def spectral_norm_parallel(self, device):
         """Code from https://github.com/NVlabs/NVAE/blob/master/model.py
-
+            
         This method computes spectral normalization for all conv layers in parallel. This method should be called
          after calling the forward method of all the conv layers in each iteration. """
 
@@ -77,7 +77,7 @@ class mlp(torch.nn.Module):
             weight = self.layers[ii].weight
             weight_mat = weight.view(weight.size(0), -1)
 
-            # Modify by batchnorm
+            # Modify by batchnorm?
             if self.use_bn:
                 weight_mat = weight_mat * (self.bns[ii].weight.unsqueeze(1) / torch.sqrt(self.bns[ii].running_var.unsqueeze(1)))
             if weight_mat.shape not in weights:

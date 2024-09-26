@@ -95,10 +95,10 @@ class SingleFeedForwardNN(nn.Module):
             self.skip_connection = skip_connection
         else:
             self.skip_connection = False
-
+        
         self.linear = nn.Linear(self.input_dim, self.output_dim)
         nn.init.xavier_uniform(self.linear.weight)
-
+        
 
 
 
@@ -205,7 +205,7 @@ class MultiLayerFeedForwardNN(nn.Module):
                                                     skip_connection = False,
                                                     context_str = self.context_str))
 
-
+        
 
     def forward(self, input_tensor):
         '''
@@ -237,7 +237,7 @@ class GridCellSpatialRelationEncoder(nn.Module):
     """
     Given a list of (deltaX,deltaY), encode them using the position encoding function
     """
-    def __init__(self, spa_embed_dim, coord_dim = 2, frequency_num = 16,
+    def __init__(self, spa_embed_dim, coord_dim = 2, frequency_num = 16, 
             max_radius =0.01, min_radius = 0.00001,
             freq_init = "geometric",
             ffn=None):
@@ -251,7 +251,7 @@ class GridCellSpatialRelationEncoder(nn.Module):
         super(GridCellSpatialRelationEncoder, self).__init__()
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.spa_embed_dim = spa_embed_dim
-        self.coord_dim = coord_dim
+        self.coord_dim = coord_dim 
         self.frequency_num = frequency_num
         self.freq_init = freq_init
         self.max_radius = max_radius
@@ -304,7 +304,7 @@ class GridCellSpatialRelationEncoder(nn.Module):
             assert self.coord_dim == len(coords[0][0])
         else:
             raise Exception("Unknown coords data type for GridCellSpatialRelationEncoder")
-
+        
         # coords_mat: shape (batch_size, num_context_pt, 2)
         coords_mat = np.asarray(coords).astype(float)
         batch_size = coords_mat.shape[0]
@@ -335,7 +335,7 @@ class GridCellSpatialRelationEncoder(nn.Module):
             coords: a python list with shape (batch_size, num_context_pt, coord_dim)
         Return:
             sprenc: Tensor shape (batch_size, num_context_pt, spa_embed_dim)
-        """
+        """   
         spr_embeds = self.make_input_embeds(coords)
         spr_embeds = torch.FloatTensor(spr_embeds).to(self.device)
         if self.ffn is not None:
@@ -556,4 +556,4 @@ class LossWrapper(nn.Module):
             loss1 = self.criterion(targets.float().reshape(-1),outputs1.float().reshape(-1))
             loss2 = self.criterion(targets2.float().reshape(-1),outputs2.float().reshape(-1))
             loss = loss1 + self.lamb * loss2
-            return loss
+            return loss        
