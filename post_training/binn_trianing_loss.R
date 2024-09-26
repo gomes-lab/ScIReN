@@ -2,20 +2,20 @@
 library(R.matlab)
 library(ggplot2)
 library(cowplot)
-# library(jcolors)
+library(jcolors)
 library(viridis)
 
 ##
 rm(list = ls())
 
-setwd('/Users/ft254/Github/BINNS')
+setwd('/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/BINNS')
 
 ############################
 # load loss history
 ############################
-data_path = '/Users/ft254/DATAHUB/BINNS/OUTPUT_DATA/'
+data_path = '/Users/phoenix/Google_Drive/Tsinghua_Luo/Projects/DATAHUB/BINNS/OUTPUT_DATA/'
 
-date_stamp = '2023-10-27'
+date_stamp = '2023-10-02'
 
 train_loss_history = read.csv(paste(data_path, 'neural_network/train_loss_history_', date_stamp, '.csv', sep = ''), header = FALSE, sep = ',')
 val_loss_history = read.csv(paste(data_path, 'neural_network/val_loss_history_', date_stamp, '.csv', sep = ''), header = FALSE, sep = ',')
@@ -41,7 +41,7 @@ ggplot(data = current_data) +
   geom_line(aes(x = epoch, y = loss, color = as.factor(set)), alpha = 1, size = 2) +
   scale_y_continuous(trans = 'log10', n.breaks = 7) +
   scale_x_continuous(trans = 'identity', n.breaks = 7) +
-  coord_cartesian(ylim = c(0.1, 1), xlim = c(0, epoch_num)) +
+  coord_cartesian(ylim = c(0.3, 10), xlim = c(0, epoch_num)) +
   scale_color_manual(name = '', labels = line_label, values = color_scheme) +
   scale_fill_manual(name = '', labels = line_label, values = color_scheme) +
   # change the background to black and white
