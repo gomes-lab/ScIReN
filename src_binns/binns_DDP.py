@@ -1548,7 +1548,7 @@ def worker(rank, world_size):
 	val_sampler = DistributedSampler(val_dataset)
 
 	# Data loaders with DistributedSampler
-	train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)  # Set drop_last=True to avoid 1-example batches during training, which causes error with BatchNorm https://stackoverflow.com/questions/65882526/expected-more-than-1-value-per-channel-when-training-got-input-size-torch-size
+	train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)
 	val_loader = DataLoader(val_dataset, batch_size=args.batch_size, sampler=val_sampler)
 	# train_loader = DataLoader([[train_x[i], train_y[i], train_z[i], train_profile_id[i]] for i in range(train_y.shape[0])], shuffle = True, batch_size = batch_size, num_workers=4)
 	# val_loader = DataLoader([[val_x[i], val_y[i], val_z[i], val_profile_id[i]] for i in range(val_y.shape[0])], shuffle = True, batch_size = batch_size, num_workers=4)

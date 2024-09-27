@@ -293,8 +293,8 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	# a_ma_old = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
 	# print("a_matrix old", time.time()-start)
 	# start = time.time()
-	a_ma = a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
-	# a_ma = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
+	# a_ma = a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
+	a_ma = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
 	# print("a_matrix_vectorized", time.time()-start)
 	# assert torch.equal(a_ma_old, a_ma)
 
@@ -648,19 +648,6 @@ def tri_matrix_alternative_vectorized(nbedrock, slope, intercept, intercept_leac
 	transport_rate_float[nbedrock:] = -10**(-30)
 	transport_rate_leach = -10**(intercept_leach + slope*torch.log10(zsoi[0:20]*100)) # convert zsoi from m to cm
 	transport_rate_leach[nbedrock:] = -10**(-30)
-
-	# def tri_matrix_alternative_vectorized(nbedrock, slope, intercept, device):
-	# 	# Use torch.diag with offset
-	# 	# slope = -1.2
-	# 	# intercept = -4
-	# 	rate_to_atmos = -0. # # at the surface, part of the CO2 should be released to atmos
-	# 	transport_rate = -10**(intercept + slope*torch.log10(zsoi[0:20]*100)) # convert zsoi from m to cm
-	# 	transport_rate[nbedrock:] = -10**(-30)
-
-	# 	float_ratio = 1.0
-	# 	leach_ratio = 1.0
-	# 	transport_rate_float = transport_rate*float_ratio
-	# 	transport_rate_leach = transport_rate*leach_ratio
 
 	# Create a tridiagonal matrix for each pool type
 	tri_ma_middle = torch.zeros(n_soil_layer, n_soil_layer, device=device)

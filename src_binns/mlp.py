@@ -307,7 +307,7 @@ class mlp_wrapper(nn.Module):
             emb.zero_grad(set_to_none=False)
 
 #---------------------------------------------------
-# BINN Hybrid: process-based model predicts SOC, but NN can correct it
+# EXPERIMENTAL: BINN Hybrid: process-based model predicts SOC, but NN can correct it
 #---------------------------------------------------
 # define model
 class BINN_Hybrid(nn.Module):
@@ -562,7 +562,7 @@ class nn_only(nn.Module):
 
 
 #---------------------------------------------------
-# Use PEGCN as encoder for BINN model
+# EXPERIMENTAL: Use PEGCN as encoder for BINN model
 #---------------------------------------------------
 class GNN_BINN(nn.Module):
     def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, pos_enc,
@@ -759,7 +759,7 @@ class GNN_BINN(nn.Module):
 
 
 #---------------------------------------------------
-# Simple spatial smoothing on predicted params.
+# EXPERIMENTAL: Simple spatial smoothing on predicted params.
 # Positional encoding outputs spatially-correlated errors,
 # use penalty to encourage spatial smoothness
 #---------------------------------------------------

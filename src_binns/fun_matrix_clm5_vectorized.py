@@ -8,6 +8,7 @@ import math
 # Simulate the soil carbon profile using the CLM5 model at the depth of the observation layers
 # If "residual" is passed, should be of shape [batch, 20] with ML correction to PBM output
 def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_depth, vertical_mixing, residual=None):
+	start_time = time.time()
 	device = tensor_para.device
 	# convert tensor to numpy
 	para = tensor_para
@@ -415,9 +416,9 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	# # assert(torch.equal(xit_old, xit))
 	# # assert xit.requires_grad
 
-	# xiw = soil_water_profile_steady_state*w_scaling
-	# xiw[xiw > 1] = 1
-	# # assert xiw.requires_grad
+	# TODO: Was xiw already set above?
+	xiw = soil_water_profile_steady_state*w_scaling
+	xiw[xiw > 1] = 1
 
 	#---------------------------------------------------
 	# steady state tridiagnal matrix, A matrix, K matrix, fire matrix
@@ -671,10 +672,6 @@ def a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, 
 	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 6, 5, transfer_fraction[3])
 	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 7, 5, transfer_fraction[4])
 	fill_submatrix_diagonal(a_ma_vr, nlevdecomp, 7, 6, transfer_fraction[6])
-
-	# # Check values
-	# print(transfer_fraction[8])
-	# print(a_ma_vr[40:60, 0:20])
 	return a_ma_vr
 
 
