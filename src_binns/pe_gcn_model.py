@@ -95,7 +95,7 @@ class SingleFeedForwardNN(nn.Module):
             self.skip_connection = False
         
         self.linear = nn.Linear(self.input_dim, self.output_dim)
-        nn.init.xavier_uniform(self.linear.weight)
+        nn.init.xavier_uniform_(self.linear.weight)
         
 
 
@@ -247,7 +247,6 @@ class GridCellSpatialRelationEncoder(nn.Module):
             max_radius: the largest context radius this model can handle
         """
         super(GridCellSpatialRelationEncoder, self).__init__()
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.spa_embed_dim = spa_embed_dim
         self.coord_dim = coord_dim 
         self.frequency_num = frequency_num
@@ -300,6 +299,8 @@ class GridCellSpatialRelationEncoder(nn.Module):
             coords = list(coords)
         elif type(coords) == list:
             assert self.coord_dim == len(coords[0][0])
+        elif isinstance(coords, torch.Tensor):
+            coords = coords.cpu().numpy()
         else:
             raise Exception("Unknown coords data type for GridCellSpatialRelationEncoder")
         
@@ -330,12 +331,13 @@ class GridCellSpatialRelationEncoder(nn.Module):
         """
         Given a list of coords (deltaX, deltaY), give their spatial relation embedding
         Args:
-            coords: a python list with shape (batch_size, num_context_pt, coord_dim)
+            coords: Tensor with shape (batch_size, num_context_pt, coord_dim)
         Return:
             sprenc: Tensor shape (batch_size, num_context_pt, spa_embed_dim)
-        """   
+        """
+        device = coords.device
         spr_embeds = self.make_input_embeds(coords)
-        spr_embeds = torch.FloatTensor(spr_embeds).to(self.device)
+        spr_embeds = torch.FloatTensor(spr_embeds).to(device)
         if self.ffn is not None:
             return self.ffn(spr_embeds)
         else:
@@ -347,7 +349,6 @@ class GCN(nn.Module):
     """
     def __init__(self, num_features_in=3, num_features_out=1, k=20, MAT=False):
         super(GCN, self).__init__()
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.k = k
         self.MAT = MAT
         self.conv1 = GCNConv(num_features_in, 32)
@@ -356,14 +357,15 @@ class GCN(nn.Module):
         if MAT:
           self.fc_morans = nn.Linear(32, num_features_out)
     def forward(self, x, c, ei, ew):
+        device = x.device
         x = x.float()
         c = c.float()
         if torch.is_tensor(ei) & torch.is_tensor(ew):
           edge_index = ei
           edge_weight = ew
         else:
-          edge_index = knn_graph(c, k=self.k).to(self.device)
-          edge_weight = makeEdgeWeight(c, edge_index).to(self.device)
+          edge_index = knn_graph(c, k=self.k).to(device)
+          edge_weight = makeEdgeWeight(c, edge_index).to(device)
         h1 = F.relu(self.conv1(x, edge_index, edge_weight))
         h1 = F.dropout(h1, training=self.training)
         h2 = F.relu(self.conv2(h1, edge_index, edge_weight))
@@ -381,7 +383,6 @@ class PEGCN(nn.Module):
     """
     def __init__(self, num_features_in=3, num_features_out=1, emb_hidden_dim=128, emb_dim=16, k = 20, MAT=False):
         super(PEGCN, self).__init__()
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.emb_hidden_dim = emb_hidden_dim
         self.emb_dim = emb_dim
         self.k = k
@@ -400,14 +401,15 @@ class PEGCN(nn.Module):
         if MAT:
           self.fc_morans = nn.Linear(32, num_features_out)
     def forward(self, x, c, ei, ew):
+        device = x.device
         x = x.float()
         c = c.float()
         if torch.is_tensor(ei) & torch.is_tensor(ew):
           edge_index = ei
           edge_weight = ew
         else:
-          edge_index = knn_graph(c, k=self.k).to(self.device)
-          edge_weight = makeEdgeWeight(c, edge_index).to(self.device)
+          edge_index = knn_graph(c, k=self.k).to(device)
+          edge_weight = makeEdgeWeight(c, edge_index).to(device)
 
         c = c.reshape(1, c.shape[0], c.shape[1])
         emb = self.spenc(c.detach().cpu().numpy())
@@ -429,7 +431,6 @@ class PEGCN(nn.Module):
 class LossWrapper(nn.Module):
     def __init__(self, model, task_num=1, loss='mse', uw=True, lamb=0.5, k=20, batch_size=2048):
         super(LossWrapper, self).__init__()
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = model
         self.task_num = task_num
         self.uw = uw
@@ -444,6 +445,7 @@ class LossWrapper(nn.Module):
           self.criterion = nn.L1Loss()
 
     def forward(self, input, targets, coords, edge_index, edge_weight, morans_input):
+        device = input.device
 
         if self.task_num==1:
           outputs = self.model(input, coords, edge_index, edge_weight)
@@ -457,7 +459,7 @@ class LossWrapper(nn.Module):
           else:
             moran_weight_matrix = knn_to_adj(knn_graph(coords, k=self.k), self.batch_size) 
             with torch.enable_grad():
-              targets2 = lw_tensor_local_moran(targets, sparse.csr_matrix(moran_weight_matrix)).to(self.device)
+              targets2 = lw_tensor_local_moran(targets, sparse.csr_matrix(moran_weight_matrix)).to(device)
           if self.uw:
             precision1 = 0.5 * torch.exp(-self.log_vars[0])
             loss1 = self.criterion(targets.float().reshape(-1),outputs1.float().reshape(-1))
