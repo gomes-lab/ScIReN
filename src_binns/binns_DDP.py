@@ -334,11 +334,11 @@ sample_profile_id = sample_profile_id - 1
 
 # Choose the profile id with lat and lon within the range of the United States
 profile_collection = np.where(
-	(wosis_profile_info[:, 2] == 156) & 
-	(wosis_profile_info[:, 3] >= -124.763068) & 
-	(wosis_profile_info[:, 3] <= -66.949895) & 
-	(wosis_profile_info[:, 4] >= 24.5) & 
-	(wosis_profile_info[:, 4] <= 49.384358)
+    (wosis_profile_info[:, 2] == 156) & 
+    (wosis_profile_info[:, 3] >= -124.763068) & 
+    (wosis_profile_info[:, 3] <= -66.949895) & 
+    (wosis_profile_info[:, 4] >= 24.5) & 
+    (wosis_profile_info[:, 4] <= 49.384358)
 )[0]
 
 ################################
@@ -497,7 +497,6 @@ for iprofile_hat in profile_range:
 	# soil temperature and water potential
 	model_force_soil_temp_profile[iprofile_hat, :, :] = cesm2_simu_soil_temperature[lat_loc, lon_loc, 0:soil_decom_num, :]
 	model_force_soil_water_profile[iprofile_hat, :, :] = cesm2_simu_w_scalar[lat_loc, lon_loc, 0:soil_decom_num, :]
-	
 # end
 
 # check the overall number of layers in the profile
@@ -670,7 +669,6 @@ current_data_z = obs_depth_matrix
 lons = np.array(env_info.loc[profile_collection[:, 0], "original_lon"])
 lats = np.array(env_info.loc[profile_collection[:, 0], "original_lat"])
 
-
 # # VISUALIZATION: Plot map of each environmental covariate.
 # for col_idx, col_name in enumerate(var4nn):
 # 	envir_var_values = current_data_x[:, col_idx, 0, 0]
@@ -750,8 +748,8 @@ print("Shape of PRODA para", PRODA_para.shape)
 # We do this outside the main function, since the checkpoint
 # stores the train/val/test split for setting up the datasets.
 ##################################################################
-# If PREVIOUS_JOB_ID environment variable set, overwrite the commandline arg.
-# We do this outside the 
+# If PREVIOUS_JOB_ID environment variable set, overwrite the
+# commandline arg.
 if 'PREVIOUS_JOB_ID' in os.environ:
 	args.previous_job_id = os.environ.get('PREVIOUS_JOB_ID')
 	print("Overrode previous_job_id. Now", args.previous_job_id)
@@ -1406,17 +1404,17 @@ class nn_model(nn.Module):
 
 # Helper function to combine the training data into a single tensor
 class MergeDataset(Dataset):
-	def __init__(self, data_x, data_y, data_z, profile_id):
-		self.data_x = data_x
-		self.data_y = data_y
-		self.data_z = data_z
-		self.profile_id = profile_id
+    def __init__(self, data_x, data_y, data_z, profile_id):
+        self.data_x = data_x
+        self.data_y = data_y
+        self.data_z = data_z
+        self.profile_id = profile_id
 
-	def __len__(self):
-		return len(self.data_x)
+    def __len__(self):
+        return len(self.data_x)
 
-	def __getitem__(self, idx):
-		return self.data_x[idx], self.data_y[idx], self.data_z[idx], self.profile_id[idx]
+    def __getitem__(self, idx):
+        return self.data_x[idx], self.data_y[idx], self.data_z[idx], self.profile_id[idx]
 
 
 
@@ -1512,6 +1510,7 @@ def worker(rank, world_size, job_id):
 	# Set up distributed environment
 	device = ddp_setup(rank, world_size)
 	print(f"Finished DDP setup. Rank {rank} of {world_size}. Device {device}. JobID {job_id}.")
+	sys.stdout.flush()
 
 	# Filename to store loss records and visualizations
 	nn_training_name = job_id + '_' + model_name
@@ -2781,8 +2780,10 @@ if __name__ == '__main__':
 	print("MAIN, JOB ID", job_id)
 
 	# Spawn method is required if using GPU
-	import torch.multiprocessing as mp
-	mp.set_start_method('spawn', force=True)
+	if torch.cuda.is_available():
+		assert world_size == len(os.environ["CUDA_VISIBLE_DEVICES"].split(",")), "If using GPU: world_size (num_CPU) must equal number of GPUs in CUDA_VISIBLE_DEVICES"
+		import torch.multiprocessing as mp
+        mp.set_start_method('spawn', force=True)
 
 	# Create the processes
 	for rank in range(world_size):
