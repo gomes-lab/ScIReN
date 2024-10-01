@@ -1942,21 +1942,20 @@ def worker(rank, world_size, job_id):
 		# val_NSE_history[iepoch, :] = val_all_NSE.item()
 
 
-		if rank == 3:
-			# writer.add_scalars('NSE', {'training': torch.stack(all_train_NSE).mean(), 'validation': torch.stack(all_val_NSE).mean()}, iepoch+1)
-			print(f'Epoch {iepoch}, train NSE: {torch.stack(all_train_NSE).mean():.2f}, validation NSE: {torch.stack(all_val_NSE).mean():.2f}, time: {torch.stack(all_train_times).mean():.2f}')
-			# print("Time it takes to calculate validation loss: {:.2f}".format(time.time() - val_loss_start_time))
-			# print the gradient of the NN parameters
-			# for name, param in model.named_parameters():
-			# 	if param.requires_grad:
-			# 		print(name, param.grad)
+		# if rank == 3:
+		# 	# writer.add_scalars('NSE', {'training': torch.stack(all_train_NSE).mean(), 'validation': torch.stack(all_val_NSE).mean()}, iepoch+1)
+		# 	print(f'Epoch {iepoch}, train NSE: {torch.stack(all_train_NSE).mean():.2f}, validation NSE: {torch.stack(all_val_NSE).mean():.2f}, time: {torch.stack(all_train_times).mean():.2f}')
+		# 	# print("Time it takes to calculate validation loss: {:.2f}".format(time.time() - val_loss_start_time))
+		# 	# print the gradient of the NN parameters
+		# 	# for name, param in model.named_parameters():
+		# 	# 	if param.requires_grad:
+		# 	# 		print(name, param.grad)
 		# elif rank == 1:
 		# 	with open(os.path.join(data_dir_output, "neural_network", job_id, avg_loss_filename), "a") as f:
 		# 		f.write(f'{iepoch + 1}, {torch.stack(all_train_losses).mean():.6f}, {torch.stack(all_val_losses).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}\n')
 		# elif rank == 4: 
 		# 	with open(os.path.join(data_dir_output, "neural_network", job_id, avg_NSE_filename), "a") as f:
 		# 		f.write(f'{iepoch + 1}, {torch.stack(all_train_NSE).mean():.6f}, {torch.stack(all_val_NSE).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}\n')
-		
 		######################
 		## Para per 2 epoch ##
 		######################
@@ -1979,8 +1978,6 @@ def worker(rank, world_size, job_id):
 		# 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_para_' + job_id + "_" + str(iepoch) + '.csv', val_pred_para.detach().numpy(), delimiter = ',')
 		# 		# print time
 		# 		print('Epoch {} - Rank {}: {:.5f}'.format(iepoch, rank, time.time() - eval_start_time))
-			
-
 		# 	# elif rank == 6:
 		# 	# try to track the parameters change during training process
 		# 	if iepoch in [0, 5, 10, 15, 20, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900]:
@@ -1992,13 +1989,15 @@ def worker(rank, world_size, job_id):
 		# 		# save data
 		# 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_train_pred_para_' + job_id + "_" + str(iepoch) + '.csv', train_pred_para.detach().numpy(), delimiter = ',')
 
-		elif rank == 0: 
+		if rank == 0: 
 			# writer.add_scalars('loss', {'training': torch.stack(all_train_losses).mean(), 'validation': torch.stack(all_val_losses).mean()}, iepoch+1)
 			print(f'Epoch {iepoch}, train loss: {torch.stack(all_total_train_losses).mean():.2f}, train L1 loss: {torch.stack(all_l1_train_losses).mean():.2f}, \
-		 validation loss: {torch.stack(all_total_val_losses).mean():.2f}, validation L1 loss: {torch.stack(all_l1_val_losses).mean():.2f}, \
-			time: {torch.stack(all_train_times).mean():.2f}')
+				validation loss: {torch.stack(all_total_val_losses).mean():.2f}, validation L1 loss: {torch.stack(all_l1_val_losses).mean():.2f}, \
+				time: {torch.stack(all_train_times).mean():.2f}')
+			print(f'Epoch {iepoch}, train NSE: {torch.stack(all_train_NSE).mean():.2f}, validation NSE: {torch.stack(all_val_NSE).mean():.2f}, time: {torch.stack(all_train_times).mean():.2f}')
 			if args.model == "lipmlp" or args.lambda_lipschitz > 0:
 				print(f'Train Lipschitz loss: {torch.stack(all_train_lipschitz_losses).mean():.2f}')
+			sys.stdout.flush()
 
 			if iepoch == 0 or val_NSE_history[iepoch, :] <= best_val_NSE:  # val_loss_history[iepoch, :] <= best_val_loss
 				# best_simu_soc = middle_simu_soc
@@ -2783,7 +2782,7 @@ if __name__ == '__main__':
 	if torch.cuda.is_available():
 		assert world_size == len(os.environ["CUDA_VISIBLE_DEVICES"].split(",")), "If using GPU: world_size (num_CPU) must equal number of GPUs in CUDA_VISIBLE_DEVICES"
 		import torch.multiprocessing as mp
-        mp.set_start_method('spawn', force=True)
+		mp.set_start_method('spawn', force=True)
 
 	# Create the processes
 	for rank in range(world_size):
