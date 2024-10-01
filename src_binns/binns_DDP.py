@@ -85,7 +85,7 @@ parser.add_argument("--n_datapoints", type=int, default=-1, help="Set this to sa
 
 parser.add_argument("--note", type=str, default="", help="Optional name to give to the model")
 parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp'], help="Model type")
-parser.add_argument("--lambda_lipschitz", type=float, default=1, help="If model is `lipmlp`, this is the weight to put on the Lipschitz loss. If model is `new_mlp`, this is the spectral norm regularization weight.")
+parser.add_argument("--lambda_lipschitz", type=float, default=0, help="If model is `lipmlp`, this is the weight to put on the Lipschitz loss. If model is `new_mlp`, this is the spectral norm regularization weight.")
 parser.add_argument("--categorical", type=str, default="embedding", choices=["embedding", "one_hot"], help="Which embedding to use for categorical variables")
 parser.add_argument("--embed_dim", type=int, default=5, help="Embedding dim for each categorical variable (if using embeddings)")
 parser.add_argument("--use_bn", action='store_true', help="Whether to use batchnorm")
@@ -95,9 +95,10 @@ parser.add_argument("--vertical_mixing", type=str, default='original', choices=[
 						 having the same intercept). simple_two_intercepts allows upwards/downwards transfers to
 						 have different intercepts.""")
 parser.add_argument("--cross_val_idx", type=int, default=0, help="Cross-validation index")
-parser.add_argument("--job_scheduler", type=str, default="pbs", choices=["pbs", "slurm"], help="Job scheduler. PBS for NCAR computers, slurm for AIDA server.")
 parser.add_argument("--whether_resume", type=int, default=0, help="Whether to resume training from a previous model")
 parser.add_argument("--previous_job_id", type=str, default="", help="Previous job id to resume from. Note: if PREVIOUS_JOB_ID environment variable is set, this will be overwritten.")
+parser.add_argument("--job_scheduler", type=str, default="pbs", choices=["pbs", "slurm"], help="Job scheduler. PBS for NCAR computers, slurm for AIDA server.")
+parser.add_argument("--time_limit", type=float, default=11.5, help="Time limit for this job in HOURS. If trainng is not finished yet, start another job to continue.")
 
 args = parser.parse_args()
 
@@ -136,12 +137,13 @@ job_begin_time = time.time()
 # data_dir_input = 'C:/Users/hx293/Research_Data/BINN/ENSEMBLE/INPUT_DATA/'
 # data_dir_output = 'C:/Users/hx293/Unsync_Data/BINN_output/'
 # server path
-job_submit_path = '/glade/u/home/haodixu/BINN/PBS_Submit/Bulk_Converge/'
+# job_submit_path = '/glade/u/home/haodixu/BINN/PBS_Submit/Bulk_Converge/'
 # data_dir_input = '/glade/u/home/haodixu/BINN/ENSEMBLE/INPUT_DATA/'
 # data_dir_output = '/glade/work/haodixu/BINN/BINNS/OUTPUT_DATA/'
 data_dir_input = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/INPUT_DATA/'
 data_dir_output = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/'
-
+job_submit_path = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/src_binns/resume_jobs/'
+os.makedirs(job_submit_path, exist_ok=True)
 
 ################################################
 # Setup datasets
@@ -363,13 +365,12 @@ PRODA_collection = np.where((np.mean(para_gr, axis = 1) < 1.05) &
 # Choose overlap between profile_collection and PRODA_collection
 profile_collection = np.intersect1d(profile_collection, PRODA_collection)
 
-# Choose random subset of profiles for testing.
 if args.n_datapoints != -1:
+	# Choose random subset of profiles for testing.
 	# TODO: maybe create a separate data seed, to separate randomness in data selection from
 	# randomness in algorithm/model initialization
 	rng = np.random.default_rng(seed=args.seed)
 	profile_collection = rng.choice(profile_collection, args.n_datapoints, replace=False)
-	print("Seed", args.seed, "Prof collection", profile_collection[0:20])
 
 profile_collection = np.reshape(profile_collection, [profile_collection.shape[0], 1])
 profile_range = np.arange(0, len(profile_collection))
@@ -500,7 +501,7 @@ for iprofile_hat in profile_range:
 # end
 
 # check the overall number of layers in the profile
-print("Number of layers in profile: " + str(layer_num_record))# 
+print("Number of layers in profile: " + str(layer_num_record))
 print(datetime.now(), '------------soc data prepared------------')
 
 ########################################################
@@ -761,8 +762,11 @@ if args.whether_resume == 1:
 	checkpoint_path = data_dir_output + 'neural_network/' + args.previous_job_id + '/checkpoint_' + args.previous_job_id + '.pt'
 	checkpoint_main = torch.load(checkpoint_path)
 
-	# Delete the job submit file
-	os.remove(job_submit_path + 'Resume' + args.previous_job_id + '.submit')
+	# Delete the job submit file if it exists
+	try:
+		os.remove(job_submit_path + 'Resume' + args.previous_job_id + '.submit')
+	except OSError:
+		pass
 
 
 ################################################################
@@ -1171,7 +1175,6 @@ class nn_model(nn.Module):
 		# Dict from categorical variable index -> Embedding layer we use
 		self.var_idx_to_emb = var_idx_to_emb
 		self.vertical_mixing = vertical_mixing
-		print("Vertical mixnig", self.vertical_mixing)
 
 		# List of non-categorical variable indices
 		self.non_categorical_indices = list(set(list(range(len(var4nn)))).difference(var_idx_to_emb.keys()))
@@ -1515,7 +1518,8 @@ def worker(rank, world_size, job_id):
 	avg_loss_filename = 'avg_loss_' + nn_training_name + '.txt'
 	avg_l1_loss_filename = 'avg_l1_loss_' + nn_training_name + '.txt'
 	avg_NSE_filename = 'avg_NSE_' + nn_training_name + '.txt'
-	PLOT_DIR = os.makedirs(os.path.join(data_dir_output, 'neural_network', job_id, 'visualizations'), exist_ok=True)
+	PLOT_DIR = os.path.join(data_dir_output, 'neural_network', job_id, 'visualizations')
+	os.makedirs(PLOT_DIR, exist_ok=True)
 	# writer = SummaryWriter(data_dir_output + 'tensorboard/' + nn_training_name)
 
 	# Create embeddings for categorical variables (each int maps to a different category)
@@ -1789,7 +1793,7 @@ def worker(rank, world_size, job_id):
 		# training time
 		train_time = time.time() - epoch_start
 		
-		print(f'Epoch {iepoch + 1}, Rank {rank}, train loss: {torch.tensor(total_loss_record_train).mean():.1f}, time: {(time.time()-epoch_start):.2f}')
+		# print(f'Epoch {iepoch + 1}, Rank {rank}, train loss: {torch.tensor(total_loss_record_train).mean():.1f}, time: {(time.time()-epoch_start):.2f}')
 		# print(f"-----------------Epoch {iepoch + 1} - Rank {rank} - Model Weights: {model.module.l1.weight.data} - {model.module.l2.weight.data} - {model.module.l3.weight.data} - {model.module.l4.weight.data} - {model.module.l5.weight.data}-----------------")
 		# writer.add_scalar('training loss', torch.tensor(loss_record_train).mean(), iepoch+1)
 
@@ -1996,12 +2000,8 @@ def worker(rank, world_size, job_id):
 			time: {torch.stack(all_train_times).mean():.2f}')
 			if args.model == "lipmlp" or args.lambda_lipschitz > 0:
 				print(f'Train Lipschitz loss: {torch.stack(all_train_lipschitz_losses).mean():.2f}')
-				
-			if iepoch == 0:
-				# best_simu_soc = middle_simu_soc
-				# best_pred_para = middle_pred_para
-				print(f'Best model updated at epoch {iepoch}')
-			elif val_NSE_history[iepoch, :] <= best_val_NSE:  # val_loss_history[iepoch, :] <= best_val_loss
+
+			if iepoch == 0 or val_NSE_history[iepoch, :] <= best_val_NSE:  # val_loss_history[iepoch, :] <= best_val_loss
 				# best_simu_soc = middle_simu_soc
 				# best_pred_para = middle_pred_para
 				
@@ -2097,7 +2097,8 @@ def worker(rank, world_size, job_id):
 
 		# # Add a learning rate scheduler
 		scheduler.step()
-		print("New learning rate =", scheduler.get_last_lr())
+		if rank == 0:
+			print("New learning rate =", scheduler.get_last_lr())
 
 		# Add a early stopping condition
 		if val_NSE_history[iepoch, :] < best_val_NSE:
@@ -2115,11 +2116,11 @@ def worker(rank, world_size, job_id):
 		
 		# If runtimes are over 11.30 hours, save checkpoint and exit
 		whether_checkpoint = False
-		if time.time() - job_begin_time > 41400:
+		if time.time() - job_begin_time > args.time_limit * 3600:
+			whether_checkpoint = True
 			if rank == 0:
 				print("Rank {}: Runtime exceeded, saving checkpoint and exiting.".format(rank))
 				# break # at this point, no longer pass the time limit
-				whether_checkpoint = True
 				checkpoint = {
 					'epoch': iepoch,
 					'model_state_dict': model.state_dict(),
@@ -2137,21 +2138,21 @@ def worker(rank, world_size, job_id):
 				}
 				torch.save(checkpoint, data_dir_output + 'neural_network/' + job_id + '/checkpoint_' + job_id + '.pt')
 				# Create a file to submit the job again
-				if args.scheduler == 'slurm':
+				if args.job_scheduler == 'slurm':
 					# Create a file to submit the job again
 					with open(job_submit_path + 'Resume' + job_id + '.submit', 'w') as f:
 						f.write(f'#!/bin/bash\n')
 						f.write(f'#SBATCH -p aida\n')
 						f.write(f'#SBATCH -J binn_resume\n')
+						f.write(f'#SBATCH --gpus {args.num_CPU}\n')
 						f.write(f'#SBATCH -c {args.num_CPU*2}\n')
 						f.write(f'#SBATCH -N 1 -n 1\n')
 						f.write(f'#SBATCH --mem=50GB\n')
 						f.write(f'#SBATCH -t 12:00:00\n')
-
 						f.write(f'source ~/.bashrc\n')
 						f.write(f'module load cuda\n')
 						f.write(f'conda activate binn\n\n')
-						f.write(f'python {" ".join(sys.argv)} --whether_resume 1\n')
+						f.write(f'python {" ".join(sys.argv)} --time_limit 11.5 --whether_resume 1\n')
 
 					# submit the job again
 					submit_command = ['sbatch',
@@ -2390,7 +2391,7 @@ def worker(rank, world_size, job_id):
 		carbon_input_val_profile, cpool_steady_state_val_profile, cpools_layer_val_profile, \
 			soc_layer_val_profile, total_res_time_val_profile, total_res_time_base_val_profile, res_time_base_pools_val_profile, \
 				t_scaler_val_profile, bulk_A_val_profile, w_scaler_val_profile, bulk_K_val_profile, bulk_V_val_profile, bulk_xi_val_profile, \
-					bulk_I_val_profile, litter_fraction_val_profile = fun_bulk_simu(best_guess_val_pred_para.to(device), val_x.to(device))
+					bulk_I_val_profile, litter_fraction_val_profile = fun_bulk_simu(best_guess_val_pred_para.to(device), val_x.to(device), args.vertical_mixing)
 		
 		# store the results
 		carbon_input_val[val_profile_id, :] = carbon_input_val_profile.detach().cpu().numpy()
@@ -2463,7 +2464,7 @@ def worker(rank, world_size, job_id):
 		carbon_input_train_profile, cpool_steady_state_train_profile, cpools_layer_train_profile, \
 			soc_layer_train_profile, total_res_time_train_profile, total_res_time_base_train_profile, res_time_base_pools_train_profile, \
 				t_scaler_train_profile, bulk_A_train_profile, w_scaler_train_profile, bulk_K_train_profile, bulk_V_train_profile, bulk_xi_train_profile, \
-					bulk_I_train_profile, litter_fraction_train_profile = fun_bulk_simu(best_guess_train_pred_para.to(device), train_x.to(device))
+					bulk_I_train_profile, litter_fraction_train_profile = fun_bulk_simu(best_guess_train_pred_para.to(device), train_x.to(device), args.vertical_mixing)
 		
 		# store the results
 		carbon_input_train[train_profile_id, :] = carbon_input_train_profile.detach().cpu().numpy()
@@ -2734,7 +2735,7 @@ def worker(rank, world_size, job_id):
 		carbon_input_pred, cpool_steady_state_pred, cpools_layer_pred, soc_layer_pred, total_res_time_pred, \
 			total_res_time_base_pred, res_time_base_pools_pred, t_scaler_pred, bulk_A_pred, \
 			w_scaler_pred, bulk_K_pred, bulk_V_pred, bulk_xi_pred, bulk_I_pred, litter_fraction_pred = fun_bulk_simu(grid_pred_para.to(device), \
-																											torch.tensor(predict_data_x, dtype=torch.float32, device=device))
+																											torch.tensor(predict_data_x, dtype=torch.float32, device=device), args.vertical_mixing)
 		# Save the bulk simulation results into csv files
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_carbon_input_' + job_id + '.csv', carbon_input_pred.detach().cpu().numpy(), delimiter = ',')
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_pred.detach().cpu().numpy(), delimiter = ',')

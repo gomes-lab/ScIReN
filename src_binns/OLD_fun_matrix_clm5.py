@@ -1,3 +1,8 @@
+"""
+ATTENTION: This file is outdated, please see fun_matrix_clm5_vectorized.py for
+vectorized and non-vectorized implementations of the CLM5 model.
+"""
+
 import time
 import numpy as np
 import torch

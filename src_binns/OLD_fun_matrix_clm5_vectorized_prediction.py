@@ -1,3 +1,8 @@
+"""
+ATTENTION: This file is outdated, please see fun_model_prediction() in
+fun_matrix_clm5_vectorized.py for the current implementation.
+"""
+
 import time
 import numpy as np
 import torch
