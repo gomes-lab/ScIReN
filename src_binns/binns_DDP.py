@@ -2140,7 +2140,7 @@ def worker(rank, world_size, job_id):
 					# Create a file to submit the job again
 					with open(job_submit_path + 'Resume' + job_id + '.submit', 'w') as f:
 						f.write(f'#!/bin/bash\n')
-						f.write(f'#SBATCH -p aida\n')
+						f.write(f'#SBATCH -p full\n')
 						f.write(f'#SBATCH -J binn_resume\n')
 						f.write(f'#SBATCH --gpus {args.num_CPU}\n')
 						f.write(f'#SBATCH -c {args.num_CPU*2}\n')

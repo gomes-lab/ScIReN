@@ -6,8 +6,8 @@
 # (To run on CPU, remove the --gpus line and set --num_CPU to the number of CPUs.)
 # Output will appear in a file 'slurm-N.out' where N is the job ID.
 
-# Request the aida partition, which contains the GPU nodes.
-#SBATCH -p aida
+# Request the full partition, which contains the GPU nodes.
+#SBATCH -p full
 # Name the job so it's meaningful in the job list
 #SBATCH -J binn_train
 # Request 4 GPUs 
@@ -62,7 +62,13 @@ for LR in 1e-2
 do
     for SEED in 0
     do
-        python3 binns_DDP.py --lr $LR --weight_decay 1e-3 --seed $SEED --n_epochs 200 --patience 20 \
-            --model old_mlp --use_bn --embed_dim 10 --num_CPU 4 --job_scheduler slurm --time_limit 23.5
+        python3 binns_DDP.py --lr $LR --weight_decay 1e-3 --seed $SEED --n_datapoints 500 --n_epochs 50 --patience 20 \
+            --model old_mlp --use_bn --embed_dim 10 --num_CPU 4 --job_scheduler slurm --time_limit 23.5 --note OLDMLP
+
+        # python3 binns_DDP.py --lr $LR --weight_decay 1e-3 --seed $SEED --n_datapoints 500 --n_epochs 50 --patience 20 \
+        #     --model new_mlp --use_bn --embed_dim 10 --num_CPU 4 --job_scheduler slurm --time_limit 23.5 --note NEWMLP
+
+        # python3 binns_DDP.py --lr $LR --weight_decay 1e-3 --seed $SEED --n_datapoints 500 --n_epochs 50 --patience 20 \
+        #     --model new_mlp --lambda_lipschitz 0.1 --use_bn --embed_dim 10 --num_CPU 4 --job_scheduler slurm --time_limit 23.5 --note NEWMLP_SPECTRALREG_0_1
     done
 done
