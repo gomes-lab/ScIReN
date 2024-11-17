@@ -124,19 +124,27 @@ def plot_single_scatter(ax, x, y, x_label, y_label, title, should_align=True):
 
 
 def plot_true_vs_predicted(filename, y_hat, y):
+    """
+    Plot a scatter of y vs. y_hat to filename.
+    Assumes y and y_hat are single-dimensional and have no nans"""
     assert y.shape == y_hat.shape
-    num_outputs = y.shape[1]
-    rows = math.ceil(num_outputs / 4)
-    cols = 4
-    fig, axeslist = plt.subplots(rows, cols, figsize=(9*cols, 9*rows), squeeze=False)
-    fig.suptitle('True vs predicted soil carbon', fontsize=13)
-    for i in range(num_outputs):
-        ax = axeslist.ravel()[i]
-        plot_single_scatter(ax, y_hat[:, i], y[:, i], "Predicted", "True", f"Layer {i+1}")
-    plt.tight_layout()
-    fig.subplots_adjust(top=0.90)
+    plot_single_scatter(plt.gca(), y_hat, y, "Predicted", "True", "True vs predicted SOC")
     plt.savefig(filename)
     plt.close()
+
+    # Below logic is if there are multiple outputs
+    # num_outputs = y.shape[1]
+    # rows = math.ceil(num_outputs / 4)
+    # cols = 4
+    # fig, axeslist = plt.subplots(rows, cols, figsize=(9*cols, 9*rows), squeeze=False)
+    # fig.suptitle('True vs predicted soil carbon', fontsize=13)
+    # for i in range(num_outputs):
+    #     ax = axeslist.ravel()[i]
+    #     plot_single_scatter(ax, y_hat[:, i], y[:, i], "Predicted", "True", f"Layer {i+1}")
+    # plt.tight_layout()
+    # fig.subplots_adjust(top=0.90)
+    # plt.savefig(filename)
+    # plt.close()
 
 
 def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=None, categorical=False, us_only=False):
@@ -152,11 +160,11 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
     # Plot world map
     gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
     world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
-    ax = world.boundary.plot(color='gray', figsize=(25, 18))
+    ax = world.boundary.plot(color='gray', figsize=(20, 10))
     if us_only:
         ax.set_xlim(-124.8, -66.9)
         ax.set_ylim(24.5, 49.4)
-    gdf.plot(column=var_name, ax=ax, marker='o', markersize=4, legend=True, zorder=10)  # legend_kwds={'shrink': 0.7},
+    gdf.plot(column=var_name, ax=ax, marker='o', markersize=8, legend=True, zorder=10)  # legend_kwds={'shrink': 0.7},
     plt.title(title)
     plt.savefig(os.path.join(plot_dir, "map_{}.png".format(var_name)), bbox_inches='tight')
     plt.close()

@@ -10,10 +10,15 @@ import random
 import warnings
 import subprocess
 import argparse
+import misc_utils
 from mlp import mlp_wrapper
-from pe_gcn_model import GridCellSpatialRelationEncoder
 from sklearn.model_selection import KFold
 
+from mlp import GNN_BINN, Spatial_BINN, mlp_wrapper, nn_only, BINN_Hybrid
+from torch.optim.swa_utils import AveragedModel, SWALR
+from torch.optim.lr_scheduler import CosineAnnealingLR
+from pe_gcn_model import GridCellSpatialRelationEncoder
+from spatial_utils import *
 
 # sys.path.append('C:/Users/hx293/Research_Data/BINN/')
 # sys.path.append('/glade/u/home/haodixu/BINN')
@@ -70,37 +75,89 @@ import visualization_utils
 from fun_matrix_clm5_vectorized_bulk_converge import fun_bulk_simu
 # from fun_matrix_clm5_vectorized_prediction import fun_model_prediction
 
+import LibMTL.weighting as weighting_method
+import LibMTL.architecture as architecture_method
+
 ################################################
 # Command-line arguments
 ################################################
 parser = argparse.ArgumentParser()
-parser.add_argument("--num_CPU", type=int, default=32)
-parser.add_argument("--lr", type=float, default=1e-3)
-parser.add_argument("--weight_decay", type=float, default=1e-4)
-parser.add_argument("--batch_size", type=int, default=32)
-parser.add_argument("--n_epochs", type=int, default=1500)
-parser.add_argument("--patience", type=int, default=500)
-parser.add_argument("--seed", type=int, default=0, help="Random seed")
-parser.add_argument("--n_datapoints", type=int, default=-1, help="Set this to sample this many datapoints randomly (includes train+val+test). -1 to use the whole dataset")
 
+# Model architecture
 parser.add_argument("--note", type=str, default="", help="Optional name to give to the model")
-parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp'], help="Model type")
-parser.add_argument("--lambda_lipschitz", type=float, default=0, help="If model is `lipmlp`, this is the weight to put on the Lipschitz loss. If model is `new_mlp`, this is the spectral norm regularization weight.")
+parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp', 'gnn', 'spatial', 'nn_only', 'binn_hybrid'], help="Model type")
 parser.add_argument("--categorical", type=str, default="embedding", choices=["embedding", "one_hot"], help="Which embedding to use for categorical variables")
 parser.add_argument("--embed_dim", type=int, default=5, help="Embedding dim for each categorical variable (if using embeddings)")
 parser.add_argument("--use_bn", action='store_true', help="Whether to use batchnorm")
-parser.add_argument("--vertical_mixing", type=str, default='original', choices=['original', 'simple_one_intercept', 'simple_two_intercepts'],
-					help="""Vertical mixing matrix parameterization. Original explicitly models diffusion.
+parser.add_argument("--dropout_prob", default=0., type=float, help="Dropout prob")
+parser.add_argument("--leaky_relu", action='store_true', help="Whether to use leaky relu")
+parser.add_argument("--vertical_mixing", type=str, default='original', choices=['original', 'simple_one_intercept', 'simple_two_intercepts'], help="""Vertical mixing matrix parameterization. Original explicitly models diffusion.
 						 simple_one_intercept approximates with a log-log relationship with depth (upwards/downwards
 						 having the same intercept). simple_two_intercepts allows upwards/downwards transfers to
 						 have different intercepts.""")
+
+# Data split
+parser.add_argument("--data_seed", type=int, default=-1, help="Random seed for splitting data. -1 means use same as args.seed")
+parser.add_argument("--n_datapoints", type=int, default=-1, help="Set this to train on a random subset of this many datapoints (includes train+val+test). -1 to use the whole dataset")
 parser.add_argument("--cross_val_idx", type=int, default=0, help="Cross-validation index")
+parser.add_argument("--split", type=str, default='random', choices=['random', 'north', 'east', 'south', 'west', 'us_vs_world'],
+					help='How to split val/test sets. If `random`, just hold out random examples. If `north`, hold out `test_fraction` most' +
+						 'northern examples as test set, and `val_fraction` next-most northern examples as validation set.')
+parser.add_argument("--val_ratio", type=float, default=0.1, help="Fraction of datapoints in validation set")
+parser.add_argument("--test_ratio", type=float, default=0.1, help="Fraction of datapoints in test set")
+parser.add_argument("--batching", type=str, default='random', choices=['random', 'block'],
+					help='How to generate minibatches. If `block`, samples examples from contiguous spatial block for each batch.')
+
+# Training
+parser.add_argument("--seed", type=int, default=0, help="Random seed for model initialization")
+parser.add_argument("--optimizer", type=str, choices=["SGD", "AdamW"], default="AdamW")
+parser.add_argument("--scheduler", type=str, choices=["none", "reduce_on_plateau", "step"], default="none")
+parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+parser.add_argument("--momentum", type=float, default=0.9, help="Momentum (SGD ONLY)")
+parser.add_argument("--batch_size", type=int, default=32)
+parser.add_argument("--n_epochs", type=int, default=100)
+parser.add_argument("--patience", type=int, default=20)
+parser.add_argument("--save_freq", type=int, default=5, help="How often (epochs) to save the latest checkpoint, in case the job crashes")
+
+# Regularization
+parser.add_argument("--weight_decay", type=float, default=1e-4)
+parser.add_argument("--use_swa", action='store_true', help="Whether to use Stochastic Weight Averaging")
+parser.add_argument("--clip_value", type=float, default=-1, help="Clip value for gradient clipping. -1 for no clipping.")
+
+# Loss balancing
+parser.add_argument("--losses", nargs="+", choices=["l1", "l2", "param_reg", "spectral", "lipmlp", "cure", "spatial_error", "spatial_emb_smoothness", "param_smoothness", "residual"], default=["l1", "param_reg"])
+parser.add_argument("--loss_weighting", default="manual", choices=["manual", "relobralo", "IMTL", "two_stage"])
+parser.add_argument("--lambdas", nargs="+", type=float, default=[1.0, 10.0], help="If loss_weighting is manual, provide weights in the same order that you listed losses in `args.losses`")
+parser.add_argument("--second_start", type=int, default=30, help="If loss_weighting is two_stage, epoch the second phase starts")
+parser.add_argument("--second_lambdas", nargs="+", type=float, default=[1.0, 10.0], help="If loss_weighting is two_stage, weights for the second stage - in the same order that you listed losses in `args.losses`")
+
+# Relobralo specific hyperparams (specific method of loss balancing; only used if you set `--loss_weighting relobralo`)
+parser.add_argument("--relobralo_alpha", type=float, default=0.9, help="Exponential decay rate for Relobralo")
+parser.add_argument("--relobralo_temp", type=float, default=0.1, help="Softmax temperature for Relobralo")
+parser.add_argument("--relobralo_saudade", type=float, default=0.999, help="Saudade (1 minus probability of looking back to epoch 0)")
+
+# Positional encoding / GNN
+parser.add_argument("--graph_conv", type=str, default="gcn", choices=["gcn", "gat", "gcn1", "gat1"], help="For GNN, which graph conv to use")
+parser.add_argument("--k", type=int, default=20, help="Nearest neighbors for graph (GNN/Spatial only)")
+parser.add_argument("--pos_enc", type=str, default='none', choices=['none', 'early', 'late'],
+					help="How lon/lat features are encoded. 'none' means not used. 'early' means that positional encoding is concatenated with other features. 'late' means that it is only used as an error term for the latent parameters.")
+parser.add_argument("--lonlat_features", action='store_true', help="Whether longitude and latitude should be passed as features")
+
+# Computational environment
+parser.add_argument("--use_ddp", type=int, default=1, help="Whether to use DDP")
+parser.add_argument("--num_CPU", type=int, default=32, help="Number of processes for Torch DDP")
+parser.add_argument("--job_scheduler", type=str, default="pbs", choices=["pbs", "slurm"], help="Job scheduler system. Job scheduler. PBS for NCAR computers, slurm for AIDA server.")
 parser.add_argument("--whether_resume", type=int, default=0, help="Whether to resume training from a previous model")
-parser.add_argument("--previous_job_id", type=str, default="", help="Previous job id to resume from. Note: if PREVIOUS_JOB_ID environment variable is set, this will be overwritten.")
-parser.add_argument("--job_scheduler", type=str, default="pbs", choices=["pbs", "slurm"], help="Job scheduler. PBS for NCAR computers, slurm for AIDA server.")
+parser.add_argument("--previous_job_id", type=str, default="", help="Previous job id to resume from (otherwise, resumes using envir variable PREVIOUS_JOB_ID)")
 parser.add_argument("--time_limit", type=float, default=11.5, help="Time limit for this job in HOURS. If trainng is not finished yet, start another job to continue.")
 
 args = parser.parse_args()
+
+# If loss_weighting is manual, make sure the correct number of lambdas were provided
+if args.loss_weighting in ["manual", "relobralo", "two_stage"]:
+	assert(len(args.losses) == len(args.lambdas))
+	args.lambdas = torch.tensor(args.lambdas)
+
 
 def set_seeds(seed):
 	"""
@@ -116,6 +173,8 @@ def set_seeds(seed):
 
 # Set seeds for reproducibility
 set_seeds(args.seed)
+if args.data_seed == -1:
+	args.data_seed = args.seed
 
 # Keep track of when the job started
 job_begin_time = time.time()
@@ -334,11 +393,11 @@ sample_profile_id = sample_profile_id - 1
 
 # Choose the profile id with lat and lon within the range of the United States
 profile_collection = np.where(
-    (wosis_profile_info[:, 2] == 156) & 
-    (wosis_profile_info[:, 3] >= -124.763068) & 
-    (wosis_profile_info[:, 3] <= -66.949895) & 
-    (wosis_profile_info[:, 4] >= 24.5) & 
-    (wosis_profile_info[:, 4] <= 49.384358)
+	(wosis_profile_info[:, 2] == 156) & 
+	(wosis_profile_info[:, 3] >= -124.763068) & 
+	(wosis_profile_info[:, 3] <= -66.949895) & 
+	(wosis_profile_info[:, 4] >= 24.5) & 
+	(wosis_profile_info[:, 4] <= 49.384358)
 )[0]
 
 ################################
@@ -545,6 +604,45 @@ env_info_names = ['ProfileNum', 'ProfileID', 'LayerNum', 'Lon', 'Lat', 'Date', \
 'nbedrock', \
 'R_Squared']
 
+# variables used in training the NN
+var4nn = ['Lon', 'Lat', \
+'ESA_Land_Cover', \
+# 'IGBP', \
+# 'Climate', \
+# 'Soil_Type', \
+# 'NPPmean', 'NPPmax', 'NPPmin', \
+# 'Veg_Cover', \
+'BIO1', 'BIO2', 'BIO3', 'BIO4', 'BIO5', 'BIO6', 'BIO7', 'BIO8', 'BIO9', 'BIO10', 'BIO11', 'BIO12', 'BIO13', 'BIO14', 'BIO15', 'BIO16', 'BIO17', 'BIO18', 'BIO19', \
+'Abs_Depth_to_Bedrock', \
+'Bulk_Density_0cm', 'Bulk_Density_30cm', 'Bulk_Density_100cm',\
+'CEC_0cm', 'CEC_30cm', 'CEC_100cm', \
+'Clay_Content_0cm', 'Clay_Content_30cm', 'Clay_Content_100cm', \
+'Coarse_Fragments_v_0cm', 'Coarse_Fragments_v_30cm', 'Coarse_Fragments_v_100cm', \
+# 'Depth_Bedrock_R', \
+'Garde_Acid', \
+'Occurrence_R_Horizon', \
+'pH_Water_0cm', 'pH_Water_30cm', 'pH_Water_100cm', \
+'Sand_Content_0cm', 'Sand_Content_30cm', 'Sand_Content_100cm', \
+'Silt_Content_0cm', 'Silt_Content_30cm', 'Silt_Content_100cm', \
+'SWC_v_Wilting_Point_0cm', 'SWC_v_Wilting_Point_30cm', 'SWC_v_Wilting_Point_100cm', \
+'Texture_USDA_0cm', 'Texture_USDA_30cm', 'Texture_USDA_100cm', \
+'USDA_Suborder', \
+'WRB_Subgroup', \
+# 'Drought', \
+'Elevation', \
+# 'Max_Depth', \
+'Koppen_Climate_2018', \
+'cesm2_npp', 'cesm2_npp_std', \
+# 'cesm2_gpp', 'cesm2_gpp_std', \
+'cesm2_vegc', \
+'nbedrock']
+
+# If desired, remove lon/lat as features
+if not args.lonlat_features:
+	var4nn.remove('Lon')
+	var4nn.remove('Lat')
+	print(f"Not using Lon/Lat as features. Remaining features: {var4nn}")
+
 env_info = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_env_info.mat')
 env_info = env_info['EnvInfo']
 original_lons = env_info[:, 3].copy()
@@ -604,44 +702,11 @@ env_info["original_lat"] = original_lats
 # print("Env info", env_info.head())
 # print(profile_collection[0:5, 0])
 
-# variables used in training the NN
-var4nn = ['Lon', 'Lat', \
-'ESA_Land_Cover', \
-# 'IGBP', \
-# 'Climate', \
-# 'Soil_Type', \
-# 'NPPmean', 'NPPmax', 'NPPmin', \
-# 'Veg_Cover', \
-'BIO1', 'BIO2', 'BIO3', 'BIO4', 'BIO5', 'BIO6', 'BIO7', 'BIO8', 'BIO9', 'BIO10', 'BIO11', 'BIO12', 'BIO13', 'BIO14', 'BIO15', 'BIO16', 'BIO17', 'BIO18', 'BIO19', \
-'Abs_Depth_to_Bedrock', \
-'Bulk_Density_0cm', 'Bulk_Density_30cm', 'Bulk_Density_100cm',\
-'CEC_0cm', 'CEC_30cm', 'CEC_100cm', \
-'Clay_Content_0cm', 'Clay_Content_30cm', 'Clay_Content_100cm', \
-'Coarse_Fragments_v_0cm', 'Coarse_Fragments_v_30cm', 'Coarse_Fragments_v_100cm', \
-# 'Depth_Bedrock_R', \
-'Garde_Acid', \
-'Occurrence_R_Horizon', \
-'pH_Water_0cm', 'pH_Water_30cm', 'pH_Water_100cm', \
-'Sand_Content_0cm', 'Sand_Content_30cm', 'Sand_Content_100cm', \
-'Silt_Content_0cm', 'Silt_Content_30cm', 'Silt_Content_100cm', \
-'SWC_v_Wilting_Point_0cm', 'SWC_v_Wilting_Point_30cm', 'SWC_v_Wilting_Point_100cm', \
-'Texture_USDA_0cm', 'Texture_USDA_30cm', 'Texture_USDA_100cm', \
-'USDA_Suborder', \
-'WRB_Subgroup', \
-# 'Drought', \
-'Elevation', \
-# 'Max_Depth', \
-'Koppen_Climate_2018', \
-'cesm2_npp', 'cesm2_npp_std', \
-# 'cesm2_gpp', 'cesm2_gpp_std', \
-'cesm2_vegc', \
-'nbedrock']
-
-
 
 #---------------------------------------------------
 # training data
 #---------------------------------------------------
+# Input features (environmental covariates)
 current_data_x = np.ones((len(profile_collection), len(var4nn), 12, 13))*np.nan
 
 # ATTENTION: env_info is indexed starting from 0. The use of loc below means that 
@@ -662,12 +727,18 @@ current_data_x[:, 0:20, 0:12, 10] = model_force_sand_vector
 current_data_x[:, 0:20, 0:12, 11] = model_force_soil_temp_profile
 current_data_x[:, 0:20, 0:12, 12] = model_force_soil_water_profile
 
-
+# SOC labels: each row represents a location, each column represents an observation
+# at a certain depth. Since locations have different numbers of observations, many entries are NaN.
 current_data_y = obs_soc_matrix
+
+# Depth of each observation in current_data_y (same shape)
 current_data_z = obs_depth_matrix
 
+# Geographic coordinates
 lons = np.array(env_info.loc[profile_collection[:, 0], "original_lon"])
 lats = np.array(env_info.loc[profile_collection[:, 0], "original_lat"])
+current_data_c = np.stack([lons, lats], axis=1)  # [profile, 2]: lon/lat of each site
+
 
 # # VISUALIZATION: Plot map of each environmental covariate.
 # for col_idx, col_name in enumerate(var4nn):
@@ -724,6 +795,7 @@ valid_profile_loc = np.where(np.isnan(nan_loc) == False)[0] ### Why change the s
 current_data_y = current_data_y[valid_profile_loc, :]
 current_data_z = current_data_z[valid_profile_loc, :]
 current_data_x = current_data_x[valid_profile_loc, :, :, :]
+current_data_c = current_data_c[valid_profile_loc, :]
 current_data_profile_id = profile_collection[valid_profile_loc, 0]
 obs_upper_depth_matrix = obs_upper_depth_matrix[valid_profile_loc, :]
 obs_lower_depth_matrix = obs_lower_depth_matrix[valid_profile_loc, :]
@@ -731,6 +803,7 @@ obs_lower_depth_matrix = obs_lower_depth_matrix[valid_profile_loc, :]
 print("Shape of current data x", current_data_x.shape)
 print("Shape of current data y", current_data_y.shape)
 print("Shape of current data z", current_data_z.shape)
+print("Shape of current data c", current_data_c.shape)
 print("Shape of obs upper depth matrix", obs_upper_depth_matrix.shape)
 print("Shape of obs lower depth matrix", obs_lower_depth_matrix.shape)
 print("Shape of env info", env_info.shape)
@@ -754,9 +827,9 @@ if 'PREVIOUS_JOB_ID' in os.environ:
 	args.previous_job_id = os.environ.get('PREVIOUS_JOB_ID')
 	print("Overrode previous_job_id. Now", args.previous_job_id)
 
-# Load checkpoint if resuming
+# Load checkpoint if resuming. This checkpoint is only used to read the
+# data splits, the actual weights will be loaded later.
 if args.whether_resume == 1:
-	# Load Checkpoint
 	checkpoint_path = data_dir_output + 'neural_network/' + args.previous_job_id + '/checkpoint_' + args.previous_job_id + '.pt'
 	checkpoint_main = torch.load(checkpoint_path)
 
@@ -772,19 +845,43 @@ if args.whether_resume == 1:
 ################################################################
 # k-fold cross validation
 k_folds = 10
+n_datapoints = current_data_x.shape[0]
 
 # Train, validation, test split
 if args.whether_resume == 0:
 	if args.cross_val_idx == 0:
 		if test_split_ratio == 0:
-			train_loc = np.random.choice(np.arange(0, len(current_data_x[:, 0])), size = round((1-nn_split_ratio)*len(current_data_x[:, 0])), replace = False)
-			val_loc = np.setdiff1d(np.arange(0, len(current_data_x[:, 0])), train_loc)
+			# Train/Val ONLY, no test set
+			# I don't think we really use this case, maybe we can remove?
+			if args.split == 'random':
+				rng = np.random.default_rng(seed=args.data_seed)
+				train_loc = rng.choice(np.arange(0, n_datapoints), size = round((1-args.val_ratio)*n_datapoints), replace = False)
+			elif args.split == 'north':  # current_data_c[:, 1] contains lats
+				sorted_lats = np.sort(current_data_c[:, 1])
+				val_thresh = sorted_lats[int((1-args.val_ratio)*n_datapoints)]
+				train_loc = np.flatnonzero(current_data_c[:, 1] < val_thresh)
+			elif args.split == 'south':
+				sorted_lats = np.sort(current_data_c[:, 1])
+				val_thresh = sorted_lats[int(args.val_ratio*n_datapoints)]
+				train_loc = np.flatnonzero(current_data_c[:, 1] > val_thresh)
+			elif args.split == 'east':
+				sorted_lons = np.sort(current_data_c[:, 0])
+				val_thresh = sorted_lons[int((1-args.val_ratio)*n_datapoints)]  # For lons, larger values are on the right
+				train_loc = np.flatnonzero(current_data_c[:, 0] < val_thresh)
+			elif args.split == 'west':
+				sorted_lons = np.sort(current_data_c[:, 0])
+				val_thresh = sorted_lons[int(args.val_ratio*n_datapoints)]  # For lons, larger values are on the right
+				train_loc = np.flatnonzero(current_data_c[:, 0] > val_thresh)
+			val_loc = np.setdiff1d(np.arange(0, n_datapoints), train_loc)
 
 			train_y = torch.tensor(current_data_y[train_loc, :], dtype = torch.float32)
 			val_y = torch.tensor(current_data_y[val_loc, :], dtype = torch.float32)
 
 			train_z = torch.tensor(current_data_z[train_loc, :], dtype = torch.float32)
 			val_z = torch.tensor(current_data_z[val_loc, :], dtype = torch.float32)
+
+			train_c = torch.tensor(current_data_c[train_loc, :], dtype = torch.float32)
+			val_c = torch.tensor(current_data_c[val_loc, :], dtype = torch.float32)
 
 			train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype = torch.float32)
 			# train_x = train_x.requires_grad_(True)
@@ -794,14 +891,64 @@ if args.whether_resume == 0:
 			train_profile_id = torch.tensor(current_data_profile_id[train_loc], dtype = torch.long)
 			val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype = torch.long)
 		else:
-			# Determine the number of training samples based on the ratios
-			train_loc = np.random.choice(np.arange(0, len(current_data_x[:, 0])), size=round((1 - nn_split_ratio - test_split_ratio) * len(current_data_x[:, 0])), replace=False)
-			# The remaining data after removing the training samples
-			remaining_loc = np.setdiff1d(np.arange(0, len(current_data_x[:, 0])), train_loc)
-			# Split the remaining data into validation and test sets
-			num_val_samples = round(nn_split_ratio / (nn_split_ratio + test_split_ratio) * len(remaining_loc))
-			val_loc = np.random.choice(remaining_loc, size=num_val_samples, replace=False)
-			test_loc = np.setdiff1d(remaining_loc, val_loc)
+			# Compute train/val/test indices
+			if args.split == 'random':
+				rng = np.random.default_rng(seed=args.data_seed)
+				# Determine the number of training samples based on the ratios
+				train_loc = rng.choice(np.arange(0, n_datapoints), size=round((1 - args.val_ratio - args.test_ratio) * n_datapoints), replace=False)
+				# The remaining data after removing the training samples
+				remaining_loc = np.setdiff1d(np.arange(0, n_datapoints), train_loc)
+				# Split the remaining data into validation and test sets
+				num_val_samples = round(args.val_ratio / (args.val_ratio + args.test_ratio) * len(remaining_loc))
+				val_loc = rng.choice(remaining_loc, size=num_val_samples, replace=False)
+				test_loc = np.setdiff1d(remaining_loc, val_loc)
+			elif args.split == 'us_vs_world':
+				# choose the profile id with lat and lon within the range of the United States
+				train_loc = np.flatnonzero(
+					(wosis_profile_info[current_data_profile_id, 2] == 156) &
+					(wosis_profile_info[current_data_profile_id, 3] >= -124.763068) &
+					(wosis_profile_info[current_data_profile_id, 3] <= -66.949895) &
+					(wosis_profile_info[current_data_profile_id, 4] >= 24.5) &
+					(wosis_profile_info[current_data_profile_id, 4] <= 40.)
+				)
+				val_loc = np.flatnonzero(
+					(wosis_profile_info[current_data_profile_id, 2] == 156) &
+					(wosis_profile_info[current_data_profile_id, 3] >= -124.763068) &
+					(wosis_profile_info[current_data_profile_id, 3] <= -66.949895) &
+					(wosis_profile_info[current_data_profile_id, 4] > 40.) &
+					(wosis_profile_info[current_data_profile_id, 4] <= 49.384358)
+				)
+				test_loc = np.setdiff1d(np.arange(0, n_datapoints), train_loc)
+				test_loc = np.setdiff1d(test_loc, val_loc)
+
+			elif args.split == 'north':  # current_data_c[:, 1] contains lats
+				sorted_lats = np.sort(current_data_c[:, 1])
+				val_thresh = sorted_lats[int((1-args.val_ratio-args.test_ratio)*n_datapoints)]
+				test_thresh = sorted_lats[int((1-args.test_ratio)*n_datapoints)]
+				train_loc = np.flatnonzero(current_data_c[:, 1] < val_thresh)  # Indices where lat < val_thresh
+				val_loc = np.flatnonzero((current_data_c[:, 1] >= val_thresh) & (current_data_c[:, 1] < test_thresh))
+				test_loc = np.flatnonzero(current_data_c[:, 1] >= test_thresh)
+			elif args.split == 'south':
+				sorted_lats = np.sort(current_data_c[:, 1])
+				val_thresh = sorted_lats[int((args.val_ratio+args.test_ratio)*n_datapoints)]
+				test_thresh = sorted_lats[int((args.test_ratio)*n_datapoints)]
+				train_loc = np.flatnonzero(current_data_c[:, 1] > val_thresh)
+				val_loc = np.flatnonzero((current_data_c[:, 1] <= val_thresh) & (current_data_c[:, 1] > test_thresh))
+				test_loc = np.flatnonzero(current_data_c[:, 1] <= test_thresh)
+			elif args.split == 'east':
+				sorted_lons = np.sort(current_data_c[:, 0])
+				val_thresh = sorted_lons[int((1-args.val_ratio-args.test_ratio)*n_datapoints)]
+				test_thresh = sorted_lons[int((1-args.test_ratio)*n_datapoints)]
+				train_loc = np.flatnonzero(current_data_c[:, 0] < val_thresh)
+				val_loc = np.flatnonzero((current_data_c[:, 0] >= val_thresh) & (current_data_c[:, 0] < test_thresh))
+				test_loc = np.flatnonzero(current_data_c[:, 0] >= test_thresh)
+			elif args.split == 'west':
+				sorted_lons = np.sort(current_data_c[:, 0])
+				val_thresh = sorted_lons[int((args.val_ratio+args.test_ratio)*n_datapoints)]
+				test_thresh = sorted_lons[int((args.test_ratio)*n_datapoints)]
+				train_loc = np.flatnonzero(current_data_c[:, 0] > val_thresh)
+				val_loc = np.flatnonzero((current_data_c[:, 0] <= val_thresh) & (current_data_c[:, 0] > test_thresh))
+				test_loc = np.flatnonzero(current_data_c[:, 0] <= test_thresh)
 
 			train_y = torch.tensor(current_data_y[train_loc, :], dtype=torch.float32)
 			val_y = torch.tensor(current_data_y[val_loc, :], dtype=torch.float32)
@@ -810,6 +957,10 @@ if args.whether_resume == 0:
 			train_z = torch.tensor(current_data_z[train_loc, :], dtype=torch.float32)
 			val_z = torch.tensor(current_data_z[val_loc, :], dtype=torch.float32)
 			test_z = torch.tensor(current_data_z[test_loc, :], dtype=torch.float32)
+
+			train_c = torch.tensor(current_data_c[train_loc, :], dtype=torch.float32)
+			val_c = torch.tensor(current_data_c[val_loc, :], dtype=torch.float32)
+			test_c = torch.tensor(current_data_c[test_loc, :], dtype=torch.float32)
 
 			train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype=torch.float32)
 			# train_x = train_x.requires_grad_(True)
@@ -845,6 +996,10 @@ if args.whether_resume == 0:
 		val_z = torch.tensor(current_data_z[val_loc, :], dtype=torch.float32)
 		test_z = torch.tensor(current_data_z[test_loc, :], dtype=torch.float32)
 
+		train_c = torch.tensor(current_data_c[train_loc, :], dtype=torch.float32)
+		val_c = torch.tensor(current_data_c[val_loc, :], dtype=torch.float32)
+		test_c = torch.tensor(current_data_c[test_loc, :], dtype=torch.float32)
+
 		train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype=torch.float32)
 		# train_x = train_x.requires_grad_(True)
 		val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype=torch.float32)
@@ -862,7 +1017,8 @@ if args.whether_resume == 0:
 
 
 else:
-	# load train, val, and test indices
+	# If we are resuming, load the same train/val/test indices.
+	# TODO. Resuming is not yet supported for k-fold cross validation!
 	train_loc = checkpoint_main['train_indices']
 	val_loc = checkpoint_main['val_indices']
 	test_loc = checkpoint_main['test_indices']
@@ -874,6 +1030,10 @@ else:
 	train_z = torch.tensor(current_data_z[train_loc, :], dtype=torch.float32)
 	val_z = torch.tensor(current_data_z[val_loc, :], dtype=torch.float32)
 	test_z = torch.tensor(current_data_z[test_loc, :], dtype=torch.float32)
+
+	train_c = torch.tensor(current_data_c[train_loc, :], dtype=torch.float32)
+	val_c = torch.tensor(current_data_c[val_loc, :], dtype=torch.float32)
+	test_c = torch.tensor(current_data_c[test_loc, :], dtype=torch.float32)
 
 	train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype=torch.float32)
 	val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype=torch.float32)
@@ -1023,6 +1183,7 @@ predict_data_x[:, 0:20, 0:12, 12] = model_force_pred_soil_water_profile
 
 # create dummy z since it is not used in the prediction
 predict_data_z = np.ones((grid_env_info_num))*np.nan
+predict_data_c = np.stack([grid_env_info_US["original_lon"], grid_env_info_US["original_lat"]], axis=1)
 
 # # Drop rows with nan values
 # nan_loc = np.nanmean(predict_data_x[:, 0:len(var4nn), 0, 0], axis = 1) + \
@@ -1057,7 +1218,7 @@ print(datetime.now(), '------------grid env info prepared------------')
 #---------------------------------------------------
 # define the loss function                          
 #---------------------------------------------------
-def binns_loss(y_pred, y_true, pred_para):
+def binns_loss(y_pred, y_true, pred_para, plot_path=""):
 	# process modeling
 	soc_simu = y_pred
 	# observations
@@ -1065,9 +1226,7 @@ def binns_loss(y_pred, y_true, pred_para):
 	# predicted parameters
 	pred_para = pred_para
 
-	# print("Shape of model input", model_input.shape)
-	# New input has shape: [32, 193]
-	# flatten simulation
+	# flatten simulated and true SOC
 	soc_simu_vector = torch.reshape(soc_simu, [1, -1])
 	soc_true_vector = torch.reshape(soc_true, [1, -1])
 	# exclude nan
@@ -1075,11 +1234,12 @@ def binns_loss(y_pred, y_true, pred_para):
 	soc_simu_vector = soc_simu_vector[valid_loc]
 	soc_true_vector = soc_true_vector[valid_loc]
 
+	# If desired, plot true vs predicted here
+	if plot_path != "":
+		visualization_utils.plot_true_vs_predicted(plot_path, soc_simu_vector, soc_true_vector)
+
 	# modeling inefficiency
 	modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/torch.sum((soc_true_vector - torch.mean(soc_true_vector))**2)
-
-	# # Define l2 loss
-	# l2_loss_func = torch.nn.MSELoss(reduction='mean')
 
 	# NOT USED ANYMORE: Attempts to penalize extreme values of the beta parameter.
 	# # Gradient of beta w.r.t. batch_x
@@ -1136,57 +1296,68 @@ def binns_loss(y_pred, y_true, pred_para):
 	# Encourage parameters to be around 0.5
 	target_value = 0.5
 	scale_factor = 10
-	parameter_regularization_loss = torch.mean(torch.cosh(scale_factor*(pred_para - target_value)) - 1)
+	param_reg_loss = torch.mean(torch.cosh(scale_factor*(pred_para - target_value)) - 1)
 
-	# Weighting factor for regularization term
-	regularization_weight = 100  # 10*torch.tensor(0.5)) - 1 ~ 70
-
-	# Calculate the loss
-	# * l2_loss_func(soc_simu_vector, soc_true_vector)
-	# torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean') * 
+	# Calculate the supervised losses
 	l1_loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean')
-	loss = l1_loss + regularization_weight * parameter_regularization_loss 
-	# print(modeling_inefficiency)
-
-	##########################
-	# L1/L2 Regularization   #
-	##########################
-	# lambda_reg = 0.001
-	# L1_reg = sum(p.abs().sum() for p in model.parameters())
-	# l2_reg = sum(p.pow(2.0).sum() for p in model.parameters())
-	# loss = modeling_inefficiency # + lambda_reg * l2_reg
-
-	return loss, modeling_inefficiency, l1_loss
-	
-	# return modeling_inefficiency
+	l2_loss = torch.nn.functional.mse_loss(soc_simu_vector, soc_true_vector, reduction='mean')
+	return l1_loss, l2_loss, param_reg_loss, modeling_inefficiency
 # end binns loss
 
 
 #---------------------------------------------------
-# NN by PyTorch
+# simplified loss function that only takes in pred/true
+# and returns a single value (smooth l1). Used for CURE
+# curvature regularization.
+#---------------------------------------------------
+def binns_loss_simple(y_pred, y_true):
+	pred_para = torch.zeros_like(y_pred)  # Not used
+	l1_loss, _, _, _ = binns_loss(y_pred, y_true, pred_para)
+	return l1_loss
+
+
+#---------------------------------------------------
+# NN by PyTorch (old_mlp)
 #---------------------------------------------------
 # define model
 class nn_model(nn.Module):
-	def __init__(self, var_idx_to_emb, vertical_mixing):
+	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, one_hot=False):
+		"""
+		var_idx_to_emb is a dictionary mapping from categorical variable index to either
+		(1) Embedding layer (if one_hot is False)
+		(2) Number of categories (if one_hot is True)
+		
+		This does not include all customization features.
+		"""
 		super().__init__()
 
-		# Dict from categorical variable index -> Embedding layer we use
+		self.one_hot = one_hot
 		self.var_idx_to_emb = var_idx_to_emb
 		self.vertical_mixing = vertical_mixing
 
 		# List of non-categorical variable indices
-		self.non_categorical_indices = list(set(list(range(len(var4nn)))).difference(var_idx_to_emb.keys()))
-		# print("Categorical indices", var_idx_to_emb.keys())
-		# print("Noncategorical indices", self.non_categorical_indices)
-		new_input_size = len(self.non_categorical_indices)
-		for idx, emb in self.var_idx_to_emb.items():
-			## for embedding layer ##
-			new_input_size += emb.embedding_dim
-			# ## for one-hot encoding ##
-			# new_input_size += emb
+		self.non_categorical_indices = list(set(list(range(input_vars))).difference(var_idx_to_emb.keys()))
+		self.new_input_size = len(self.non_categorical_indices)
+
+		# Setup categorical encoding
+		if self.one_hot:
+			# If one-hot, just calculate the input size
+			for _, num_classes in self.var_idx_to_emb.items():
+				self.new_input_size += num_classes
+		else:
+			# Create ModuleDict so that all Embedding layers in var_idx_to_emb
+			# are registered as parameters
+			self.var_idx_to_emb = nn.ModuleDict(self.var_idx_to_emb)
+			for _, emb in self.var_idx_to_emb.items():
+				self.new_input_size += emb.embedding_dim
+
+		# Number of parameters
+		if self.vertical_mixing == 'simple_two_intercepts':
+			self.num_params = 22
+		else:
+			self.num_params = 21
 
 		# Spatial Encoder from PE-GNN
-
 		self.spatial_encoder = GridCellSpatialRelationEncoder(
 			spa_embed_dim= 128, 
 			coord_dim=2, # Longitude and latitude
@@ -1198,12 +1369,12 @@ class nn_model(nn.Module):
 		)
 
 		# Adjust the input size
-		new_input_size -= 2  # Remove the longitude and latitude columns
-		new_input_size += 128  # Add the spatial embeddings
+		self.new_input_size -= 2  # Remove the longitude and latitude columns
+		self.new_input_size += 128  # Add the spatial embeddings
 
 		# Neural network layers
 		# first layer
-		self.l1 = nn.Linear(new_input_size, 128)
+		self.l1 = nn.Linear(self.new_input_size, 128)
 		# torch.nn.init.xavier_uniform_(self.l1.weight)
 		# nn.init.zeros_(self.l1.bias)
 		
@@ -1284,28 +1455,24 @@ class nn_model(nn.Module):
 		# torch.nn.init.xavier_uniform_(self.transform_h3_to_h4.weight)
 		# nn.init.zeros_(self.transform_h3_to_h4.bias)
 
-	def forward(self, input_var, wosis_depth, whether_predict):
+	def forward(self, input_var, wosis_depth, coords, whether_predict):
 		predictor = input_var[:, :, 0, 0]
 		forcing = input_var[:, :, :, :]
 		obs_depth = wosis_depth
-
-		# Create lon/lat coords Tensor, of shape [batch, 1, 2]
-		longitudes = input_var[:, 0, 0, 0]
-		latitudes = input_var[:, 1, 0, 0]
-		coords = torch.stack((longitudes, latitudes), dim=-1)
-		coords = torch.unsqueeze(coords, dim=1)
+		coords = coords.unsqueeze(1)  # .detach().cpu().numpy()
 
 		# Compute embeddings for all categorical variables
 		embs = []
 		for idx, embedding_layer in self.var_idx_to_emb.items():
-			## embedding layer ##
-			emb = embedding_layer(predictor[:, idx].int())
-			emb = F.normalize(emb, p=2, dim=1) # Normalize embeddings
-			
-			## one-hot encoding ##
-			# emb = 0.1*F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)
+			idx = int(idx)
+			if self.one_hot:
+				emb = 0.1*F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
+			else:
+				emb = embedding_layer(predictor[:, idx].int())
+				emb = F.normalize(emb, p=2, dim=1)  # New @joshuafan: normalize embeddings
 			embs.append(emb)
 		all_embs = torch.concatenate(embs, dim=1)
+		new_input = torch.concatenate([predictor[:, self.non_categorical_indices], all_embs], dim=1)
 
 		# Spatial Encoding
 		spatial_embeddings = self.spatial_encoder(coords)
@@ -1321,7 +1488,7 @@ class nn_model(nn.Module):
 		# 	print(f"Spatial embeddings shape: {spatial_embeddings.shape}")
 		# 	print(f"Predictor shape: {predictor[:, self.non_categorical_indices].shape}")
 		# 	print(f"All embeddings shape: {all_embs.shape}")
-		
+
 
 		# hidden layers
 		h1 = self.l1(new_input)
@@ -1397,24 +1564,25 @@ class nn_model(nn.Module):
 			simu_soc = fun_model_prediction(h5, forcing, self.vertical_mixing)
 		else:
 			simu_soc = fun_model_simu(h5, forcing, obs_depth, self.vertical_mixing)
-
 		
 		return simu_soc, h5
 # end nn_model
 
+
 # Helper function to combine the training data into a single tensor
 class MergeDataset(Dataset):
-    def __init__(self, data_x, data_y, data_z, profile_id):
-        self.data_x = data_x
-        self.data_y = data_y
-        self.data_z = data_z
-        self.profile_id = profile_id
+	def __init__(self, data_x, data_y, data_z, data_c, profile_id):
+		self.data_x = data_x
+		self.data_y = data_y
+		self.data_z = data_z
+		self.data_c = data_c
+		self.profile_id = profile_id
 
-    def __len__(self):
-        return len(self.data_x)
+	def __len__(self):
+		return len(self.data_x)
 
-    def __getitem__(self, idx):
-        return self.data_x[idx], self.data_y[idx], self.data_z[idx], self.profile_id[idx]
+	def __getitem__(self, idx):
+		return self.data_x[idx], self.data_y[idx], self.data_z[idx], self.data_c[idx], self.profile_id[idx]
 
 
 
@@ -1477,7 +1645,8 @@ def ddp_setup(rank, world_size):
 	print("Number of CPUs: ", torch.cpu.device_count())  # No idea why it is not working on NCAR server
 	print("Number of Cores: ", cpu_count)
 	print("Number of threads: ", thread_count)
-	print("CUDA_VISIBLE_DEVICES", os.environ["CUDA_VISIBLE_DEVICES"])
+	if "CUDA_VISIBLE_DEVICES" in os.environ:
+		print("CUDA_VISIBLE_DEVICES", os.environ["CUDA_VISIBLE_DEVICES"])
 
 	# Set number of threads *per worker*. Should equal floor(CPUs/processes)
 	torch.set_num_threads(math.floor(torch.get_num_threads() / world_size))
@@ -1531,60 +1700,181 @@ def worker(rank, world_size, job_id):
 			emb = n_categories  # Just store the number of categories for one-hot encoding
 		for var in group:
 			idx = var4nn.index(var)
-			var_idx_to_emb[idx] = emb
+			var_idx_to_emb[str(idx)] = emb
 
 	# Initialize model
+	# TODO Not sure if "global model" is correct
 	global model
 	if args.model == 'old_mlp':
-		model = nn_model(var_idx_to_emb, args.vertical_mixing).to(device)
-	elif args.model == 'new_mlp':
-		model = mlp_wrapper(len(var4nn), var_idx_to_emb, args.vertical_mixing, lipschitz=False, one_hot=(args.categorical == "one_hot"), use_bn=args.use_bn).to(device)
-	elif args.model == 'lipmlp':
-		model = mlp_wrapper(len(var4nn), var_idx_to_emb, args.vertical_mixing, lipschitz=True, one_hot=(args.categorical == "one_hot"), use_bn=args.use_bn).to(device)
+		model_class = nn_model
+		model_kwargs = {"input_vars": len(var4nn),
+						"var_idx_to_emb": var_idx_to_emb,
+						"vertical_mixing": args.vertical_mixing,
+						"one_hot": (args.categorical == "one_hot"),}
+	elif args.model == 'new_mlp' or args.model == "lipmlp":
+		model_class = mlp_wrapper
+		model_kwargs = {"input_vars": len(var4nn),
+						"var_idx_to_emb": var_idx_to_emb,
+						"vertical_mixing": args.vertical_mixing,
+						"pos_enc": args.pos_enc,
+						"lipschitz": False,
+						"one_hot": (args.categorical == "one_hot"),
+						"use_bn": args.use_bn,
+						"dropout_prob": args.dropout_prob,
+						"leaky_relu": args.leaky_relu,
+						"losses": args.losses,
+						"device": device}
+		if args.model == "lipmlp":
+			model_kwargs["lipschitz"] = True
+	elif args.model == 'binn_hybrid':
+		model_class = BINN_Hybrid
+		model_kwargs = {"input_vars": len(var4nn),
+						"var_idx_to_emb": var_idx_to_emb,
+						"vertical_mixing": args.vertical_mixing,
+						"pos_enc": args.pos_enc,
+						"lipschitz": False,
+						"one_hot": (args.categorical == "one_hot"),
+						"use_bn": args.use_bn,
+						"dropout_prob": args.dropout_prob,
+						"leaky_relu": args.leaky_relu,
+						"losses": args.losses,
+						"device": device}
 
-	# Create distributed version of the model    
-	model = DDP(model, device_ids=[device])
+	elif args.model == 'nn_only':
+		model_class = nn_only
+		y_values = train_y.flatten()[~torch.isnan(train_y.flatten())]
+		min_val = torch.min(y_values)
+		max_val = torch.max(y_values)
+		print("NN only, range of Y is", min_val, max_val)
+		model_kwargs = {"input_vars": len(var4nn),
+						"var_idx_to_emb": var_idx_to_emb,
+						"pos_enc": args.pos_enc,
+						"output_dim": 140,
+						"lipschitz": False,
+						"one_hot": (args.categorical == "one_hot"),
+						"use_bn": args.use_bn,
+						"dropout_prob": args.dropout_prob,
+						"leaky_relu": args.leaky_relu,
+						"losses": args.losses,
+						"device": device,
+						"min_val": min_val,
+						"max_val": max_val}
+		if args.model == "lipmlp":
+			model_kwargs["lipschitz"] = True
+	elif args.model == 'gnn':
+		model_class = GNN_BINN
+		model_kwargs = {"input_vars": len(var4nn),
+						"var_idx_to_emb": var_idx_to_emb,
+						"vertical_mixing": args.vertical_mixing,
+						"pos_enc": args.pos_enc,
+						"k": args.k,
+						"one_hot": (args.categorical == "one_hot"),
+						"use_bn": args.use_bn,
+						"dropout_prob": args.dropout_prob,
+						"leaky_relu": args.leaky_relu,
+						"losses": args.losses,
+						"graph_conv": args.graph_conv,
+						"device": device}
+	elif args.model == 'spatial':
+		model_class = Spatial_BINN
+		model_kwargs = {"input_vars": len(var4nn),
+						"var_idx_to_emb": var_idx_to_emb,
+						"vertical_mixing": args.vertical_mixing,
+						"pos_enc": args.pos_enc,
+						"k": args.k,
+						"one_hot": (args.categorical == "one_hot"),
+						"use_bn": args.use_bn,
+						"dropout_prob": args.dropout_prob,
+						"leaky_relu": args.leaky_relu,
+						"losses": args.losses,
+						"device": device}
+	else:
+		raise ValueError("Invalid args.model")
+
+	if args.loss_weighting not in ["manual", "two_stage", "relobralo"]:
+		# Specialized multi-task loss weighting method
+		weighting = weighting_method.__dict__[args.loss_weighting]
+
+		# Attempt to match the MTLmodel API. Create a class that derives from
+		# both our architecture class (customized for BINN) and our weighting method
+		# class (provided by LibMTL)
+		class MTLmodel(model_class, weighting):
+			def __init__(self, **kwargs):
+				super(MTLmodel, self).__init__(**kwargs)
+				self.init_param()
+
+		model = MTLmodel(**model_kwargs).to(device)
+	else:
+		model = model_class(**model_kwargs).to(device)
+
+	# Create distributed version of the model
+	if args.use_ddp == 1:
+		model = DDP(model, device_ids=[device])
+		model_without_ddp = model.module
+	else:
+		model_without_ddp = model
+
+	# Optimizer
+	if args.optimizer == "AdamW":
+		optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+	elif args.optimizer == "SGD":
+		optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+	else:
+		raise ValueError("Invalid args.optimizer")
+
+	# Scheduler
+	if args.use_swa:
+		# TODO Double-check Stochastic Weight Averaging implementation
+		swa_model = AveragedModel(model)
+		# scheduler = CosineAnnealingLR(optimizer, T_max=20, verbose=True)
+		scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr, gamma=0.1)
+		swa_start = 25
+		swa_scheduler = SWALR(optimizer, swa_lr=args.lr)
+	else:
+		# Add a learning rate scheduler that decreases the learning rate by a factor of 0.1 every 50 epochs
+		if args.scheduler == "reduce_on_plateau":
+			scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max")
+		elif args.scheduler == "step":
+			scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
+		elif args.scheduler == "none":
+			scheduler = None
+		else:
+			raise ValueError("Invalid args.scheduler")
 
 	if args.whether_resume == 1:
 		# Load the model from the checkpoint
 		checkpoint_worker = torch.load(checkpoint_path, map_location=device)
 		state_dict = checkpoint_worker['model_state_dict']
 		model.load_state_dict(state_dict)
+		optimizer.load_state_dict(checkpoint_worker['optimizer_state_dict'])
+		if args.use_swa:
+			swa_model.load_state_dict(checkpoint_worker['swa_model_state_dict'])
 
-
-	# Loss and optimizer
-	optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-	# Add a learning rate scheduler that decreases the learning rate by a factor of 0.1 every 50 epochs
-	scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr, gamma=0.1)
-	# if rank == 0:
-	# 	print(model.parameters)
-	# for name, param in model.module.named_parameters():
-	# 	print(f"{name}: {param.size()}")
+	# Loss function
 	fun_loss = binns_loss
 
-
 	# Initialize datasets
-	train_dataset = MergeDataset(train_x, train_y, train_z, train_profile_id)
-	val_dataset = MergeDataset(val_x, val_y, val_z, val_profile_id)
+	train_dataset = MergeDataset(train_x, train_y, train_z, train_c, train_profile_id)
+	val_dataset = MergeDataset(val_x, val_y, val_z, val_c, val_profile_id)
 
 	# Use DistributedSampler for distributed training
-	train_sampler = DistributedSampler(train_dataset)
-	val_sampler = DistributedSampler(val_dataset)
+	if args.use_ddp == 1:
+		train_sampler = DistributedSampler(train_dataset)
+		val_sampler = DistributedSampler(val_dataset)
+	else:
+		train_sampler, val_sampler = None, None
 
 	# Data loaders with DistributedSampler
 	train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)
 	val_loader = DataLoader(val_dataset, batch_size=args.batch_size, sampler=val_sampler)
-	# train_loader = DataLoader([[train_x[i], train_y[i], train_z[i], train_profile_id[i]] for i in range(train_y.shape[0])], shuffle = True, batch_size = batch_size, num_workers=4)
-	# val_loader = DataLoader([[val_x[i], val_y[i], val_z[i], val_profile_id[i]] for i in range(val_y.shape[0])], shuffle = True, batch_size = batch_size, num_workers=4)
 
 	# training and validation loop
 	num_epoch = args.n_epochs
 
-	
 	if args.whether_resume == 0:
 		# record the loss history
-		train_loss_history = np.ones((num_epoch, 1))*np.nan
-		val_loss_history = np.ones((num_epoch, 1))*np.nan
+		train_loss_history = np.ones((num_epoch, len(args.losses)))*np.nan
+		val_loss_history = np.ones((num_epoch, len(args.losses)))*np.nan
 		val_NSE_history = np.ones((num_epoch, 1))*np.nan
 		best_model_epoch = torch.tensor(0) # epoch with the best model so far
 
@@ -1612,7 +1902,7 @@ def worker(rank, world_size, job_id):
 			val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
 			model.eval()
 			with torch.no_grad():
-				temp_SOC, temp_pred_para = model(val_x, val_z, whether_predict=0)
+				temp_SOC, temp_pred_para = model(val_x, val_z, val_c, whether_predict=0)
 			val_pred_soc[val_profile_id, :] = temp_SOC.detach()
 			val_pred_para[val_profile_id, :] = temp_pred_para.detach()
 			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_soc.detach().cpu().numpy(), delimiter = ',')
@@ -1642,81 +1932,120 @@ def worker(rank, world_size, job_id):
 			# print the model structure
 			print(model)
 
-
-	
-
 	# record start time
 	start_time = time.time()
 
 	for iepoch in range(start_epoch, num_epoch):
+		epoch_start = time.time()
+
 		# Initialize the break flag for this epoch
 		whether_break = torch.tensor(0).to(device)
 
 		# # Initialize the storage for the predicted parameters
-		# val_pred_soc_all_rank = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
-		# val_pred_para_all_rank = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
-		# val_profile_id_all_rank = torch.tensor(np.ones((wosis_profile_info.shape[0]))*np.nan, dtype = torch.float32, device=device)
+		# val_pred_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
+		# val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
+		# train_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
 
-		# val_pred_soc_rank = torch.zeros([len(val_loader), args.batch_size, 200], dtype=torch.float32, device=device)
-		# val_pred_para_rank = torch.zeros([len(val_loader), args.batch_size, len(para_names)], dtype=torch.float32, device=device)
-		# val_profile_id_rank = torch.zeros([len(val_loader), args.batch_size], dtype=torch.float32, device=device)
-
-
-		# Store predicted SOC and parameters
-		val_pred_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
-		val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
-		train_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
+		# Store predicted para/coords, and predicted/true SOC (for both train and val - for plotting)
+		all_train_pred_para = []
+		all_train_coords = []
+		all_val_pred_para = []
+		all_val_coords = []
+		all_train_pred_soc = []
+		all_train_true_soc = []
+		all_val_pred_soc = []
+		all_val_true_soc = []
 
 		# clear gradients
 		optimizer.zero_grad()
 		model.zero_grad()
 
 		# -------------------------------------training
-		total_loss_record_train = list()
-		l1_loss_record_train = list()
-		lipschitz_loss_record_train = list()
+		loss_record_train = list()  # List of Tensors. Each Tensor contains losses in the order of args.losses.
 		NSE_record_train = list()
 		ibatch = 0
-		epoch_start = time.time()
 		model.train()
-		train_loader.sampler.set_epoch(iepoch)  # Set sampler's epoch number, so we use a different order per epoch
+		if args.use_ddp == 1:
+			train_loader.sampler.set_epoch(iepoch)  # Set sampler's epoch number, so we use a different order per epoch
 
+		torch.autograd.set_detect_anomaly(True)   # <- helps debug gradient anomalies but is VERY SLOW
 		for batch_info in train_loader:
-			batch_x, batch_y, batch_z, batch_profile_id = batch_info
+			batch_x, batch_y, batch_z, batch_c, batch_profile_id = batch_info
+
+			if batch_x.shape[0] == 1 and args.use_bn:  # Batch size of 1 during training does not work with BatchNorm
+				continue
+
 			ibatch = ibatch + 1
 			batch_x = batch_x.to(device)
 			batch_y = batch_y.to(device)
+			batch_c = batch_c.to(device)
 
 			#------------ 1 forward
-			batch_y_hat, batch_pred_para = model(batch_x, batch_z, whether_predict=0)
+			# train_nn_start = time.time()
+			if args.model in ['gnn', 'spatial']:
+				plot_dir = PLOT_DIR if (ibatch==1 and iepoch%5==0) else None
+				batch_y_hat, batch_pred_para, spatial_emb, laplacian = model(batch_x, batch_z, batch_c, whether_predict=0, return_extra=True, plot_dir=plot_dir)
+			elif args.model == 'binn_hybrid':
+				batch_y_hat, batch_pred_para, residual = model(batch_x, batch_z, batch_c, whether_predict=0, return_residual=True)
+			else:
+				batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0)
 
 			# Check if batch_pred_para is nan or inf
 			if torch.isnan(batch_pred_para).any() or torch.isinf(batch_pred_para).any():
 				whether_break = torch.tensor(1).to(device)
-				# change NaN to 0 and inf to 1 to avoid error in loss.backward()
-				# batch_pred_para[torch.isnan(batch_pred_para)] = 0
-				# batch_pred_para[torch.isinf(batch_pred_para)] = 1
-				# check which parameter is nan or inf in batch_pred_para
 				for ipara in range(batch_pred_para.shape[0]):
 					if torch.isnan(batch_pred_para[ipara]).any() or torch.isinf(batch_pred_para[ipara]).any():
-						print(f"Rank {rank} Epoch {iepoch} batch {ibatch} parameter {ipara} is {batch_pred_para[ipara]}")
+						print(f"Epoch {iepoch} batch {ibatch} parameter {ipara} is {batch_pred_para[ipara]}")
 
+			# Check for extreme para values
+			if args.model != 'nn_only' and (torch.any(batch_pred_para < 0.00001) or torch.any(batch_pred_para > 0.99999)):
+				print("Extreme param values")
+				print(batch_pred_para)
+
+			# Check memory usage
 			# num_cores = os.cpu_count()
 			# print(f'Number of cores: {num_cores}')
 			# print(psutil.cpu_percent(interval=None, percpu=True))
 			# print(psutil.virtual_memory())
 
 			#------------ 2 compute the objective function
-			total_loss, train_NSE, smooth_l1_loss = fun_loss(batch_y_hat, batch_y, batch_pred_para)
-			
+			smooth_l1_loss, l2_loss, param_reg_loss, train_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
+
+			# Compute additional losses if using. If we are not using them, set them to nan
+			lipmlp_loss = np.nan
+			spectral_loss = np.nan
+			# c_reg_loss = np.nan
+			cure_loss = np.nan
+			spatial_error_loss = np.nan
+			spatial_smoothness_loss = np.nan
+			param_smoothness_loss = np.nan
+			residual_loss = np.nan
+
+			# Spatial losses
+			if "spatial_error" in args.losses:
+				assert args.pos_enc != 'none'
+				spatial_error_loss = torch.mean(spatial_emb ** 2)
+			if "spatial_emb_smoothness" in args.losses:
+				assert args.pos_enc != "none"
+				spatial_smoothness_loss = 0
+				for i in range(model.num_params):
+					spatial_smoothness_loss += ((spatial_emb[:, i] @ laplacian @ spatial_emb[:, i]) / torch.sum(spatial_emb[:, i]**2))
+			if "param_smoothness" in args.losses:
+				param_smoothness_loss = 0
+				for i in range(model.num_params):
+					param_smoothness_loss += ((batch_pred_para[:, i] @ laplacian @ batch_pred_para[:, i]) / torch.sum(batch_pred_para[:, i]**2))
+
+			# If using BINN_Hybrid, also force the PBM output to be close to groundtruth
+			if args.model == "binn_hybrid":
+				assert "residual" in args.losses
+				residual_loss = torch.mean(torch.abs(residual))
+
 			# Lipschitz loss if using
-			if args.model == "lipmlp":
-				# Lipschitz loss if using LipMLP (https://arxiv.org/abs/2202.08345)
-				lipschitz_loss, cs, scalings = model.module.mlp.get_lipschitz_loss()
-				lipschitz_loss_record_train.append(lipschitz_loss.item())
-				if ibatch == 1 and rank == 0:
+			if args.model == "lipmlp" and "lipmlp" in args.losses:
+				lipmlp_loss, cs, scalings = model_without_ddp.mlp.get_lipschitz_loss()
+				if ibatch == 1:
 					print("Lipschitz c", cs, "Scalings", scalings)
-				obj = total_loss + lipschitz_loss * args.lambda_lipschitz
+
 			# elif args.model == "clip":
 			#   # EXPERIMENTAL, not working yet.
 			#   # CLIP: Cheap Lipschitz Training (https://github.com/TimRoith/CLIP)
@@ -1746,37 +2075,69 @@ def worker(rank, world_size, job_id):
 					
 			# 	# Compute the Lipschitz constant
 			# 	c_reg_loss = reg.lip_constant(conf, model, u_reg, v_reg, mean=conf.reg_all)
-			# 	obj = smooth_l1_loss + c_reg_loss * args.lambda_lipschitz
-			elif args.model == "new_mlp" and args.lambda_lipschitz > 0:
-				# Compute the spectral norm of the model's layers, and add this as a loss
-				spectral_norm_loss = model.module.mlp.spectral_norm_parallel(device)
-				lipschitz_loss_record_train.append(spectral_norm_loss.item())
-				obj = total_loss + spectral_norm_loss * args.lambda_lipschitz
-			else:
-				obj = total_loss
+			elif "spectral" in args.losses:
+				assert args.model == "new_mlp", "Spectral norm regularization only works with --model new_mlp"
 
-			if rank == 0:
-				print(f'{datetime.now()} Epoch {iepoch + 1} batch {ibatch}, train loss: {obj.item():.2f}')
+				# Compute the spectral norm of the model's layers, and add this as a loss
+				spectral_loss = model_without_ddp.mlp.spectral_norm_parallel(device)
+
+			if "cure" in args.losses:
+				# Curvature regularization. TODO Not tested yet
+				cure_loss, grad_norm = misc_utils.regularizer(batch_x, batch_y, batch_z, model, binns_loss_simple)
 
 			#------------ 3 cleaning gradients
 			optimizer.zero_grad()
 
 			#------------ 4 accumulate partical derivatives of objective respect to parameters
-			obj.backward()
+			loss_dict = {"l1": smooth_l1_loss,
+						"l2": l2_loss,
+						"param_reg": param_reg_loss,
+						"lipmlp": lipmlp_loss,
+						# "c_reg": c_reg_loss,
+						"spectral": spectral_loss,
+						"cure": cure_loss,
+						"spatial_error": spatial_error_loss,
+						"spatial_emb_smoothness": spatial_smoothness_loss,
+						"param_smoothness": param_smoothness_loss,
+						"residual": residual_loss}
 
-			# clip gradients
-			# torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_value)
-			# torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=args.clip_value)
-			
+			# Store losses in a tensor, in the order of args.losses
+			train_losses = torch.stack([loss_dict[loss] for loss in args.losses]).to(device)
+
+			if args.loss_weighting in ["manual", "two_stage", "relobralo"]:
+				# Loss weights are explicitly set
+				# total_loss = torch.dot(train_losses, args.lambdas.to(device))
+				# print("Loss tensor", train_losses, total_loss)
+				total_loss = smooth_l1_loss + 100 * param_reg_loss
+				total_loss.backward()
+			else:
+				# Specialized multi-task loss balancing methods
+				alphas = model.backward(train_losses)
+				if ibatch == 1:
+					print("Alphas", alphas)
+
+			# clip gradients. TODO Not tested.
+			if args.clip_value != -1:
+				# torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_value)
+				torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=args.clip_value)
+
 			#------------ 5 step in the opposite direction of the gradient
 			# with torch.no_grad(): para = para - eta*para.grad # eta is learning rate
 			optimizer.step()
 
-			# Record losses            
-			total_loss_record_train.append(total_loss.item())
-			l1_loss_record_train.append(smooth_l1_loss.item())
+			# Record losses
+			loss_record_train.append(train_losses)
 			NSE_record_train.append(train_NSE.item())
-			# writer.add_scalar('training loss', obj.item(), iepoch)
+
+			# Record predicted parameters, true/predicted SOC
+			all_train_pred_para.append(batch_pred_para)
+			all_train_coords.append(batch_c)
+			all_train_pred_soc.append(batch_y_hat)
+			all_train_true_soc.append(batch_y)
+
+			# flush all printed output
+			sys.stdout.flush()
+			batch_start = time.time()          
 
 		# end for batch_info in train_loader:
 
@@ -1800,46 +2161,132 @@ def worker(rank, world_size, job_id):
 		dist.barrier()
 
 		# -------------------------------------validation
-		total_loss_record_val = list()
-		l1_loss_record_val = list()
+		loss_record_val = list()  # List of Tensors. Each Tensor contains losses in the order of args.losses.
 		NSE_record_val = list()
 		ibatch = 0
 		model.eval()
-		for batch_info in val_loader:
-			batch_x, batch_y, batch_z, batch_profile_id = batch_info
-			batch_x = batch_x.to(device)
-			batch_y = batch_y.to(device)
+		with torch.no_grad():
+			for batch_info in val_loader:
+				batch_x, batch_y, batch_z, batch_c, batch_profile_id = batch_info
+				ibatch = ibatch + 1
+				batch_x = batch_x.to(device)
+				batch_y = batch_y.to(device)
 
-			# 1 forward
-			with torch.no_grad():
-				batch_y_hat, batch_pred_para = model(batch_x, batch_z, whether_predict=0)
+				# 1 forward
+				if args.model in ['gnn', 'spatial']:
+					plot_dir = PLOT_DIR if (ibatch==1 and iepoch%5==0) else None
+					batch_y_hat, batch_pred_para, spatial_emb, laplacian = model(batch_x, batch_z, batch_c, whether_predict=0, return_extra=True)
+				elif args.model == 'binn_hybrid':
+					batch_y_hat, batch_pred_para, residual = model(batch_x, batch_z, batch_c, whether_predict=0, return_residual=True)
+				else:
+					batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0)
 
-			# 2 compute the objective function
-			obj, val_NSE, val_l1_loss = fun_loss(batch_y_hat, batch_y, batch_pred_para)
+				# 2 compute the objective function
+				smooth_l1_loss, l2_loss, param_reg_loss, val_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
 
-			# if validation loss is nan, print out the batch info
-			if np.isnan(obj.item()):
-				print(batch_y_hat)
+				# Compute additional losses if using. Not strictly necessary but this helps us see if there
+				# is a difference between the losses for train/validation sets
+				# If we are not using them, set them to nan
+				lipmlp_loss = np.nan
+				spectral_loss = np.nan
+				# c_reg_loss = np.nan
+				cure_loss = np.nan
+				spatial_error_loss = np.nan
+				spatial_smoothness_loss = np.nan
+				param_smoothness_loss = np.nan
+				residual_loss = np.nan
 
-			# Record losses
-			total_loss_record_val.append(obj.item())
-			l1_loss_record_val.append(val_l1_loss.item())
-			NSE_record_val.append(val_NSE.item())
+				# Spatial losses
+				if "spatial_error" in args.losses:
+					assert args.pos_enc != 'none'
+					spatial_error_loss = torch.mean(spatial_emb ** 2)
+				if "spatial_emb_smoothness" in args.losses:
+					assert args.pos_enc != "none"
+					spatial_smoothness_loss = 0
+					# print("Spatial emb", spatial_emb.shape, laplacian.shape)
+					for i in range(model.num_params):
+						spatial_smoothness_loss += ((spatial_emb[:, i] @ laplacian @ spatial_emb[:, i]) / torch.sum(spatial_emb[:, i]**2))
+				if "param_smoothness" in args.losses:
+					param_smoothness_loss = 0
+					for i in range(model.num_params):
+						param_smoothness_loss += ((batch_pred_para[:, i] @ laplacian @ batch_pred_para[:, i]) / torch.sum(batch_pred_para[:, i]**2))
+				if args.model == "binn_hybrid":
+					residual_loss = torch.mean(torch.abs(residual))
 
-			# print(f'{datetime.now()}, Epoch {iepoch + 1}, Rank {rank}, batch {ibatch}, validation loss: {obj.item():.2f}')
-			# record prediction
-			# Check the shape of the predictions
-			# if batch_profile_id.shape[0] != args.batch_size:
-			# 	print(f"ibatch {ibatch} Rank {rank} batch_y_hat shape {batch_y_hat.shape}")
-			# 	# Add nan values to the end of the tensor
-			# 	batch_y_hat = torch.cat((batch_y_hat, torch.ones(args.batch_size - batch_profile_id.shape[0], 200)*np.nan), dim=0)
-			# 	batch_pred_para = torch.cat((batch_pred_para, torch.ones(args.batch_size - batch_profile_id.shape[0], len(para_names))*np.nan), dim=0)
-			# 	batch_profile_id = torch.cat((batch_profile_id, torch.ones(args.batch_size - batch_profile_id.shape[0])*np.nan), dim=0)
-			# val_pred_soc_rank[ibatch, :, :] = batch_y_hat
-			# val_pred_para_rank[ibatch, :, :] = batch_pred_para
-			# val_profile_id_rank[ibatch, :] = batch_profile_id
+				if args.model == "lipmlp" and "lipmlp" in args.losses:
+					lipmlp_loss, cs, scalings = model_without_ddp.mlp.get_lipschitz_loss()
+					if ibatch == 1:
+						print("Lipschitz c", cs, "Scalings", scalings)
+				# elif args.model == "clip":
+				# 	# ---------------------------------------------------------------------
+				# 	# Adverserial update
+				# 	# ---------------------------------------------------------------------
+				# 	# get initialization for Lipschitz Training set
+				# 	if ((cache['counter'] % conf.reg_incremental) == 0) or (not ('init' in cache)):
+				# 		if verbosity > 0:
+				# 			print('The Lipschitz set was reset')
+				# 		cache['init'] = reg.u_v_init(conf, lip_cycle, cache)
+				# 		cache['counter'] = 1
+				# 	else:
+				# 		cache['counter'] += 1
 
-			ibatch = ibatch + 1
+				# 	# adverserial update on the Lipschitz set
+				# 	u, v = reg.search_u_v(conf, model, cache)
+				# 	# ---------------------------------------------------------------------
+
+				# 	# Use either all tuples or only one tuple for regularization
+				# 	if conf.reg_all:
+				# 		u_reg, v_reg = u, v
+				# 	else:
+				# 		# Use idx:idx+1 to keep shape
+				# 		u_reg = u[cache["idx"]:cache["idx"] + 1].detach()
+				# 		v_reg = v[cache["idx"]:cache["idx"] + 1].detach()
+
+				# 	# Compute the Lipschitz constant
+				# 	c_reg_loss = reg.lip_constant(conf, model, u_reg, v_reg, mean=conf.reg_all)
+				elif args.model == "new_mlp" and "spectral" in args.losses:
+					# Compute the spectral norm of the model's layers, and add this as a loss
+					spectral_loss = model_without_ddp.mlp.spectral_norm_parallel(device)
+				if "cure" in args.losses:
+					cure_loss, grad_norm = misc_utils.regularizer(batch_x, batch_y, batch_z, model, binns_loss_simple)
+				loss_dict = {"l1": smooth_l1_loss,
+							"l2": l2_loss,
+							"param_reg": param_reg_loss,
+							"lipmlp": lipmlp_loss,
+							# "c_reg": c_reg_loss,
+							"spectral": spectral_loss,
+							"cure": cure_loss,
+							"spatial_error": spatial_error_loss,
+							"spatial_emb_smoothness": spatial_smoothness_loss,
+							"param_smoothness": param_smoothness_loss,
+							"residual": residual_loss}
+
+				# Record losses
+				# Store losses in a tensor, in the order of args.losses
+				val_losses = torch.tensor([loss_dict[loss] for loss in args.losses]).to(device)
+				loss_record_val.append(val_losses)
+				NSE_record_val.append(val_NSE.item())
+
+				# Record predicted parameters, true/predicted SOC
+				all_val_pred_para.append(batch_pred_para)
+				all_val_coords.append(batch_c)
+				all_val_pred_soc.append(batch_y_hat)
+				all_val_true_soc.append(batch_y)
+
+				# print(f'{datetime.now()}, Epoch {iepoch + 1}, Rank {rank}, batch {ibatch}, validation loss: {obj.item():.2f}')
+				# record prediction
+				# Check the shape of the predictions
+				# if batch_profile_id.shape[0] != args.batch_size:
+				# 	print(f"ibatch {ibatch} Rank {rank} batch_y_hat shape {batch_y_hat.shape}")
+				# 	# Add nan values to the end of the tensor
+				# 	batch_y_hat = torch.cat((batch_y_hat, torch.ones(args.batch_size - batch_profile_id.shape[0], 200)*np.nan), dim=0)
+				# 	batch_pred_para = torch.cat((batch_pred_para, torch.ones(args.batch_size - batch_profile_id.shape[0], len(para_names))*np.nan), dim=0)
+				# 	batch_profile_id = torch.cat((batch_profile_id, torch.ones(args.batch_size - batch_profile_id.shape[0])*np.nan), dim=0)
+				# val_pred_soc_rank[ibatch, :, :] = batch_y_hat
+				# val_pred_para_rank[ibatch, :, :] = batch_pred_para
+				# val_profile_id_rank[ibatch, :] = batch_profile_id
+
+				ibatch = ibatch + 1
 		# end for batch_info in val_loader: 
 			
 		# # record the time
@@ -1851,32 +2298,23 @@ def worker(rank, world_size, job_id):
 		# # print('Optimizer time for rank {}: {:.5f}'.format(rank, optimizer_end - optimizer_start))
 
 		# Gather losses from all processes
-		all_total_train_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
-		all_l1_train_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
-		all_total_val_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
-		all_l1_val_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
+		all_train_losses = [torch.zeros((len(args.losses)), device=device) for _ in range(world_size)]
+		all_val_losses = [torch.zeros((len(args.losses)), device=device) for _ in range(world_size)]
 		all_train_times = [torch.tensor(0.0, device=device) for _ in range(world_size)]
 		all_train_NSE = [torch.tensor(0.0, device=device) for _ in range(world_size)]
 		all_val_NSE = [torch.tensor(0.0, device=device) for _ in range(world_size)]
 		all_hist_times = [torch.tensor(0.0, device=device) for _ in range(world_size)]
 
-
-		dist.all_gather(all_total_train_losses, torch.tensor(total_loss_record_train, device=device).mean())
-		dist.all_gather(all_l1_train_losses, torch.tensor(l1_loss_record_train, device=device).mean())
-		dist.all_gather(all_total_val_losses, torch.tensor(total_loss_record_val, device=device).mean())
-		dist.all_gather(all_l1_val_losses, torch.tensor(l1_loss_record_val, device=device).mean())
+		dist.all_gather(all_train_losses, torch.stack(loss_record_train, dim=0).mean(dim=0))
+		dist.all_gather(all_val_losses, torch.stack(loss_record_val, dim=0).mean(dim=0))
 		dist.all_gather(all_train_times, torch.tensor(train_time, device=device))
 		dist.all_gather(all_train_NSE, torch.tensor(NSE_record_train, device=device).mean())
 		dist.all_gather(all_val_NSE, torch.tensor(NSE_record_val, device=device).mean())
 		dist.all_gather(all_hist_times, torch.tensor(hist_time, device=device))
 
-		if args.model == "lipmlp" or args.lambda_lipschitz > 0:
-			all_train_lipschitz_losses = [torch.tensor(0.0, device=device) for _ in range(world_size)]
-			dist.all_gather(all_train_lipschitz_losses, torch.tensor(lipschitz_loss_record_train, device=device).mean())
-
 		# record the loss history
-		train_loss_history[iepoch, :] = torch.stack(all_total_train_losses).mean().detach().cpu().numpy()
-		val_loss_history[iepoch, :] = torch.stack(all_total_val_losses).mean().detach().cpu().numpy()
+		train_loss_history[iepoch, :] = torch.stack(all_train_losses, dim=0).mean(dim=0).detach().cpu().numpy()
+		val_loss_history[iepoch, :] = torch.stack(all_val_losses, dim=0).mean(dim=0).detach().cpu().numpy()
 		val_NSE_history[iepoch, :] = torch.stack(all_val_NSE).mean().detach().cpu().numpy()
 
 
@@ -1898,8 +2336,6 @@ def worker(rank, world_size, job_id):
 		# 	val_all_total_loss = None
 		# 	val_all_NSE = None
 		# 	val_all_l1_loss = None
-
-
 
 		# # Gather the predictions
 		# dist.gather(val_pred_soc_rank, gather_list=temp_val_pred_soc_list, dst=2)
@@ -1990,33 +2426,86 @@ def worker(rank, world_size, job_id):
 		# 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_train_pred_para_' + job_id + "_" + str(iepoch) + '.csv', train_pred_para.detach().numpy(), delimiter = ',')
 
 		if rank == 0: 
-			# writer.add_scalars('loss', {'training': torch.stack(all_train_losses).mean(), 'validation': torch.stack(all_val_losses).mean()}, iepoch+1)
-			print(f'Epoch {iepoch}, train loss: {torch.stack(all_total_train_losses).mean():.2f}, train L1 loss: {torch.stack(all_l1_train_losses).mean():.2f}, \
-				validation loss: {torch.stack(all_total_val_losses).mean():.2f}, validation L1 loss: {torch.stack(all_l1_val_losses).mean():.2f}, \
-				time: {torch.stack(all_train_times).mean():.2f}')
-			print(f'Epoch {iepoch}, train NSE: {torch.stack(all_train_NSE).mean():.2f}, validation NSE: {torch.stack(all_val_NSE).mean():.2f}, time: {torch.stack(all_train_times).mean():.2f}')
-			if args.model == "lipmlp" or args.lambda_lipschitz > 0:
-				print(f'Train Lipschitz loss: {torch.stack(all_train_lipschitz_losses).mean():.2f}')
-			sys.stdout.flush()
+			train_losses_epoch = {loss: round(train_loss_history[iepoch, loss_idx], 2) for loss_idx, loss in enumerate(args.losses)}
+			val_losses_epoch = {loss: round(val_loss_history[iepoch, loss_idx], 2) for loss_idx, loss in enumerate(args.losses)}
+			print(f'Epoch {iepoch}, train losses: {train_losses_epoch}')
+			print(f'Validation losses: {val_losses_epoch}')
+			print(f'Train NSE: {torch.tensor(NSE_record_train).mean():.2f}, validation NSE: {torch.tensor(NSE_record_val).mean():.2f}, time: {train_time:.2f}', flush=True)
 
-			if iepoch == 0 or val_NSE_history[iepoch, :] <= best_val_NSE:  # val_loss_history[iepoch, :] <= best_val_loss
-				# best_simu_soc = middle_simu_soc
-				# best_pred_para = middle_pred_para
-				
+			# Relobralo update
+			if args.loss_weighting == "relobralo" and iepoch >= 1:
+				with torch.no_grad():
+					loss_curr = torch.tensor([train_loss_history[loss][iepoch, 0] for loss in args.losses])
+					loss_prev = torch.tensor([train_loss_history[loss][iepoch-1, 0] for loss in args.losses])
+					loss_init = torch.tensor([train_loss_history[loss][0, 0] for loss in args.losses])
+					lambda_bal_prev = F.softmax(loss_curr / (args.relobralo_temp * loss_prev), dim=0)  # Based on ratio of current loss & prev epoch loss
+					print("Lambda bal prev", lambda_bal_prev)
+					lambda_bal_init = F.softmax(loss_curr / (args.relobralo_temp * loss_init), dim=0)  # Based on ratio of current loss & epoch 0 loss
+					lambda_hist = args.relobralo_saudade * args.lambdas + (1-args.relobralo_saudade) * lambda_bal_init
+					args.lambdas = args.relobralo_alpha * lambda_hist + (1-args.relobralo_alpha) * lambda_bal_prev
+					args.lambdas = args.lambdas / args.lambdas.sum()
+					print("lambdas", args.lambdas)
+
+					# Broadcast lambda update to all ranks. TODO Not tested yet
+					dist.broadcast(args.lambdas, src=0)
+
+
+			#############################################
+			## Create para map & scatters per 50 epoch ##
+			#############################################
+			if iepoch % 50 == 0:
+				all_train_pred_para = torch.cat(all_train_pred_para, dim=0)
+				all_train_coords = torch.cat(all_train_coords, dim=0)
+				all_val_pred_para = torch.cat(all_val_pred_para, dim=0)
+				all_val_coords = torch.cat(all_val_coords, dim=0)
+				all_train_pred_soc = torch.cat(all_train_pred_soc, dim=0)
+				all_train_true_soc = torch.cat(all_train_true_soc, dim=0)
+				all_val_pred_soc = torch.cat(all_val_pred_soc, dim=0)
+				all_val_true_soc = torch.cat(all_val_true_soc, dim=0)
+
+				# Scatterplots: true vs predicted
+				train_pred_soc_flat = torch.reshape(all_train_pred_soc, [1, -1])
+				train_true_soc_flat = torch.reshape(all_train_true_soc, [1, -1])
+				valid_loc = torch.where(torch.isnan(train_pred_soc_flat+train_true_soc_flat) == False)
+				visualization_utils.plot_true_vs_predicted(os.path.join(PLOT_DIR, f"epoch{iepoch}_train_scatter.png"),
+														train_pred_soc_flat[valid_loc], train_true_soc_flat[valid_loc])
+				val_pred_soc_flat = torch.reshape(all_val_pred_soc, [1, -1])
+				val_true_soc_flat = torch.reshape(all_val_true_soc, [1, -1])
+				valid_loc = torch.where(torch.isnan(val_pred_soc_flat+val_true_soc_flat) == False)
+				visualization_utils.plot_true_vs_predicted(os.path.join(PLOT_DIR, f"epoch{iepoch}_val_scatter.png"),
+														val_pred_soc_flat[valid_loc], val_true_soc_flat[valid_loc])
+
+				# Pred SOC maps. Currently taking the mean of all observations per site
+				# (regardless of depth), which will be noisy.
+				visualization_utils.plot_observations_world_map(all_train_coords[:, 0].detach().cpu().numpy(),
+																all_train_coords[:, 1].detach().cpu().numpy(),
+																torch.nanmean(all_train_pred_soc, dim=1).detach().cpu().numpy(),
+																PLOT_DIR,
+																f"epoch{iepoch}_train_pred_soc", us_only=True)
+				visualization_utils.plot_observations_world_map(all_val_coords[:, 0].detach().cpu().numpy(),
+																all_val_coords[:, 1].detach().cpu().numpy(),
+																torch.nanmean(all_val_pred_soc, dim=1).detach().cpu().numpy(),
+																PLOT_DIR,
+																f"epoch{iepoch}_val_pred_soc", us_only=True)
+
+				# Para maps
+				for para_idx in [0, 20]:
+					visualization_utils.plot_observations_world_map(all_train_coords[:, 0].detach().cpu().numpy(),
+																	all_train_coords[:, 1].detach().cpu().numpy(),
+																	all_train_pred_para[:, para_idx].detach().cpu().numpy(),
+																	PLOT_DIR,
+																	f"epoch{iepoch}_train_para_{para_names[para_idx]}", us_only=True)
+					visualization_utils.plot_observations_world_map(all_val_coords[:, 0].detach().cpu().numpy(),
+																	all_val_coords[:, 1].detach().cpu().numpy(),
+																	all_val_pred_para[:, para_idx].detach().cpu().numpy(),
+																	PLOT_DIR,
+																	f"epoch{iepoch}_val_para_{para_names[para_idx]}_epoch{iepoch}", us_only=True)
+
+			# If this model is the best so far, save the checkpoint into 'opt_nn_{job_id}.pt'
+			if val_NSE_history[iepoch, :] <= best_val_NSE:  # @joshuafan: removed the iepoch==0 condition
 				print(f'Best model updated at epoch {iepoch}')
-				
 				best_model_epoch = torch.tensor(iepoch, device=device)
 
-				
-				# save prediction and model
-				# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().numpy(), delimiter = ',')
-				# np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().numpy(), delimiter = ',')
-				# torch.save(model, data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt')
-				# print(f'Best model updated at epoch {iepoch + 1}')
-				
-				# save prediction and model
-				# np.savetxt(data_dir_output + 'neural_network/nn_best_pred_para_' + time_stamp + '.csv', best_pred_para.detach().numpy(), delimiter = ',')
-				# np.savetxt(data_dir_output + 'neural_network/nn_best_simu_soc_' + time_stamp + '.csv', best_simu_soc.detach().numpy(), delimiter = ',')
 				checkpoint_best_model = {
 					'epoch': iepoch,
 					'model_state_dict': model.state_dict(),
@@ -2075,28 +2564,48 @@ def worker(rank, world_size, job_id):
 				# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Bulk_Simulation/nn_bulk_simu_litter_fraction_' + job_id + "_" + str(iepoch) + '.csv', litter_fraction_best.detach().cpu().numpy(), delimiter = ',')
 
 				# print('Epoch {} finish evaluating the best model: {:.5f}'.format(iepoch, time.time() - eval_start_time))
-				
-				
 				# np.savetxt(data_dir_output + 'neural_network/val_loss_history_' + time_stamp + '.csv', val_loss_history, delimiter = ',')
 				# np.savetxt(data_dir_output + 'neural_network/train_loss_history_' + time_stamp + '.csv', train_loss_history, delimiter = ',')
-			# end if iepoch == 0:
-			
-			# save the training and validation loss history
-			with open(os.path.join(data_dir_output, "neural_network", job_id, avg_loss_filename), "a") as f:
-				f.write(f'{iepoch}, {torch.stack(all_total_train_losses).mean():.6f}, {torch.stack(all_total_val_losses).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}, {best_model_epoch.item()}\n')
-			with open(os.path.join(data_dir_output, "neural_network", job_id, avg_l1_loss_filename), "a") as f:
-				f.write(f'{iepoch}, {torch.stack(all_l1_train_losses).mean():.6f}, {torch.stack(all_l1_val_losses).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}, {best_model_epoch.item()}\n')
-			with open(os.path.join(data_dir_output, "neural_network", job_id, avg_NSE_filename), "a") as f:
-				f.write(f'{iepoch}, {torch.stack(all_train_NSE).mean():.6f}, {torch.stack(all_val_NSE).mean():.6f}, {torch.stack(all_train_times).mean():.2f}, {torch.stack(all_hist_times).mean():.2f}, {best_model_epoch.item()}\n')
+			# end if val_NSE_history[iepoch, :] <= best_val_NSE:
 
-		
+			# save the training and validation loss history
+			train_time = torch.stack(all_train_times).mean().item()
+			hist_time = torch.stack(all_hist_times).mean().item()
+			loss_file = os.path.join(data_dir_output, "neural_network", job_id, avg_loss_filename)
+			if iepoch == 0:  # Write the header if the file doesn't exist yet
+				with open(loss_file, mode='w') as f:
+					csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+					csv_writer.writerow(['epoch'] + [f'{loss}_loss_train' for loss in args.losses] +
+										[f'{loss}_loss_val' for loss in args.losses] +
+										['epoch_time', 'cumulative_time', 'best_model_epoch'])
+			with open(loss_file, mode='a+') as f:
+				csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+				best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt'
+				csv_writer.writerow([iepoch] + [train_loss_history[iepoch, loss_idx] for loss_idx, loss in enumerate(args.losses)] +
+									[val_loss_history[iepoch, loss_idx] for loss_idx, loss in enumerate(args.losses)] +
+									[round(train_time, 2), round(hist_time, 2),best_model_epoch.item()])
+
+			# NSE file. TODO Also make this into a CSV.
+			with open(os.path.join(data_dir_output, "neural_network", job_id, avg_NSE_filename), "a") as f:
+				f.write(f'{iepoch}, {torch.stack(all_train_NSE).mean():.6f}, {torch.stack(all_val_NSE).mean():.6f}, {train_time:.2f}, {hist_time:.2f}, {best_model_epoch.item()}\n')
+
+
 		# Ensure all processes reach this point before proceeding
 		dist.barrier()
 
 		# # Add a learning rate scheduler
-		scheduler.step()
-		if rank == 0:
+		if args.use_swa and val_NSE.item() < 0.5 and iepoch > swa_start:
+			swa_model.update_parameters(model)
+			swa_scheduler.step()
+		elif args.scheduler == "reduce_on_plateau":
+			scheduler.step(val_NSE_history[iepoch, 0])
+		elif scheduler is not None:
+			scheduler.step()
+		if rank == 0 and scheduler is not None:
 			print("New learning rate =", scheduler.get_last_lr())
+
+		if args.loss_weighting == "two_stage" and iepoch > args.second_start:
+			args.lambdas = args.second_lambdas
 
 		# Add a early stopping condition
 		if val_NSE_history[iepoch, :] < best_val_NSE:
@@ -2112,13 +2621,10 @@ def worker(rank, world_size, job_id):
 			print("Rank {}: Early stopping due to no improvement after {} epochs.".format(rank, patience))
 			break  # exit the epoch loop
 		
-		# If runtimes are over 11.30 hours, save checkpoint and exit
-		whether_checkpoint = False
-		if time.time() - job_begin_time > args.time_limit * 3600:
-			whether_checkpoint = True
+		# Save checkpoint (1) every save_freq epochs or (2) time limit exceeded 
+		time_limit_exceeded = (time.time() - job_begin_time > args.time_limit * 3600)
+		if time_limit_exceeded or iepoch % args.save_freq == 0:
 			if rank == 0:
-				print("Rank {}: Runtime exceeded, saving checkpoint and exiting.".format(rank))
-				# break # at this point, no longer pass the time limit
 				checkpoint = {
 					'epoch': iepoch,
 					'model_state_dict': model.state_dict(),
@@ -2134,79 +2640,88 @@ def worker(rank, world_size, job_id):
 					'test_indices': test_loc,
 					'epochs_without_improvement': epochs_without_improvement,
 				}
+				if args.use_swa:
+					checkpoint['swa_model_state_dict'] = swa_model.state_dict()
 				torch.save(checkpoint, data_dir_output + 'neural_network/' + job_id + '/checkpoint_' + job_id + '.pt')
-				# Create a file to submit the job again
-				if args.job_scheduler == 'slurm':
+
+				if time_limit_exceeded:
+					print("Rank {}: Runtime exceeded, saving checkpoint and exiting.".format(rank))
+
 					# Create a file to submit the job again
-					with open(job_submit_path + 'Resume' + job_id + '.submit', 'w') as f:
-						f.write(f'#!/bin/bash\n')
-						f.write(f'#SBATCH -p full\n')
-						f.write(f'#SBATCH -J binn_resume\n')
-						f.write(f'#SBATCH --gpus {args.num_CPU}\n')
-						f.write(f'#SBATCH -c {args.num_CPU*2}\n')
-						f.write(f'#SBATCH -N 1 -n 1\n')
-						f.write(f'#SBATCH --mem=50GB\n')
-						f.write(f'#SBATCH -t 12:00:00\n')
-						f.write(f'source ~/.bashrc\n')
-						f.write(f'module load cuda\n')
-						f.write(f'conda activate binn\n\n')
-						f.write(f'python {" ".join(sys.argv)} --time_limit 11.5 --whether_resume 1\n')
+					if args.job_scheduler == 'slurm':
+						# Create a file to submit the job again
+						with open(job_submit_path + 'Resume' + job_id + '.submit', 'w') as f:
+							f.write(f'#!/bin/bash\n')
+							f.write(f'#SBATCH -p full\n')
+							f.write(f'#SBATCH -J binn_resume\n')
+							f.write(f'#SBATCH --gpus {args.num_CPU}\n')
+							f.write(f'#SBATCH -c {args.num_CPU*2}\n')
+							f.write(f'#SBATCH -N 1 -n 1\n')
+							f.write(f'#SBATCH --mem=50GB\n')
+							f.write(f'#SBATCH -t 12:00:00\n')
+							f.write(f'source ~/.bashrc\n')
+							f.write(f'module load cuda\n')
+							f.write(f'conda activate binn\n\n')
+							f.write(f'python {" ".join(sys.argv)} --time_limit 11.5 --whether_resume 1\n')
 
-					# submit the job again
-					submit_command = ['sbatch',
-						f'--export=PREVIOUS_JOB_ID={job_id}',
-						job_submit_path + 'Resume' + job_id + '.submit']
-					# Submit the job and get the new job ID
-					try:
-						submit_output = subprocess.check_output(submit_command, universal_newlines=True)
-						new_job_id = submit_output.strip()
-						print(f"New job submitted. New Job ID is {new_job_id}")
-					except subprocess.CalledProcessError as e:
-						print(f"Failed to submit job: {e.output}")
-				else:
-					with open(job_submit_path + 'Resume' + job_id + '.submit', 'w') as f:
-						f.write(f'#!/bin/bash\n')
-						f.write(f'#PBS -A UOKL0017\n')
-						f.write(f'#PBS -N DDP_BINN_Resume\n')
-						f.write(f'#PBS -q main\n')
-						f.write(f'#PBS -l walltime=12:00:00\n')
-						f.write(f'#PBS -l select=1:ncpus=128\n\n')
-						f.write(f'# Use scratch for temporary files to avoid space limits in /tmp\n')
-						f.write(f'export TMPDIR=/glade/scratch/$USER/temp\n')
-						f.write(f'mkdir -p $TMPDIR\n\n')
-						f.write(f'# Load modules to match compile-time environment\n')
-						f.write(f'module purge\n')
-						f.write(f'module load conda\n')
-						f.write(f'module load cuda\n\n')
-						f.write(f'# Activate environment in conda\n')
-						f.write(f'conda activate BINN_310_CPU\n\n')
-						f.write(f'# Start the Python Code\n')
-						f.write(f'python -u /glade/u/home/haodixu/BINN/Server_Script/binns_DDP.py --lr ' + str(args.lr) + ' --weight_decay ' + str(args.weight_decay) + ' --batch_size ' + str(args.batch_size) + \
-							' --seed ' + str(args.seed) + ' --n_epochs ' + str(args.n_epochs) + ' --patience ' + str(args.patience) + ' --model ' + str(args.model) + ' --lambda_lipschitz ' + str(args.lambda_lipschitz) + \
-							' --note ' + str(args.note) + ' --categorical ' + str(args.categorical) + ' --use_bn ' + ' --embed_dim ' + str(args.embed_dim) + ' --cross_val_idx' + str(args.cross_val_idx) + \
-							' --num_CPU ' + str(args.num_CPU) + ' --whether_resume 1\n')
+						# submit the job again
+						submit_command = ['sbatch',
+							f'--export=PREVIOUS_JOB_ID={job_id}',
+							job_submit_path + 'Resume' + job_id + '.submit']
+						# Submit the job and get the new job ID
+						try:
+							submit_output = subprocess.check_output(submit_command, universal_newlines=True)
+							new_job_id = submit_output.strip()
+							print(f"New job submitted. New Job ID is {new_job_id}")
+						except subprocess.CalledProcessError as e:
+							print(f"Failed to submit job: {e.output}")
+					else:
+						with open(job_submit_path + 'Resume' + job_id + '.submit', 'w') as f:
+							f.write(f'#!/bin/bash\n')
+							f.write(f'#PBS -A UOKL0017\n')
+							f.write(f'#PBS -N DDP_BINN_Resume\n')
+							f.write(f'#PBS -q main\n')
+							f.write(f'#PBS -l walltime=12:00:00\n')
+							f.write(f'#PBS -l select=1:ncpus=128\n\n')
+							f.write(f'# Use scratch for temporary files to avoid space limits in /tmp\n')
+							f.write(f'export TMPDIR=/glade/scratch/$USER/temp\n')
+							f.write(f'mkdir -p $TMPDIR\n\n')
+							f.write(f'# Load modules to match compile-time environment\n')
+							f.write(f'module purge\n')
+							f.write(f'module load conda\n')
+							f.write(f'module load cuda\n\n')
+							f.write(f'# Activate environment in conda\n')
+							f.write(f'conda activate BINN_310_CPU\n\n')
+							f.write(f'# Start the Python Code\n')
+							f.write(f'python -u /glade/u/home/haodixu/BINN/Server_Script/binns_DDP.py --lr ' + str(args.lr) + ' --weight_decay ' + str(args.weight_decay) + ' --batch_size ' + str(args.batch_size) + \
+								' --seed ' + str(args.seed) + ' --n_epochs ' + str(args.n_epochs) + ' --patience ' + str(args.patience) + ' --model ' + str(args.model) + ' --lambda_lipschitz ' + str(args.lambda_lipschitz) + \
+								' --note ' + str(args.note) + ' --categorical ' + str(args.categorical) + ' --use_bn ' + ' --embed_dim ' + str(args.embed_dim) + ' --cross_val_idx' + str(args.cross_val_idx) + \
+								' --num_CPU ' + str(args.num_CPU) + ' --whether_resume 1\n')
 
-					# submit the job again
-					submit_command = ['qsub', 
-						'-v', f"PREVIOUS_JOB_ID={job_id}",
-						job_submit_path + 'Resume' + job_id + '.submit']
-					# Submit the job and get the new job ID
-					try:
-						submit_output = subprocess.check_output(submit_command, universal_newlines=True)
-						new_job_id = submit_output.strip()
-						print(f"New job submitted. New Job ID is {new_job_id}")
-					except subprocess.CalledProcessError as e:
-						print(f"Failed to submit job: {e.output}")
-			break
+						# submit the job again
+						submit_command = ['qsub', 
+							'-v', f"PREVIOUS_JOB_ID={job_id}",
+							job_submit_path + 'Resume' + job_id + '.submit']
+						# Submit the job and get the new job ID
+						try:
+							submit_output = subprocess.check_output(submit_command, universal_newlines=True)
+							new_job_id = submit_output.strip()
+							print(f"New job submitted. New Job ID is {new_job_id}")
+						except subprocess.CalledProcessError as e:
+							print(f"Failed to submit job: {e.output}")
+					break
 
 
 
 	print(f"Rank {rank} finished processing data.")
 
-	if whether_checkpoint:
-		print("Rank {}: Exiting after saving checkpoint.".format(rank))
+	if time_limit_exceeded:
+		print(f"Rank {rank}: Exiting after saving checkpoint.")
 		return
-	
+	if whether_break.item() == 1:
+		print(f"Rank {rank}: Exiting after training due to NaN encountered in any process.")
+		return
+
 	# Ensure all processes reach the end
 	dist.barrier()
 
@@ -2214,54 +2729,82 @@ def worker(rank, world_size, job_id):
 
 
 	##################################################
-	# prediction bv best trained model
+	# Done training. Load best model for analysis
 	##################################################
-	# best_guess_model = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt').to(device)
-	# best_guess_model.eval()
 	new_checkpoint = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt', map_location=device)
-	best_guess_model = model  # Do not need to create a new model
-	# # best_guess_model = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt').to(device)
-	# best_guess_model = nn_model(var_idx_to_emb).to(device)
-	# best_guess_model = DDP(best_guess_model)
-	best_guess_model.load_state_dict(new_checkpoint['model_state_dict'])
+	if args.use_swa:
+		# Update batchnorm stats of averaged model (required when using SWA)
+		misc_utils.update_bn_custom(train_loader, swa_model, device)
+		best_guess_model = swa_model
+		best_guess_model.load_state_dict(new_checkpoint['swa_model_state_dict'])
+	else:
+		best_guess_model = model  # Do not need to create a new model
+		best_guess_model.load_state_dict(new_checkpoint['model_state_dict'])
 	print("Loaded model for rank: {}".format(rank))
 
 	dist.barrier()
 
 	if rank == 0:
-		if whether_break.item() == 1:
-			print(f"Rank {rank} exiting after training due to NaN encountered in any process.")
-			return
+		# Plot loss curves throughout training. Normalize each curve relative to its mean,
+		# to make the scales comparable.
+		# TODO Assuming there are no NaNs
+		losses = [(train_loss_history[:, loss_idx] / train_loss_history[:, loss_idx].mean()) for loss_idx in range(len(args.losses))] + \
+				[(val_loss_history[:, loss_idx] / val_loss_history[:, loss_idx].mean()) for loss_idx in range(len(args.losses))]
+		print("Losses", losses)
+		labels = [f"{loss} loss (train)" for loss in args.losses] + [f"{loss} loss (val)" for loss in args.losses]
+		visualization_utils.plot_losses(os.path.join(PLOT_DIR, "losses.png"), losses, labels)
+
+		#######################################################
+		# Get best model's predictions on train/val/test sets
+		#######################################################
 		print("Rank 0 beginning prediction at time {}".format(datetime.now()))
 		best_guess_model.eval()
 		print("Rank 0 model set to eval at time {}".format(datetime.now()))
 		with torch.no_grad():
-			best_guess_val_y_hat, best_guess_val_pred_para = best_guess_model(val_x.to(device), val_z.to(device), whether_predict=0)
-			print("Rank 0 finished validation prediction at time {}".format(datetime.now()))
-			best_guess_train_y_hat, best_guess_train_pred_para = best_guess_model(train_x.to(device), train_z.to(device), whether_predict=0)
-			print("Rank 0 finished training prediction at time {}".format(datetime.now()))
+			# Get predictions for train examples, compute loss & plot
+			best_guess_train_y_hat, best_guess_train_pred_para = best_guess_model(train_x.to(device), train_z.to(device), train_c.to(device), whether_predict=0)
+			train_l1_loss, _, _, train_NSE = fun_loss(best_guess_train_y_hat, train_y.to(device), best_guess_train_pred_para,
+													  plot_path=os.path.join(PLOT_DIR, "true_vs_predicted_train.png"))
+			print(f'Train loss: {train_l1_loss.item():.2f}, Train NSE: {train_NSE.item():.2f}')
+
+			# Get predictions for val examples, compute loss & plot
+			best_guess_val_y_hat, best_guess_val_pred_para = best_guess_model(val_x.to(device), val_z.to(device), val_c.to(device), whether_predict=0)
+			val_l1_loss, _, _, val_NSE = fun_loss(best_guess_val_y_hat, val_y.to(device), best_guess_val_pred_para,
+												  plot_path=os.path.join(PLOT_DIR, "true_vs_predicted_val.png"))
+			print(f'Val loss: {val_l1_loss.item():.2f}, Val NSE: {val_NSE.item():.2f}')
+
 			if test_split_ratio != 0:
-				best_guess_test_y_hat, best_guess_test_pred_para = best_guess_model(test_x.to(device), test_z.to(device), whether_predict=0)
-				test_loss, test_NSE, test_l1_loss = fun_loss(best_guess_test_y_hat, test_y.to(device), best_guess_test_pred_para)
-				print(f'Test loss: {test_loss.item():.4f}, Test NSE: {test_NSE.item():.4f}, Test L1 loss: {test_l1_loss.item():.4f}')
-		# end with torch.no_grad():
+				# Get predictions for test examples, compute loss & plot
+				best_guess_test_y_hat, best_guess_test_pred_para = best_guess_model(test_x.to(device), test_z.to(device), test_c.to(device), whether_predict=0)
+				test_l1_loss, _, _, test_NSE = fun_loss(best_guess_test_y_hat, test_y.to(device), best_guess_test_pred_para,
+												plot_path=os.path.join(PLOT_DIR, "true_vs_predicted_test.png"))
+				print(f'Test loss: {test_l1_loss.item():.2f}, Test NSE: {test_NSE.item():.2f}')
+
+		# Also generate PREDICTED SOC for EACH SOIL LAYER (20)
+		train_simu_all_layers, _ = best_guess_model(train_x.to(device), train_z.to(device), train_c.to(device), whether_predict=1)
+		val_simu_all_layers, _ = best_guess_model(val_x.to(device), val_z.to(device), val_c.to(device), whether_predict=1)
+		test_simu_all_layers, _ = best_guess_model(test_x.to(device), test_z.to(device), test_c.to(device), whether_predict=1)
+		simu_soc_all_layers = torch.tensor(np.ones((wosis_profile_info.shape[0], 20))*np.nan, dtype = torch.float32, device=device)
+		simu_soc_all_layers[train_profile_id, :] = train_simu_all_layers[:, 0:20]
+		simu_soc_all_layers[val_profile_id, :] = val_simu_all_layers[:, 0:20]
+		simu_soc_all_layers[test_profile_id, :] = test_simu_all_layers[:, 0:20]
 
 		# @joshuafan: Summary csv file of all results. Create this if it doesn't exist
-		results_summary_file = os.path.join(data_dir_output, "neural_network/results_summary.csv")
-		if not os.path.isfile(results_summary_file):
-			with open(results_summary_file, mode='w') as f:
+		if args.n_epochs >= 1:
+			results_summary_file = os.path.join(data_dir_output, "neural_network/results_summary.csv")
+			if not os.path.isfile(results_summary_file):
+				with open(results_summary_file, mode='w') as f:
+					csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+					csv_writer.writerow(['job_id', 'command', 'lr', 'weight_decay', 'seed', 'model_path', 'best_val_NSE', 'best_val_loss', 'test_NSE', 'test_loss'])
+			command_string = " ".join(sys.argv)
+
+			# Add a row to the summary csv file
+			with open(results_summary_file, mode='a+') as f:
 				csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-				csv_writer.writerow(['job_id', 'command', 'lr', 'weight_decay', 'seed', 'model_path', 'best_val_NSE', 'best_val_loss', 'test_NSE', 'test_loss', 'best_model_epoch'])
-		# git_commit = visualization_utils.get_git_revision_hash()
-		command_string = " ".join(sys.argv)
+				best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt'
+				csv_writer.writerow([job_id, command_string, args.lr, args.weight_decay, args.seed, best_model_path, val_NSE.item(), val_l1_loss.item(), test_NSE.item(), test_l1_loss.item()])
 
-		# Add a row to the summary csv file
-		with open(results_summary_file, mode='a+') as f:
-			csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-			best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt'
-			csv_writer.writerow([job_id, command_string, args.lr, args.weight_decay, args.seed, best_model_path, best_val_NSE.item(), best_val_loss.item(), test_NSE.item(), test_loss.item(), best_model_epoch.item()])
 
-		# write prediction results
 			
 		# create folder for the results
 		os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Validation', exist_ok=True)
@@ -2543,6 +3086,9 @@ def worker(rank, world_size, job_id):
 
 		# initialize the scaled difference
 		scaled_diff = np.ones((wosis_profile_info.shape[0]))*np.nan
+		true_test_soc = []
+		pred_test_soc = []
+		test_profile_id_ordered = []
 
 		# for each location, calculate the difference between the predicted and observed SOC values
 		for i in range(binn_obs_soc.shape[0]):
@@ -2571,8 +3117,35 @@ def worker(rank, world_size, job_id):
 				if scaled_diff[i] > 2:
 					print('outlier: ', test_profile_id_all[i], scaled_diff[i])
 
+				# TODO Why do we need test_profile_id_ordered?
+				# TODO Plot depthwise profiles
+				pred_test_soc.append(temp_simu_sum.item())
+				true_test_soc.append(temp_obs_sum.item())
+				curr_profile = int(test_profile_id_all[i])
+				test_profile_id_ordered.append(curr_profile)
+
 		# Plot the scaled difference
 		visualization_utils.plot_observations_world_map(test_lons, test_lats, scaled_diff, PLOT_DIR, "test_scaled_diff_" + job_id, us_only=True)
+
+
+		# Plot pred SOC and parameters
+		visualization_utils.plot_observations_world_map(test_lons[np.array(test_profile_id_ordered)],
+														test_lats[np.array(test_profile_id_ordered)],
+														np.array(pred_test_soc),  #.detach().cpu().numpy(),
+														PLOT_DIR,
+														"test_pred_soc_FINAL", us_only=(args.split != 'us_vs_world'))
+		visualization_utils.plot_observations_world_map(test_lons[np.array(test_profile_id_ordered)],
+														test_lats[np.array(test_profile_id_ordered)],
+														np.array(true_test_soc),  #.detach().cpu().numpy(),
+														PLOT_DIR,
+														"test_true_soc_FINAL", us_only=(args.split != 'us_vs_world'))
+		for i, para_name in enumerate(para_names):  # in range(best_pred_para.shape[1]):
+			visualization_utils.plot_observations_world_map(test_lons[test_profile_id_num],
+															test_lats[test_profile_id_num],
+															best_pred_para[test_profile_id_num, i].detach().cpu().numpy(),
+															PLOT_DIR,
+															"test_para_{}_FINAL".format(para_name), us_only=(args.split != 'us_vs_world'))
+
 
 
 		############
@@ -2721,7 +3294,8 @@ def worker(rank, world_size, job_id):
 		print("-----------------Model Test Finished at " + str(datetime.now()) + "-----------------")
 
 		# Predict the SOC values based on Grid environmental information using the best model
-		grid_simu_soc, grid_pred_para = best_guess_model(torch.tensor(predict_data_x, dtype=torch.float32, device=device), torch.tensor(predict_data_z, dtype=torch.float32, device=device), whether_predict = 1)
+		grid_simu_soc, grid_pred_para = best_guess_model(torch.tensor(predict_data_x, dtype=torch.float32, device=device), torch.tensor(predict_data_z, dtype=torch.float32, device=device),
+										                 torch.tensor(predict_data_c, dtype=torch.float32, device=device), whether_predict = 1)
 		# Save the predicted SOC values, parameters and location data into csv files
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_simu_soc_' + job_id + '.csv', grid_simu_soc.detach().cpu().numpy(), delimiter = ',')
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_pred_para_' + job_id + '.csv', grid_pred_para.detach().cpu().numpy(), delimiter = ',')
@@ -2729,11 +3303,27 @@ def worker(rank, world_size, job_id):
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_lons_' + job_id + '.csv', grid_env_info_US['original_lon'], delimiter = ',')
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_lats_' + job_id + '.csv', grid_env_info_US['original_lat'], delimiter = ',')
 
+		# # Map of each grid covariate
+		# for i, covariate in enumerate(var4nn):
+		# 	visualization_utils.plot_observations_world_map(grid_env_info_US["original_lon"],
+		# 													grid_env_info_US["original_lat"],
+		# 													predict_data_x[:, i, 0, 0], PLOT_DIR,
+		# 													"grid_covariate_{}_{}".format(covariate, job_id), us_only=True)
+
+		# Map of each grid parameter (predictions)
+		for i, para_name in enumerate(para_names):  # in range(best_pred_para.shape[1]):
+			visualization_utils.plot_observations_world_map(grid_env_info_US["original_lon"],
+															grid_env_info_US["original_lat"],
+															grid_pred_para[:, i].detach().cpu().numpy(), PLOT_DIR,
+															"grid_para_{}_{}".format(para_name, job_id), us_only=True)
+
 		# Bulk simulation for the grid data
-		carbon_input_pred, cpool_steady_state_pred, cpools_layer_pred, soc_layer_pred, total_res_time_pred, \
-			total_res_time_base_pred, res_time_base_pools_pred, t_scaler_pred, bulk_A_pred, \
-			w_scaler_pred, bulk_K_pred, bulk_V_pred, bulk_xi_pred, bulk_I_pred, litter_fraction_pred = fun_bulk_simu(grid_pred_para.to(device), \
-																											torch.tensor(predict_data_x, dtype=torch.float32, device=device), args.vertical_mixing)
+		if args.model != 'nn_only':
+			carbon_input_pred, cpool_steady_state_pred, cpools_layer_pred, soc_layer_pred, total_res_time_pred, \
+				total_res_time_base_pred, res_time_base_pools_pred, t_scaler_pred, bulk_A_pred, \
+				w_scaler_pred, bulk_K_pred, bulk_V_pred, bulk_xi_pred, bulk_I_pred, litter_fraction_pred = fun_bulk_simu(grid_pred_para.to(device), \
+																												torch.tensor(predict_data_x, dtype=torch.float32, device=device), args.vertical_mixing)
+
 		# Save the bulk simulation results into csv files
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_carbon_input_' + job_id + '.csv', carbon_input_pred.detach().cpu().numpy(), delimiter = ',')
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_pred.detach().cpu().numpy(), delimiter = ',')

@@ -4,9 +4,9 @@ Biogeochemistry Informed Neural Networks
 
 # Instructions
 
-See `run_interactive.sh` for an example of how to train on 4 GPUs from command-line (interactively).
+See `run_binn_interactive.sh` for an example of how to train on 4 GPUs from command-line (interactively).
 
-See `run_slurm.sh` for an example of how to train on 4 GPUs on a server with the Slurm scheduler.
+See `run_binn_slurm.sh` for an example of how to train on 4 GPUs on a server with the Slurm scheduler.
 
 
 

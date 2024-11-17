@@ -539,6 +539,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 		# cpool_steady_state = torch.solve((-matrix_in), (torch.matmul(a_ma, kk_ma)-tri_ma)).solution
 		# torch 1.11
 		# cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma)- tri_ma), (-matrix_in))
+		# print("Condition number of AK-Tri:", torch.linalg.cond(torch.matmul(a_ma, kk_ma) - tri_ma).item())
 		cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma)- tri_ma), (-matrix_in))
 		# cpool_steady_state = torch.div(cpool_steady_state, dz_matrix_diagonal)
 		# print("Shape of cpool_steady_state after division: ", cpool_steady_state.shape)
@@ -633,7 +634,6 @@ def a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, san
 # For consistency with the paper (Lu et al. 2020), i and j are indexed from 1.
 # Modifies a_ma in place.
 def fill_submatrix_diagonal(a_ma, nlevdecomp, i, j, value):
-	# diag_vector = value.repeat(nlevdecomp)   #TODO - just changed @joshuafan
 	a_ma[range((i-1)*nlevdecomp, i*nlevdecomp), range((j-1)*nlevdecomp, j*nlevdecomp)] = value  # diag_vector
 
 

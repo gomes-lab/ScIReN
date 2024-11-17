@@ -62,11 +62,11 @@ for LR in 1e-2
 do
     for SEED in 0
     do
-        python3 binns_DDP.py --lr $LR --weight_decay 1e-3 --seed $SEED --n_datapoints 500 --n_epochs 50 --patience 20 \
-            --model old_mlp --use_bn --embed_dim 10 --num_CPU 4 --job_scheduler slurm --time_limit 23.5 --note OLDMLP
-
         # python3 binns_DDP.py --lr $LR --weight_decay 1e-3 --seed $SEED --n_datapoints 500 --n_epochs 50 --patience 20 \
-        #     --model new_mlp --use_bn --embed_dim 10 --num_CPU 4 --job_scheduler slurm --time_limit 23.5 --note NEWMLP
+        #     --model old_mlp --use_bn --embed_dim 10 --num_CPU 4 --job_scheduler slurm --time_limit 23.5 --note OLDMLP
+
+        python3 binns_DDP.py --lr $LR --weight_decay 1e-3 --seed $SEED --n_datapoints 500 --n_epochs 50 --patience 20 \
+            --model new_mlp --use_bn --embed_dim 10 --num_CPU 4 --job_scheduler slurm --time_limit 23.5 --note NEWMLP
 
         # python3 binns_DDP.py --lr $LR --weight_decay 1e-3 --seed $SEED --n_datapoints 500 --n_epochs 50 --patience 20 \
         #     --model new_mlp --lambda_lipschitz 0.1 --use_bn --embed_dim 10 --num_CPU 4 --job_scheduler slurm --time_limit 23.5 --note NEWMLP_SPECTRALREG_0_1
