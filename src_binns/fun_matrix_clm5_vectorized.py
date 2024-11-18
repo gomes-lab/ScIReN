@@ -569,9 +569,9 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 		# check matrix_in
 		if torch.isnan(torch.sum(matrix_in)):
 			print("matrix_in contains nan")
-		if torch.det(matrix_in) == 0:
-			print("matrix_in is singular")
-			print(matrix_in)
+		# if torch.det(matrix_in) == 0:
+		# 	print("matrix_in is singular")
+		# 	print(matrix_in)
 		if torch.det(torch.matmul(a_ma, kk_ma)-tri_ma) == 0:
 			print("a_ma*kk_ma - tri_ma is singular")
 		
@@ -810,7 +810,7 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	som_diffus_day = som_diffus / days_per_year
 	som_adv_flux_day = som_adv_flux / days_per_year # float does not require grad
 	cryoturb_diffusion_k_day = cryoturb_diffusion_k / days_per_year
-
+	print("SOM diffus", som_diffus)
 	# print("som_diffus_day.requires_grad: ", som_diffus_day.requires_grad)
 
 	# print("cryoturb_diffusion_k_day.requires_grad: ", cryoturb_diffusion_k_day.requires_grad)
@@ -939,8 +939,17 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	# w_m1[-1] = (zisoi[:nlevdecomp+1][-2] - zsoi[:nlevdecomp+1][-2]) / dz_node[:nlevdecomp+1][-1]
 	# d_m1_zm1[-1] = 1. / ((1. - w_m1[-1]) / diffus[-1] + w_m1[-1] / diffus[-2]) if diffus[-1] > 0 and diffus[-2] > 0 else 0.
 	# d_m1_zm1[-1] /= dz_node[:nlevdecomp+1][-1]
+	# diffus.requires_grad_()  # TODO remove later
 	w_m1_bottom = (zisoi[:nlevdecomp+1][-2] - zsoi[:nlevdecomp+1][-2]) / dz_node[:nlevdecomp+1][-1]
+	# w_m1_bottom.requires_grad_()  # TODO remove later
 	d_m1_zm1_bottom = 1. / ((1. - w_m1_bottom) / diffus[-1] + w_m1_bottom / diffus[-2]) if diffus[-1] > 0 and diffus[-2] > 0 else 0.
+	# print("Diffus", diffus, "w_m1_bottom", w_m1_bottom)
+	# print("d_m1_zm1_bottom", d_m1_zm1_bottom)
+	# d_m1_zm1_bottom.requires_grad_()  # TODO remove later
+	# d_m1_zm1_bottom.register_hook(lambda grad: print("BACKWARD d_m1_zm1_bottom grad", grad))
+	# w_m1_bottom.register_hook(lambda grad: print("BACKWARD w_m1_bottom grad", grad))
+	# diffus.register_hook(lambda grad: print("BACKWARD diffus grad", grad))
+
 	d_m1_zm1_bottom /= dz_node[:nlevdecomp+1][-1]
 
 	d_m1_zm1= torch.cat([d_m1_zm1[:-1], d_m1_zm1_bottom.unsqueeze(0)])
@@ -976,12 +985,32 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 
 
 	# Peclet numbers
+	# print("d_m1_zm1", d_m1_zm1, "d_p1_zp1", d_p1_zp1)
+	# d_m1_zm1.requires_grad_()  # TODO remove these later
+	# d_m1_zm1.register_hook(lambda grad: print("BACKWARD d_m1_zm1 grad", grad))
+	# d_p1_zp1.requires_grad_()  # TODO remove these later
+	# d_p1_zp1.register_hook(lambda grad: print("BACKWARD d_p1_zp1 grad", grad))
+
 	pe_m1 = torch.where(d_m1_zm1 == 0, torch.zeros_like(f_m1), f_m1 / (d_m1_zm1 + epsilon))
 	pe_p1 = torch.where(d_p1_zp1 == 0, torch.zeros_like(f_p1), f_p1 / (d_p1_zp1 + epsilon))
+
+	# print("pe_m1", pe_m1, "pe_p1", pe_p1)
+	# pe_m1.requires_grad_()  # TODO remove these later
+	# pe_m1.register_hook(lambda grad: print("BACKWARD pe_m1 grad", grad))
+	# pe_p1.requires_grad_()  # TODO remove these later
+	# pe_p1.register_hook(lambda grad: print("BACKWARD pe_p1 grad", grad))
+
+
 
 	# Pre-compute the 'aaa' values for Patankar functions
 	aaa_m = torch.maximum(torch.zeros_like(pe_m1), (1. - 0.1 * pe_m1.abs())**5)
 	aaa_p = torch.maximum(torch.zeros_like(pe_p1), (1. - 0.1 * pe_p1.abs())**5)
+
+	# print("aaa_m", aaa_m, aaa_m.dtype, "aaa_p", aaa_p, aaa_p.dtype)
+	# aaa_m.requires_grad_()  # TODO remove these later
+	# aaa_m.register_hook(lambda grad: print("BACKWARD aaa_m grad", grad, grad.dtype))
+	# aaa_p.requires_grad_()  # TODO remove these later
+	# aaa_p.register_hook(lambda grad: print("BACKWARD aaa_p grad", grad, grad.dtype))
 
 	# Vectorized computation of tridiagonal coefficients
 	a_tri_e = -(d_m1_zm1 * aaa_m + torch.maximum(f_m1, torch.zeros_like(f_m1)))
@@ -1076,7 +1105,8 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	bottom_boundary_indices = torch.arange(39, 120, 20)
 	tri_ma[bottom_boundary_indices, bottom_boundary_indices+1] = 0
 
-	
+	# tri_ma.requires_grad_()  # TODO remove these later
+	# tri_ma.register_hook(lambda grad: print("BACKWARD tri_ma grad", grad))
 
 
 

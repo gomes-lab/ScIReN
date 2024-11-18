@@ -12,7 +12,7 @@ def fun_bulk_simu(tensor_para, tensor_frocing_steady_state, vertical_mixing):
 	Runs the same CLM5 model as fun_matrix_clm5_vectorized.py, but returns more
 	variables describing the underlying processes, instead of just predicted SOC.
 	"""
-	print("BULKKKKK Para", tensor_para)
+	print("BULKKKKK Para", tensor_para.shape)
 
 	device = tensor_para.device
 	# convert tensor to numpy
@@ -505,9 +505,9 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 		# check matrix_in
 		if torch.isnan(torch.sum(matrix_in)):
 			print("matrix_in contains nan")
-		if torch.det(matrix_in) == 0:
-			print("matrix_in is singular")
-			print(matrix_in)
+		# if torch.det(matrix_in) == 0:
+		# 	print("matrix_in is singular")
+		# 	print(matrix_in)
 		if torch.det(torch.matmul(a_ma, kk_ma)-tri_ma) == 0:
 			print("a_ma*kk_ma - tri_ma is singular")
 		

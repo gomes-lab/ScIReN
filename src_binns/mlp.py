@@ -241,7 +241,7 @@ class mlp_wrapper(nn.Module):
 			exit(1)
 
 		# Clamp temp_sigmoid to be between 10 and 200
-		clamped_temp_sigmoid = 1 + 9*self.sigmoid(self.temp_sigmoid)   #10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range
+		clamped_temp_sigmoid = 10 + 99*self.sigmoid(self.temp_sigmoid)   #10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range
 
 		# Positional encoder correction (if using)
 		if self.pos_enc == "late":
@@ -509,7 +509,7 @@ class nn_only(nn.Module):
 		print("NN only")
 
 		# Number of parameters (totally fake)
-		self.num_params = 21
+		self.num_params = 22
 
 		# Output transformation
 		self.min_val = min_val

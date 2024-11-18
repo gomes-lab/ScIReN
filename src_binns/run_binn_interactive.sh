@@ -6,12 +6,12 @@
 # TODO Figure out what is wrong with the vertical mixing
 for LR in 1e-2
 do
-    for SEED in 0
+    for SEED in 345
     do
-        python3 binns_DDP.py --lr $LR --weight_decay 1e-3 --seed $SEED --n_datapoints 500 \
-            --n_epochs 20 --patience 20 --model new_mlp --vertical_mixing original --use_bn --embed_dim 5 --pos_enc early \
+        python3 binns_DDP.py --lr $LR --weight_decay 1e-3 --seed $SEED --n_datapoints 500 --batch_size 10 \
+            --n_epochs 10 --patience 20 --model old_mlp --vertical_mixing original --use_bn --embed_dim 5 --pos_enc early \
             --losses l1 param_reg --loss_weighting manual --lambdas 1 100 \
-            --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note DEBUG_VMIXING
+            --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note TESTING_VMATRIX
     done
 done
 

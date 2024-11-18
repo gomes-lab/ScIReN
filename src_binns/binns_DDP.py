@@ -19,6 +19,7 @@ from torch.optim.swa_utils import AveragedModel, SWALR
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from pe_gcn_model import GridCellSpatialRelationEncoder
 from spatial_utils import *
+from losses import binns_loss, binns_loss_simple
 
 # sys.path.append('C:/Users/hx293/Research_Data/BINN/')
 # sys.path.append('/glade/u/home/haodixu/BINN')
@@ -1215,106 +1216,6 @@ print(datetime.now(), '------------grid env info prepared------------')
 
 
 
-#---------------------------------------------------
-# define the loss function                          
-#---------------------------------------------------
-def binns_loss(y_pred, y_true, pred_para, plot_path=""):
-	# process modeling
-	soc_simu = y_pred
-	# observations
-	soc_true = y_true
-	# predicted parameters
-	pred_para = pred_para
-
-	# flatten simulated and true SOC
-	soc_simu_vector = torch.reshape(soc_simu, [1, -1])
-	soc_true_vector = torch.reshape(soc_true, [1, -1])
-	# exclude nan
-	valid_loc = torch.where(torch.isnan(soc_simu_vector+soc_true_vector) == False)
-	soc_simu_vector = soc_simu_vector[valid_loc]
-	soc_true_vector = soc_true_vector[valid_loc]
-
-	# If desired, plot true vs predicted here
-	if plot_path != "":
-		visualization_utils.plot_true_vs_predicted(plot_path, soc_simu_vector, soc_true_vector)
-
-	# modeling inefficiency
-	modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/torch.sum((soc_true_vector - torch.mean(soc_true_vector))**2)
-
-	# NOT USED ANYMORE: Attempts to penalize extreme values of the beta parameter.
-	# # Gradient of beta w.r.t. batch_x
-	# grad_beta = torch.autograd.grad(outputs=beta, inputs=model_input, grad_outputs=torch.ones_like(beta), retain_graph=True)[0]
-	# # only consider the gradient that is not zero
-	# non_zero_idx = torch.nonzero(grad_beta)
-	# grad_beta = grad_beta[non_zero_idx[:, 0], non_zero_idx[:, 1], non_zero_idx[:, 2], non_zero_idx[:, 3]]
-	# # Use torch.autograd.grad for inputs for one profile
-	# for i in range(beta.shape[0]):
-	# 	grad_beta_temp = torch.autograd.grad(outputs=beta[i], inputs=model_input[i, :], grad_outputs=torch.ones_like(beta[i]), retain_graph=True)[0]
-	# 	if i == 0:
-	# 		grad_beta = grad_beta_temp
-	# 	else:
-	# 		grad_beta = torch.cat((grad_beta, grad_beta_temp), dim=0)
-	# grad_norm = torch.norm(grad_beta, p=2)
-
-	# print("Beta gradient norm", grad_norm)
-
-	# modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/len(soc_true_vector) 
-	# lambda_reg = 0.1
-
-	# # Calculate the penalty if beta is too large
-	# penalty_threshold = 0.8
-	# transformed_threshold = -0.8  # Transformed threshold for negative values
-	# penalty_weight = 20  # Adjust the weight as needed
-
-	# # Inverting beta values so that high values become negative
-	# inverted_beta = -beta
-
-	# # Applying threshold to inverted beta
-	# thresholded_beta = torch.nn.Threshold(transformed_threshold, 0)(inverted_beta)
-
-	# # Inverting back to positive values and applying penalty
-	# beta_penalty = penalty_weight * (-(thresholded_beta) - penalty_threshold)**2
-
-	
-	# # Sum the penalty across the batch
-	# total_beta_penalty = beta_penalty.sum()
-
-	# ## Variance term ##
-	# # Calculate variance of predicted parameters
-	# var_predicted_para = torch.var(pred_para[:, 20]) # calculate variance of the 21st parameter beta
-	# # var_predicted_para = torch.mean(var_predicted_para)
-	# # print("Variance of predicted parameters", var_predicted_para)
-
-	# # Normalize or scale the variance term
-	# scale_factor = 1e5
-	# scaled_variance = scale_factor * var_predicted_para
-
-	# # Weighting factor for variance term
-	# variance_weight = 0
-
-	# Regularization for predicted parameters using cosh
-	# Encourage parameters to be around 0.5
-	target_value = 0.5
-	scale_factor = 10
-	param_reg_loss = torch.mean(torch.cosh(scale_factor*(pred_para - target_value)) - 1)
-
-	# Calculate the supervised losses
-	l1_loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean')
-	l2_loss = torch.nn.functional.mse_loss(soc_simu_vector, soc_true_vector, reduction='mean')
-	return l1_loss, l2_loss, param_reg_loss, modeling_inefficiency
-# end binns loss
-
-
-#---------------------------------------------------
-# simplified loss function that only takes in pred/true
-# and returns a single value (smooth l1). Used for CURE
-# curvature regularization.
-#---------------------------------------------------
-def binns_loss_simple(y_pred, y_true):
-	pred_para = torch.zeros_like(y_pred)  # Not used
-	l1_loss, _, _, _ = binns_loss(y_pred, y_true, pred_para)
-	return l1_loss
-
 
 #---------------------------------------------------
 # NN by PyTorch (old_mlp)
@@ -1702,7 +1603,6 @@ def worker(rank, world_size, job_id):
 			idx = var4nn.index(var)
 			var_idx_to_emb[str(idx)] = emb
 
-	# Initialize model
 	# TODO Not sure if "global model" is correct
 	global model
 	if args.model == 'old_mlp':
@@ -1791,6 +1691,11 @@ def worker(rank, world_size, job_id):
 	else:
 		raise ValueError("Invalid args.model")
 
+	if args.whether_resume == 1:
+		# Load the model from the checkpoint, and overwrite model_kwargs if saved
+		checkpoint_worker = torch.load(checkpoint_path, map_location=device)
+		model_kwargs = checkpoint_worker["model_kwargs"]
+
 	if args.loss_weighting not in ["manual", "two_stage", "relobralo"]:
 		# Specialized multi-task loss weighting method
 		weighting = weighting_method.__dict__[args.loss_weighting]
@@ -1843,7 +1748,6 @@ def worker(rank, world_size, job_id):
 
 	if args.whether_resume == 1:
 		# Load the model from the checkpoint
-		checkpoint_worker = torch.load(checkpoint_path, map_location=device)
 		state_dict = checkpoint_worker['model_state_dict']
 		model.load_state_dict(state_dict)
 		optimizer.load_state_dict(checkpoint_worker['optimizer_state_dict'])
@@ -2435,9 +2339,9 @@ def worker(rank, world_size, job_id):
 			# Relobralo update
 			if args.loss_weighting == "relobralo" and iepoch >= 1:
 				with torch.no_grad():
-					loss_curr = torch.tensor([train_loss_history[loss][iepoch, 0] for loss in args.losses])
-					loss_prev = torch.tensor([train_loss_history[loss][iepoch-1, 0] for loss in args.losses])
-					loss_init = torch.tensor([train_loss_history[loss][0, 0] for loss in args.losses])
+					loss_curr = torch.tensor([train_loss_history[iepoch, loss_idx] for loss_idx in range(len(args.losses))])
+					loss_prev = torch.tensor([train_loss_history[iepoch-1, loss_idx] for loss_idx in range(len(args.losses))])
+					loss_init = torch.tensor([train_loss_history[0, loss_idx] for loss_idx in range(len(args.losses))])
 					lambda_bal_prev = F.softmax(loss_curr / (args.relobralo_temp * loss_prev), dim=0)  # Based on ratio of current loss & prev epoch loss
 					print("Lambda bal prev", lambda_bal_prev)
 					lambda_bal_init = F.softmax(loss_curr / (args.relobralo_temp * loss_init), dim=0)  # Based on ratio of current loss & epoch 0 loss
@@ -2509,6 +2413,7 @@ def worker(rank, world_size, job_id):
 				checkpoint_best_model = {
 					'epoch': iepoch,
 					'model_state_dict': model.state_dict(),
+					'model_kwargs': model_kwargs,  # Save kwargs used to construct the model
 					'optimizer_state_dict': optimizer.state_dict(),
 					'best_val_loss': best_val_loss,
 					'best_val_NSE': best_val_NSE,
@@ -2628,6 +2533,7 @@ def worker(rank, world_size, job_id):
 				checkpoint = {
 					'epoch': iepoch,
 					'model_state_dict': model.state_dict(),
+					'model_kwargs': model_kwargs,  # Save kwargs used to construct the model
 					'optimizer_state_dict': optimizer.state_dict(),
 					'best_val_loss': best_val_loss,
 					'best_val_NSE': best_val_NSE,
@@ -2747,7 +2653,11 @@ def worker(rank, world_size, job_id):
 	if rank == 0:
 		# Plot loss curves throughout training. Normalize each curve relative to its mean,
 		# to make the scales comparable.
-		# TODO Assuming there are no NaNs
+		print("TRAIN LOSS HISOTRY", train_loss_history)
+		train_loss_history = train_loss_history[~np.any(np.isnan(train_loss_history), axis=1)]
+		print("AFTER REMOVING NAN", train_loss_history)
+		val_loss_history = val_loss_history[~np.any(np.isnan(val_loss_history), axis=1)]
+
 		losses = [(train_loss_history[:, loss_idx] / train_loss_history[:, loss_idx].mean()) for loss_idx in range(len(args.losses))] + \
 				[(val_loss_history[:, loss_idx] / val_loss_history[:, loss_idx].mean()) for loss_idx in range(len(args.losses))]
 		print("Losses", losses)
@@ -2805,7 +2715,6 @@ def worker(rank, world_size, job_id):
 				csv_writer.writerow([job_id, command_string, args.lr, args.weight_decay, args.seed, best_model_path, val_NSE.item(), val_l1_loss.item(), test_NSE.item(), test_l1_loss.item()])
 
 
-			
 		# create folder for the results
 		os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Validation', exist_ok=True)
 		os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Train', exist_ok=True)
@@ -2838,60 +2747,61 @@ def worker(rank, world_size, job_id):
 		## bulk convergence ##
 		# initializz a seperate array to store the prediction results for the test profiles
 		# with return of the function: carbon_input, cpool_steady_state, cpools_layer, soc_layer, total_res_time, total_res_time_base, res_time_base_pools, t_scaler, bulk_A, w_scaler, bulk_K, bulk_V, bulk_xi, bulk_I, litter_fraction
-		carbon_input_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		cpool_steady_state_test = np.ones((wosis_profile_info.shape[0], 140))*np.nan
-		cpools_layer_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		soc_layer_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		total_res_time_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		total_res_time_base_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		res_time_base_pools_test = np.ones((wosis_profile_info.shape[0], 140))*np.nan
-		t_scaler_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		bulk_A_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		w_scaler_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		bulk_K_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		bulk_V_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		bulk_xi_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		bulk_I_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		litter_fraction_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		if args.model != 'nn_only': 
+			carbon_input_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			cpool_steady_state_test = np.ones((wosis_profile_info.shape[0], 140))*np.nan
+			cpools_layer_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			soc_layer_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			total_res_time_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			total_res_time_base_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			res_time_base_pools_test = np.ones((wosis_profile_info.shape[0], 140))*np.nan
+			t_scaler_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			bulk_A_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			w_scaler_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			bulk_K_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			bulk_V_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			bulk_xi_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			bulk_I_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			litter_fraction_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
 
-		carbon_input_test_profile, cpool_steady_state_test_profile, cpools_layer_test_profile, \
-			soc_layer_test_profile, total_res_time_test_profile, total_res_time_base_test_profile, res_time_base_pools_test_profile, \
-				t_scaler_test_profile, bulk_A_test_profile, w_scaler_test_profile, bulk_K_test_profile, bulk_V_test_profile, bulk_xi_test_profile, \
-					bulk_I_test_profile, litter_fraction_test_profile = fun_bulk_simu(best_guess_test_pred_para.to(device), test_x.to(device), args.vertical_mixing)
-		
-		# store the results
-		carbon_input_test[test_profile_id, :] = carbon_input_test_profile.detach().cpu().numpy()
-		cpool_steady_state_test[test_profile_id, :] = cpool_steady_state_test_profile.detach().cpu().numpy()
-		cpools_layer_test[test_profile_id, :] = cpools_layer_test_profile.detach().cpu().numpy()
-		soc_layer_test[test_profile_id, :] = soc_layer_test_profile.detach().cpu().numpy()
-		total_res_time_test[test_profile_id, :] = total_res_time_test_profile.detach().cpu().numpy()
-		total_res_time_base_test[test_profile_id, :] = total_res_time_base_test_profile.detach().cpu().numpy()
-		res_time_base_pools_test[test_profile_id, :] = res_time_base_pools_test_profile.detach().cpu().numpy()
-		t_scaler_test[test_profile_id, :] = t_scaler_test_profile.detach().cpu().numpy()
-		bulk_A_test[test_profile_id, :] = bulk_A_test_profile.detach().cpu().numpy()
-		w_scaler_test[test_profile_id, :] = w_scaler_test_profile.detach().cpu().numpy()
-		bulk_K_test[test_profile_id, :] = bulk_K_test_profile.detach().cpu().numpy()
-		bulk_V_test[test_profile_id, :] = bulk_V_test_profile.detach().cpu().numpy()
-		bulk_xi_test[test_profile_id, :] = bulk_xi_test_profile.detach().cpu().numpy()
-		bulk_I_test[test_profile_id, :] = bulk_I_test_profile.detach().cpu().numpy()
-		litter_fraction_test[test_profile_id, :] = litter_fraction_test_profile.detach().cpu().numpy()
+			carbon_input_test_profile, cpool_steady_state_test_profile, cpools_layer_test_profile, \
+				soc_layer_test_profile, total_res_time_test_profile, total_res_time_base_test_profile, res_time_base_pools_test_profile, \
+					t_scaler_test_profile, bulk_A_test_profile, w_scaler_test_profile, bulk_K_test_profile, bulk_V_test_profile, bulk_xi_test_profile, \
+						bulk_I_test_profile, litter_fraction_test_profile = fun_bulk_simu(best_guess_test_pred_para.to(device), test_x.to(device), args.vertical_mixing)
+			
+			# store the results
+			carbon_input_test[test_profile_id, :] = carbon_input_test_profile.detach().cpu().numpy()
+			cpool_steady_state_test[test_profile_id, :] = cpool_steady_state_test_profile.detach().cpu().numpy()
+			cpools_layer_test[test_profile_id, :] = cpools_layer_test_profile.detach().cpu().numpy()
+			soc_layer_test[test_profile_id, :] = soc_layer_test_profile.detach().cpu().numpy()
+			total_res_time_test[test_profile_id, :] = total_res_time_test_profile.detach().cpu().numpy()
+			total_res_time_base_test[test_profile_id, :] = total_res_time_base_test_profile.detach().cpu().numpy()
+			res_time_base_pools_test[test_profile_id, :] = res_time_base_pools_test_profile.detach().cpu().numpy()
+			t_scaler_test[test_profile_id, :] = t_scaler_test_profile.detach().cpu().numpy()
+			bulk_A_test[test_profile_id, :] = bulk_A_test_profile.detach().cpu().numpy()
+			w_scaler_test[test_profile_id, :] = w_scaler_test_profile.detach().cpu().numpy()
+			bulk_K_test[test_profile_id, :] = bulk_K_test_profile.detach().cpu().numpy()
+			bulk_V_test[test_profile_id, :] = bulk_V_test_profile.detach().cpu().numpy()
+			bulk_xi_test[test_profile_id, :] = bulk_xi_test_profile.detach().cpu().numpy()
+			bulk_I_test[test_profile_id, :] = bulk_I_test_profile.detach().cpu().numpy()
+			litter_fraction_test[test_profile_id, :] = litter_fraction_test_profile.detach().cpu().numpy()
 
-		# save data
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_carbon_input_' + job_id + '.csv', carbon_input_test, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_test, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_test, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_soc_layer_' + job_id + '.csv', soc_layer_test, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_total_res_time_' + job_id + '.csv', total_res_time_test, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_test, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_test, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_t_scaler_' + job_id + '.csv', t_scaler_test, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_A_' + job_id + '.csv', bulk_A_test, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_w_scaler_' + job_id + '.csv', w_scaler_test, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_K_' + job_id + '.csv', bulk_K_test, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_V_' + job_id + '.csv', bulk_V_test, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_test, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_I_' + job_id + '.csv', bulk_I_test, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_test, delimiter = ',')
+			# save data
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_carbon_input_' + job_id + '.csv', carbon_input_test, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_test, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_test, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_soc_layer_' + job_id + '.csv', soc_layer_test, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_total_res_time_' + job_id + '.csv', total_res_time_test, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_test, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_test, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_t_scaler_' + job_id + '.csv', t_scaler_test, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_A_' + job_id + '.csv', bulk_A_test, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_w_scaler_' + job_id + '.csv', w_scaler_test, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_K_' + job_id + '.csv', bulk_K_test, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_V_' + job_id + '.csv', bulk_V_test, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_test, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_I_' + job_id + '.csv', bulk_I_test, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_test, delimiter = ',')
 
 
 
@@ -2913,60 +2823,61 @@ def worker(rank, world_size, job_id):
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_best_pred_para_' + job_id + '.csv', val_pred_para.detach().cpu().numpy(), delimiter = ',')
 
 		## bulk convergence ##
-		carbon_input_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		cpool_steady_state_val = np.ones((wosis_profile_info.shape[0], 140))*np.nan
-		cpools_layer_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		soc_layer_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		total_res_time_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		total_res_time_base_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		res_time_base_pools_val = np.ones((wosis_profile_info.shape[0], 140))*np.nan
-		t_scaler_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		bulk_A_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		w_scaler_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		bulk_K_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		bulk_V_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		bulk_xi_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		bulk_I_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		litter_fraction_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		if args.model != 'nn_only': 
+			carbon_input_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			cpool_steady_state_val = np.ones((wosis_profile_info.shape[0], 140))*np.nan
+			cpools_layer_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			soc_layer_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			total_res_time_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			total_res_time_base_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			res_time_base_pools_val = np.ones((wosis_profile_info.shape[0], 140))*np.nan
+			t_scaler_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			bulk_A_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			w_scaler_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			bulk_K_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			bulk_V_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			bulk_xi_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			bulk_I_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			litter_fraction_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
 
-		carbon_input_val_profile, cpool_steady_state_val_profile, cpools_layer_val_profile, \
-			soc_layer_val_profile, total_res_time_val_profile, total_res_time_base_val_profile, res_time_base_pools_val_profile, \
-				t_scaler_val_profile, bulk_A_val_profile, w_scaler_val_profile, bulk_K_val_profile, bulk_V_val_profile, bulk_xi_val_profile, \
-					bulk_I_val_profile, litter_fraction_val_profile = fun_bulk_simu(best_guess_val_pred_para.to(device), val_x.to(device), args.vertical_mixing)
-		
-		# store the results
-		carbon_input_val[val_profile_id, :] = carbon_input_val_profile.detach().cpu().numpy()
-		cpool_steady_state_val[val_profile_id, :] = cpool_steady_state_val_profile.detach().cpu().numpy()
-		cpools_layer_val[val_profile_id, :] = cpools_layer_val_profile.detach().cpu().numpy()
-		soc_layer_val[val_profile_id, :] = soc_layer_val_profile.detach().cpu().numpy()
-		total_res_time_val[val_profile_id, :] = total_res_time_val_profile.detach().cpu().numpy()
-		total_res_time_base_val[val_profile_id, :] = total_res_time_base_val_profile.detach().cpu().numpy()
-		res_time_base_pools_val[val_profile_id, :] = res_time_base_pools_val_profile.detach().cpu().numpy()
-		t_scaler_val[val_profile_id, :] = t_scaler_val_profile.detach().cpu().numpy()
-		bulk_A_val[val_profile_id, :] = bulk_A_val_profile.detach().cpu().numpy()
-		w_scaler_val[val_profile_id, :] = w_scaler_val_profile.detach().cpu().numpy()
-		bulk_K_val[val_profile_id, :] = bulk_K_val_profile.detach().cpu().numpy()
-		bulk_V_val[val_profile_id, :] = bulk_V_val_profile.detach().cpu().numpy()
-		bulk_xi_val[val_profile_id, :] = bulk_xi_val_profile.detach().cpu().numpy()
-		bulk_I_val[val_profile_id, :] = bulk_I_val_profile.detach().cpu().numpy()
-		litter_fraction_val[val_profile_id, :] = litter_fraction_val_profile.detach().cpu().numpy()
+			carbon_input_val_profile, cpool_steady_state_val_profile, cpools_layer_val_profile, \
+				soc_layer_val_profile, total_res_time_val_profile, total_res_time_base_val_profile, res_time_base_pools_val_profile, \
+					t_scaler_val_profile, bulk_A_val_profile, w_scaler_val_profile, bulk_K_val_profile, bulk_V_val_profile, bulk_xi_val_profile, \
+						bulk_I_val_profile, litter_fraction_val_profile = fun_bulk_simu(best_guess_val_pred_para.to(device), val_x.to(device), args.vertical_mixing)
+			
+			# store the results
+			carbon_input_val[val_profile_id, :] = carbon_input_val_profile.detach().cpu().numpy()
+			cpool_steady_state_val[val_profile_id, :] = cpool_steady_state_val_profile.detach().cpu().numpy()
+			cpools_layer_val[val_profile_id, :] = cpools_layer_val_profile.detach().cpu().numpy()
+			soc_layer_val[val_profile_id, :] = soc_layer_val_profile.detach().cpu().numpy()
+			total_res_time_val[val_profile_id, :] = total_res_time_val_profile.detach().cpu().numpy()
+			total_res_time_base_val[val_profile_id, :] = total_res_time_base_val_profile.detach().cpu().numpy()
+			res_time_base_pools_val[val_profile_id, :] = res_time_base_pools_val_profile.detach().cpu().numpy()
+			t_scaler_val[val_profile_id, :] = t_scaler_val_profile.detach().cpu().numpy()
+			bulk_A_val[val_profile_id, :] = bulk_A_val_profile.detach().cpu().numpy()
+			w_scaler_val[val_profile_id, :] = w_scaler_val_profile.detach().cpu().numpy()
+			bulk_K_val[val_profile_id, :] = bulk_K_val_profile.detach().cpu().numpy()
+			bulk_V_val[val_profile_id, :] = bulk_V_val_profile.detach().cpu().numpy()
+			bulk_xi_val[val_profile_id, :] = bulk_xi_val_profile.detach().cpu().numpy()
+			bulk_I_val[val_profile_id, :] = bulk_I_val_profile.detach().cpu().numpy()
+			litter_fraction_val[val_profile_id, :] = litter_fraction_val_profile.detach().cpu().numpy()
 
-		# save data
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_carbon_input_' + job_id + '.csv', carbon_input_val, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_val, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_val, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_soc_layer_' + job_id + '.csv', soc_layer_val, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_total_res_time_' + job_id + '.csv', total_res_time_val, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_val, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_val, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_t_scaler_' + job_id + '.csv', t_scaler_val, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_A_' + job_id + '.csv', bulk_A_val, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_w_scaler_' + job_id + '.csv', w_scaler_val, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_K_' + job_id + '.csv', bulk_K_val, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_V_' + job_id + '.csv', bulk_V_val, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_val, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_I_' + job_id + '.csv', bulk_I_val, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_val, delimiter = ',')
+			# save data
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_carbon_input_' + job_id + '.csv', carbon_input_val, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_val, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_val, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_soc_layer_' + job_id + '.csv', soc_layer_val, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_total_res_time_' + job_id + '.csv', total_res_time_val, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_val, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_val, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_t_scaler_' + job_id + '.csv', t_scaler_val, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_A_' + job_id + '.csv', bulk_A_val, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_w_scaler_' + job_id + '.csv', w_scaler_val, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_K_' + job_id + '.csv', bulk_K_val, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_V_' + job_id + '.csv', bulk_V_val, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_val, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_I_' + job_id + '.csv', bulk_I_val, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_val, delimiter = ',')
 
 		##############
 		# Train Data #
@@ -2986,60 +2897,61 @@ def worker(rank, world_size, job_id):
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_best_pred_para_' + job_id + '.csv', train_pred_para.detach().cpu().numpy(), delimiter = ',')
 
 		## bulk convergence ##
-		carbon_input_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		cpool_steady_state_train = np.ones((wosis_profile_info.shape[0], 140))*np.nan
-		cpools_layer_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		soc_layer_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		total_res_time_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		total_res_time_base_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		res_time_base_pools_train = np.ones((wosis_profile_info.shape[0], 140))*np.nan
-		t_scaler_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		bulk_A_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		w_scaler_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-		bulk_K_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		bulk_V_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		bulk_xi_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		bulk_I_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-		litter_fraction_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		if args.model != 'nn_only': 
+			carbon_input_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			cpool_steady_state_train = np.ones((wosis_profile_info.shape[0], 140))*np.nan
+			cpools_layer_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			soc_layer_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			total_res_time_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			total_res_time_base_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			res_time_base_pools_train = np.ones((wosis_profile_info.shape[0], 140))*np.nan
+			t_scaler_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			bulk_A_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			w_scaler_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+			bulk_K_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			bulk_V_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			bulk_xi_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			bulk_I_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+			litter_fraction_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
 
-		carbon_input_train_profile, cpool_steady_state_train_profile, cpools_layer_train_profile, \
-			soc_layer_train_profile, total_res_time_train_profile, total_res_time_base_train_profile, res_time_base_pools_train_profile, \
-				t_scaler_train_profile, bulk_A_train_profile, w_scaler_train_profile, bulk_K_train_profile, bulk_V_train_profile, bulk_xi_train_profile, \
-					bulk_I_train_profile, litter_fraction_train_profile = fun_bulk_simu(best_guess_train_pred_para.to(device), train_x.to(device), args.vertical_mixing)
-		
-		# store the results
-		carbon_input_train[train_profile_id, :] = carbon_input_train_profile.detach().cpu().numpy()
-		cpool_steady_state_train[train_profile_id, :] = cpool_steady_state_train_profile.detach().cpu().numpy()
-		cpools_layer_train[train_profile_id, :] = cpools_layer_train_profile.detach().cpu().numpy()
-		soc_layer_train[train_profile_id, :] = soc_layer_train_profile.detach().cpu().numpy()
-		total_res_time_train[train_profile_id, :] = total_res_time_train_profile.detach().cpu().numpy()
-		total_res_time_base_train[train_profile_id, :] = total_res_time_base_train_profile.detach().cpu().numpy()
-		res_time_base_pools_train[train_profile_id, :] = res_time_base_pools_train_profile.detach().cpu().numpy()
-		t_scaler_train[train_profile_id, :] = t_scaler_train_profile.detach().cpu().numpy()
-		bulk_A_train[train_profile_id, :] = bulk_A_train_profile.detach().cpu().numpy()
-		w_scaler_train[train_profile_id, :] = w_scaler_train_profile.detach().cpu().numpy()
-		bulk_K_train[train_profile_id, :] = bulk_K_train_profile.detach().cpu().numpy()
-		bulk_V_train[train_profile_id, :] = bulk_V_train_profile.detach().cpu().numpy()
-		bulk_xi_train[train_profile_id, :] = bulk_xi_train_profile.detach().cpu().numpy()
-		bulk_I_train[train_profile_id, :] = bulk_I_train_profile.detach().cpu().numpy()
-		litter_fraction_train[train_profile_id, :] = litter_fraction_train_profile.detach().cpu().numpy()
+			carbon_input_train_profile, cpool_steady_state_train_profile, cpools_layer_train_profile, \
+				soc_layer_train_profile, total_res_time_train_profile, total_res_time_base_train_profile, res_time_base_pools_train_profile, \
+					t_scaler_train_profile, bulk_A_train_profile, w_scaler_train_profile, bulk_K_train_profile, bulk_V_train_profile, bulk_xi_train_profile, \
+						bulk_I_train_profile, litter_fraction_train_profile = fun_bulk_simu(best_guess_train_pred_para.to(device), train_x.to(device), args.vertical_mixing)
+			
+			# store the results
+			carbon_input_train[train_profile_id, :] = carbon_input_train_profile.detach().cpu().numpy()
+			cpool_steady_state_train[train_profile_id, :] = cpool_steady_state_train_profile.detach().cpu().numpy()
+			cpools_layer_train[train_profile_id, :] = cpools_layer_train_profile.detach().cpu().numpy()
+			soc_layer_train[train_profile_id, :] = soc_layer_train_profile.detach().cpu().numpy()
+			total_res_time_train[train_profile_id, :] = total_res_time_train_profile.detach().cpu().numpy()
+			total_res_time_base_train[train_profile_id, :] = total_res_time_base_train_profile.detach().cpu().numpy()
+			res_time_base_pools_train[train_profile_id, :] = res_time_base_pools_train_profile.detach().cpu().numpy()
+			t_scaler_train[train_profile_id, :] = t_scaler_train_profile.detach().cpu().numpy()
+			bulk_A_train[train_profile_id, :] = bulk_A_train_profile.detach().cpu().numpy()
+			w_scaler_train[train_profile_id, :] = w_scaler_train_profile.detach().cpu().numpy()
+			bulk_K_train[train_profile_id, :] = bulk_K_train_profile.detach().cpu().numpy()
+			bulk_V_train[train_profile_id, :] = bulk_V_train_profile.detach().cpu().numpy()
+			bulk_xi_train[train_profile_id, :] = bulk_xi_train_profile.detach().cpu().numpy()
+			bulk_I_train[train_profile_id, :] = bulk_I_train_profile.detach().cpu().numpy()
+			litter_fraction_train[train_profile_id, :] = litter_fraction_train_profile.detach().cpu().numpy()
 
-		# save data
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_carbon_input_' + job_id + '.csv', carbon_input_train, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_train, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_train, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_soc_layer_' + job_id + '.csv', soc_layer_train, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_total_res_time_' + job_id + '.csv', total_res_time_train, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_train, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_train, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_t_scaler_' + job_id + '.csv', t_scaler_train, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_A_' + job_id + '.csv', bulk_A_train, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_w_scaler_' + job_id + '.csv', w_scaler_train, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_K_' + job_id + '.csv', bulk_K_train, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_V_' + job_id + '.csv', bulk_V_train, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_train, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_I_' + job_id + '.csv', bulk_I_train, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_train, delimiter = ',')
+			# save data
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_carbon_input_' + job_id + '.csv', carbon_input_train, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_train, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_train, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_soc_layer_' + job_id + '.csv', soc_layer_train, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_total_res_time_' + job_id + '.csv', total_res_time_train, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_train, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_train, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_t_scaler_' + job_id + '.csv', t_scaler_train, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_A_' + job_id + '.csv', bulk_A_train, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_w_scaler_' + job_id + '.csv', w_scaler_train, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_K_' + job_id + '.csv', bulk_K_train, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_V_' + job_id + '.csv', bulk_V_train, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_train, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_I_' + job_id + '.csv', bulk_I_train, delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_train, delimiter = ',')
 
 
 		#############
@@ -3324,22 +3236,22 @@ def worker(rank, world_size, job_id):
 				w_scaler_pred, bulk_K_pred, bulk_V_pred, bulk_xi_pred, bulk_I_pred, litter_fraction_pred = fun_bulk_simu(grid_pred_para.to(device), \
 																												torch.tensor(predict_data_x, dtype=torch.float32, device=device), args.vertical_mixing)
 
-		# Save the bulk simulation results into csv files
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_carbon_input_' + job_id + '.csv', carbon_input_pred.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_pred.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_pred.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_soc_layer_' + job_id + '.csv', soc_layer_pred.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_total_res_time_' + job_id + '.csv', total_res_time_pred.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_pred.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_pred.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_t_scaler_' + job_id + '.csv', t_scaler_pred.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_A_' + job_id + '.csv', bulk_A_pred.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_w_scaler_' + job_id + '.csv', w_scaler_pred.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_K_' + job_id + '.csv', bulk_K_pred.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_V_' + job_id + '.csv', bulk_V_pred.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_pred.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_I_' + job_id + '.csv', bulk_I_pred.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_pred.detach().cpu().numpy(), delimiter = ',')
+			# Save the bulk simulation results into csv files
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_carbon_input_' + job_id + '.csv', carbon_input_pred.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_pred.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_pred.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_soc_layer_' + job_id + '.csv', soc_layer_pred.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_total_res_time_' + job_id + '.csv', total_res_time_pred.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_pred.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_pred.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_t_scaler_' + job_id + '.csv', t_scaler_pred.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_A_' + job_id + '.csv', bulk_A_pred.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_w_scaler_' + job_id + '.csv', w_scaler_pred.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_K_' + job_id + '.csv', bulk_K_pred.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_V_' + job_id + '.csv', bulk_V_pred.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_pred.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_I_' + job_id + '.csv', bulk_I_pred.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_pred.detach().cpu().numpy(), delimiter = ',')
 
 
 		print("-----------------Model Prediction Finished at " + str(datetime.now()) + "-----------------")
