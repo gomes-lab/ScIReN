@@ -1373,7 +1373,6 @@ class nn_model(nn.Module):
 				emb = F.normalize(emb, p=2, dim=1)  # New @joshuafan: normalize embeddings
 			embs.append(emb)
 		all_embs = torch.concatenate(embs, dim=1)
-		new_input = torch.concatenate([predictor[:, self.non_categorical_indices], all_embs], dim=1)
 
 		# Spatial Encoding
 		spatial_embeddings = self.spatial_encoder(coords)
@@ -1416,6 +1415,7 @@ class nn_model(nn.Module):
 		clamped_temp_sigmoid = 10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range
 		# h5 = torch.sigmoid(self.l5(h4) / clamped_temp_sigmoid)
 		h5 = self.sigmoid(self.l5(h4)/clamped_temp_sigmoid)
+		print("Params", h5.shape, h5)
 
 		# # check if h5 is nan
 		# if torch.isnan(h5).any():
@@ -1604,7 +1604,7 @@ def worker(rank, world_size, job_id):
 			var_idx_to_emb[str(idx)] = emb
 
 	# TODO Not sure if "global model" is correct
-	global model
+	# global model
 	if args.model == 'old_mlp':
 		model_class = nn_model
 		model_kwargs = {"input_vars": len(var4nn),
@@ -1714,7 +1714,10 @@ def worker(rank, world_size, job_id):
 
 	# Create distributed version of the model
 	if args.use_ddp == 1:
-		model = DDP(model, device_ids=[device])
+		if torch.cuda.is_available():
+			model = DDP(model, device_ids=[device])
+		else:  # CPU only 
+			model = DDP(model)
 		model_without_ddp = model.module
 	else:
 		model_without_ddp = model
