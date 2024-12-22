@@ -630,7 +630,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 		torch.sum(cpool_steady_state[120:140, :] * dz[0:n_soil_layer], dim = 0)], dim = 0).to(device)
 	# print("cpools_total", cpools_total.shape)
 	# calculate decomposition rate
-	decom_cpools = torch.tensor([tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3], dtype=torch.float32).reciprocal().unsqueeze(1).to(device)
+	decom_cpools = torch.tensor([tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3]).reciprocal().unsqueeze(1).to(device)  # , dtype=torch.float32
 	# print("tau4cwd", tau4cwd)
 	# print("decom_cpools", decom_cpools.shape)
 	# print("decom_cpools", decom_cpools.shape)

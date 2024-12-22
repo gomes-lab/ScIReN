@@ -18,14 +18,20 @@ def get_git_revision_hash():
     return subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
 
 
-def plot_losses(filename, train_losses, val_losses):
-    assert len(train_losses) == len(val_losses)
-    epochs = list(range(len(train_losses)))
-    plt.plot(epochs, train_losses, color='blue', label='Train loss')
-    plt.plot(epochs, val_losses, color='red', label='Validation loss')
+def plot_losses(filename, losses, labels, min_val=None, max_val=None):
+    """
+    Plots all loss curves to the given filename.
+    'losses' should be a list of lists, where each inner list represents
+    a particular loss (at each epoch).
+    'labels' should contain a string for each loss type.
+    """
+    for loss_idx, loss_curve in enumerate(losses):
+        plt.plot(np.arange(len(loss_curve)), loss_curve, label=labels[loss_idx])
     plt.xlabel('Epoch #')
     plt.ylabel('Loss')
     plt.title('Losses')
+    if min_val is not None and max_val is not None:
+        plt.ylim([min_val, max_val])
     plt.legend()
     plt.savefig(filename)
     plt.close()
@@ -101,7 +107,7 @@ def plot_single_scatter(ax, x, y, x_label, y_label, title, should_align=True):
         ax.plot(x, regression_line, 'r', label=regression_equation + ' ' + stats_string) # ' (R^2={:.2f}, Corr={:.2f}, MAPE={:.2f})'.format(r2, corr, mape))
         if should_align:
             ax.plot(x, identity_line, 'g', label='Identity function')
-        ax.legend(fontsize=13)
+        ax.legend(fontsize=10)
 
     # Plot scatterplot for this crop type
     if x.size > 500:
@@ -111,16 +117,17 @@ def plot_single_scatter(ax, x, y, x_label, y_label, title, should_align=True):
     else:
         ax.scatter(x, y, color="k", s=50)
 
-    ax.tick_params(labelsize=13)
-    ax.set_xlabel(x_label, fontsize=13)
-    ax.set_ylabel(y_label, fontsize=13)
+    ax.tick_params(labelsize=12)
+    ax.set_xlabel(x_label, fontsize=12)
+    ax.set_ylabel(y_label, fontsize=12)
     if should_align and x.size >= 1:
-        min_value = min(np.min(x), np.min(y))-0.1
-        max_value = max(np.max(x), np.max(y))+0.1
-        ax.set_xlim(min_value, max_value)
-        ax.set_ylim(min_value, max_value)
+        min_value = min(np.min(x), np.min(y))
+        max_value = max(np.max(x), np.max(y))
+        margin = (max_value - min_value) * 0.02
+        ax.set_xlim(min_value - margin, max_value + margin)
+        ax.set_ylim(min_value - margin, max_value + margin)
 
-    ax.set_title(title + " (num datapoints: " + str(len(x)) + ")", fontsize=13)
+    ax.set_title(title + " (num datapoints: " + str(len(x)) + ")", fontsize=12)
 
 
 def plot_true_vs_predicted(filename, y_hat, y):
@@ -169,12 +176,12 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
     plt.savefig(os.path.join(plot_dir, "map_{}.png".format(var_name)), bbox_inches='tight')
     plt.close()
 
-    # Plot histograms of the raw values
-    # filtered_values = values[~np.isnan(values)]
-    # filtered_values = filtered_values[~np.isinf(filtered_values)]
-    values = values[~np.isnan(values)]
-    values = values[~np.isinf(values)]
-    plt.hist(values, bins=30)
-    plt.title(title)
-    plt.savefig(os.path.join(plot_dir, "histogram_{}.png".format(var_name)))
-    plt.close()
+    # # Plot histograms of the raw values
+    # # filtered_values = values[~np.isnan(values)]
+    # # filtered_values = filtered_values[~np.isinf(filtered_values)]
+    # values = values[~np.isnan(values)]
+    # values = values[~np.isinf(values)]
+    # plt.hist(values, bins=30)
+    # plt.title(title)
+    # plt.savefig(os.path.join(plot_dir, "histogram_{}.png".format(var_name)))
+    # plt.close()

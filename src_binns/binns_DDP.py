@@ -42,6 +42,9 @@ from scipy.interpolate import pchip_interpolate
 # import concurrent.futures
 print("Start binns_DDP")
 
+# @joshuafan: set default dtype to float64
+torch.set_default_dtype(torch.float64)
+
 import os
 import torch
 from torch import nn
@@ -112,7 +115,7 @@ parser.add_argument("--batching", type=str, default='random', choices=['random',
 # Training
 parser.add_argument("--seed", type=int, default=0, help="Random seed for model initialization")
 parser.add_argument("--optimizer", type=str, choices=["SGD", "AdamW"], default="AdamW")
-parser.add_argument("--scheduler", type=str, choices=["none", "reduce_on_plateau", "step"], default="none")
+parser.add_argument("--scheduler", type=str, choices=["none", "reduce_on_plateau", "step", "cosine"], default="none")
 parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
 parser.add_argument("--momentum", type=float, default=0.9, help="Momentum (SGD ONLY)")
 parser.add_argument("--batch_size", type=int, default=32)
@@ -791,7 +794,7 @@ nan_loc = np.nanmean(current_data_y, axis = 1) + \
 			np.sum(model_force_soil_temp_profile, axis = (1, 2)) + \
 			np.sum(model_force_soil_water_profile, axis = (1, 2))
 
-valid_profile_loc = np.where(np.isnan(nan_loc) == False)[0] ### Why change the shape from 26915 to 26934??? ###
+valid_profile_loc = np.where(np.isnan(nan_loc) == False)[0] ### Why change the shape from 26915 to 26934??? ###  joshuafan: some sites may have missing forcing data or covariates
 
 current_data_y = current_data_y[valid_profile_loc, :]
 current_data_z = current_data_z[valid_profile_loc, :]
@@ -875,22 +878,22 @@ if args.whether_resume == 0:
 				train_loc = np.flatnonzero(current_data_c[:, 0] > val_thresh)
 			val_loc = np.setdiff1d(np.arange(0, n_datapoints), train_loc)
 
-			train_y = torch.tensor(current_data_y[train_loc, :], dtype = torch.float32)
-			val_y = torch.tensor(current_data_y[val_loc, :], dtype = torch.float32)
+			train_y = torch.tensor(current_data_y[train_loc, :])  #, dtype = torch.float32)
+			val_y = torch.tensor(current_data_y[val_loc, :])  #, dtype = torch.float32)
 
-			train_z = torch.tensor(current_data_z[train_loc, :], dtype = torch.float32)
-			val_z = torch.tensor(current_data_z[val_loc, :], dtype = torch.float32)
+			train_z = torch.tensor(current_data_z[train_loc, :])  #, dtype = torch.float32)
+			val_z = torch.tensor(current_data_z[val_loc, :])  #, dtype = torch.float32)
 
-			train_c = torch.tensor(current_data_c[train_loc, :], dtype = torch.float32)
-			val_c = torch.tensor(current_data_c[val_loc, :], dtype = torch.float32)
+			train_c = torch.tensor(current_data_c[train_loc, :])  #, dtype = torch.float32)
+			val_c = torch.tensor(current_data_c[val_loc, :])  #, dtype = torch.float32)
 
-			train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype = torch.float32)
+			train_x = torch.tensor(current_data_x[train_loc, :, :, :])  #, dtype = torch.float32)
 			# train_x = train_x.requires_grad_(True)
-			val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype = torch.float32)
+			val_x = torch.tensor(current_data_x[val_loc, :, :, :])  #, dtype = torch.float32)
 			# val_x = val_x.requires_grad_(True)
 
-			train_profile_id = torch.tensor(current_data_profile_id[train_loc], dtype = torch.long)
-			val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype = torch.long)
+			train_profile_id = torch.tensor(current_data_profile_id[train_loc])  #, dtype = torch.long)
+			val_profile_id = torch.tensor(current_data_profile_id[val_loc])  #, dtype = torch.long)
 		else:
 			# Compute train/val/test indices
 			if args.split == 'random':
@@ -951,28 +954,28 @@ if args.whether_resume == 0:
 				val_loc = np.flatnonzero((current_data_c[:, 0] <= val_thresh) & (current_data_c[:, 0] > test_thresh))
 				test_loc = np.flatnonzero(current_data_c[:, 0] <= test_thresh)
 
-			train_y = torch.tensor(current_data_y[train_loc, :], dtype=torch.float32)
-			val_y = torch.tensor(current_data_y[val_loc, :], dtype=torch.float32)
-			test_y = torch.tensor(current_data_y[test_loc, :], dtype=torch.float32)
+			train_y = torch.tensor(current_data_y[train_loc, :])  #, dtype=torch.float32)
+			val_y = torch.tensor(current_data_y[val_loc, :])  #, dtype=torch.float32)
+			test_y = torch.tensor(current_data_y[test_loc, :])  #, dtype=torch.float32)
 
-			train_z = torch.tensor(current_data_z[train_loc, :], dtype=torch.float32)
-			val_z = torch.tensor(current_data_z[val_loc, :], dtype=torch.float32)
-			test_z = torch.tensor(current_data_z[test_loc, :], dtype=torch.float32)
+			train_z = torch.tensor(current_data_z[train_loc, :])  #, dtype=torch.float32)
+			val_z = torch.tensor(current_data_z[val_loc, :])  #, dtype=torch.float32)
+			test_z = torch.tensor(current_data_z[test_loc, :])  #, dtype=torch.float32)
 
-			train_c = torch.tensor(current_data_c[train_loc, :], dtype=torch.float32)
-			val_c = torch.tensor(current_data_c[val_loc, :], dtype=torch.float32)
-			test_c = torch.tensor(current_data_c[test_loc, :], dtype=torch.float32)
+			train_c = torch.tensor(current_data_c[train_loc, :])  #, dtype=torch.float32)
+			val_c = torch.tensor(current_data_c[val_loc, :])  #, dtype=torch.float32)
+			test_c = torch.tensor(current_data_c[test_loc, :])  #, dtype=torch.float32)
 
-			train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype=torch.float32)
+			train_x = torch.tensor(current_data_x[train_loc, :, :, :])  #, dtype=torch.float32)
 			# train_x = train_x.requires_grad_(True)
-			val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype=torch.float32)
+			val_x = torch.tensor(current_data_x[val_loc, :, :, :])  #, dtype=torch.float32)
 			# val_x = val_x.requires_grad_(True)
-			test_x = torch.tensor(current_data_x[test_loc, :, :, :], dtype=torch.float32)
+			test_x = torch.tensor(current_data_x[test_loc, :, :, :])  #, dtype=torch.float32)
 			# test_x = test_x.requires_grad_(True)
 
-			train_profile_id = torch.tensor(current_data_profile_id[train_loc], dtype=torch.long)
-			val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype=torch.long)
-			test_profile_id = torch.tensor(current_data_profile_id[test_loc], dtype=torch.long)
+			train_profile_id = torch.tensor(current_data_profile_id[train_loc])  #, dtype=torch.long)
+			val_profile_id = torch.tensor(current_data_profile_id[val_loc])  #, dtype=torch.long)
+			test_profile_id = torch.tensor(current_data_profile_id[test_loc])  #, dtype=torch.long)
 
 			print("Shape of train data", train_x.shape)
 			print("Shape of val data", val_x.shape)
@@ -989,28 +992,28 @@ if args.whether_resume == 0:
 		train_loc = np.random.choice(train_val_idx, size=round((1 - nn_split_ratio - test_split_ratio)/(1 - test_split_ratio) * len(train_val_idx)), replace=False)
 		val_loc = np.setdiff1d(train_val_idx, train_loc)
 
-		train_y = torch.tensor(current_data_y[train_loc, :], dtype=torch.float32)
-		val_y = torch.tensor(current_data_y[val_loc, :], dtype=torch.float32)
-		test_y = torch.tensor(current_data_y[test_loc, :], dtype=torch.float32)
+		train_y = torch.tensor(current_data_y[train_loc, :],)  # dtype=torch.float32)
+		val_y = torch.tensor(current_data_y[val_loc, :])  #, dtype=torch.float32)
+		test_y = torch.tensor(current_data_y[test_loc, :])  #, dtype=torch.float32)
 
-		train_z = torch.tensor(current_data_z[train_loc, :], dtype=torch.float32)
-		val_z = torch.tensor(current_data_z[val_loc, :], dtype=torch.float32)
-		test_z = torch.tensor(current_data_z[test_loc, :], dtype=torch.float32)
+		train_z = torch.tensor(current_data_z[train_loc, :])  #, dtype=torch.float32)
+		val_z = torch.tensor(current_data_z[val_loc, :])  #, dtype=torch.float32)
+		test_z = torch.tensor(current_data_z[test_loc, :])  #, dtype=torch.float32)
 
-		train_c = torch.tensor(current_data_c[train_loc, :], dtype=torch.float32)
-		val_c = torch.tensor(current_data_c[val_loc, :], dtype=torch.float32)
-		test_c = torch.tensor(current_data_c[test_loc, :], dtype=torch.float32)
+		train_c = torch.tensor(current_data_c[train_loc, :])  #, dtype=torch.float32)
+		val_c = torch.tensor(current_data_c[val_loc, :])  #, dtype=torch.float32)
+		test_c = torch.tensor(current_data_c[test_loc, :])  #, dtype=torch.float32)
 
-		train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype=torch.float32)
+		train_x = torch.tensor(current_data_x[train_loc, :, :, :])  #, dtype=torch.float32)
 		# train_x = train_x.requires_grad_(True)
-		val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype=torch.float32)
+		val_x = torch.tensor(current_data_x[val_loc, :, :, :])  #, dtype=torch.float32)
 		# val_x = val_x.requires_grad_(True)
-		test_x = torch.tensor(current_data_x[test_loc, :, :, :], dtype=torch.float32)
+		test_x = torch.tensor(current_data_x[test_loc, :, :, :])  #, dtype=torch.float32)
 		# test_x = test_x.requires_grad_(True)
 
-		train_profile_id = torch.tensor(current_data_profile_id[train_loc], dtype=torch.long)
-		val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype=torch.long)
-		test_profile_id = torch.tensor(current_data_profile_id[test_loc], dtype=torch.long)
+		train_profile_id = torch.tensor(current_data_profile_id[train_loc])  #, dtype=torch.long)
+		val_profile_id = torch.tensor(current_data_profile_id[val_loc])  #, dtype=torch.long)
+		test_profile_id = torch.tensor(current_data_profile_id[test_loc])  #, dtype=torch.long)
 
 		print("Shape of train data", train_x.shape)
 		print("Shape of val data", val_x.shape)
@@ -1024,25 +1027,25 @@ else:
 	val_loc = checkpoint_main['val_indices']
 	test_loc = checkpoint_main['test_indices']
 	# split the data
-	train_y = torch.tensor(current_data_y[train_loc, :], dtype=torch.float32)
-	val_y = torch.tensor(current_data_y[val_loc, :], dtype=torch.float32)
-	test_y = torch.tensor(current_data_y[test_loc, :], dtype=torch.float32)
+	train_y = torch.tensor(current_data_y[train_loc, :])  #, dtype=torch.float32)
+	val_y = torch.tensor(current_data_y[val_loc, :])  #, dtype=torch.float32)
+	test_y = torch.tensor(current_data_y[test_loc, :])  #, dtype=torch.float32)
 
-	train_z = torch.tensor(current_data_z[train_loc, :], dtype=torch.float32)
-	val_z = torch.tensor(current_data_z[val_loc, :], dtype=torch.float32)
-	test_z = torch.tensor(current_data_z[test_loc, :], dtype=torch.float32)
+	train_z = torch.tensor(current_data_z[train_loc, :])  #, dtype=torch.float32)
+	val_z = torch.tensor(current_data_z[val_loc, :])  #, dtype=torch.float32)
+	test_z = torch.tensor(current_data_z[test_loc, :])  #, dtype=torch.float32)
 
-	train_c = torch.tensor(current_data_c[train_loc, :], dtype=torch.float32)
-	val_c = torch.tensor(current_data_c[val_loc, :], dtype=torch.float32)
-	test_c = torch.tensor(current_data_c[test_loc, :], dtype=torch.float32)
+	train_c = torch.tensor(current_data_c[train_loc, :])  #, dtype=torch.float32)
+	val_c = torch.tensor(current_data_c[val_loc, :])  #, dtype=torch.float32)
+	test_c = torch.tensor(current_data_c[test_loc, :])  #, dtype=torch.float32)
 
-	train_x = torch.tensor(current_data_x[train_loc, :, :, :], dtype=torch.float32)
-	val_x = torch.tensor(current_data_x[val_loc, :, :, :], dtype=torch.float32)
-	test_x = torch.tensor(current_data_x[test_loc, :, :, :], dtype=torch.float32)
+	train_x = torch.tensor(current_data_x[train_loc, :, :, :])  #, dtype=torch.float32)
+	val_x = torch.tensor(current_data_x[val_loc, :, :, :])  #, dtype=torch.float32)
+	test_x = torch.tensor(current_data_x[test_loc, :, :, :])  #, dtype=torch.float32)
 
-	train_profile_id = torch.tensor(current_data_profile_id[train_loc], dtype=torch.long)
-	val_profile_id = torch.tensor(current_data_profile_id[val_loc], dtype=torch.long)
-	test_profile_id = torch.tensor(current_data_profile_id[test_loc], dtype=torch.long)
+	train_profile_id = torch.tensor(current_data_profile_id[train_loc])  #, dtype=torch.long)
+	val_profile_id = torch.tensor(current_data_profile_id[val_loc])  #, dtype=torch.long)
+	test_profile_id = torch.tensor(current_data_profile_id[test_loc])  #, dtype=torch.long)
 
 
 print(datetime.now(), '------------nn data prepared------------')
@@ -1415,7 +1418,7 @@ class nn_model(nn.Module):
 		clamped_temp_sigmoid = 10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range
 		# h5 = torch.sigmoid(self.l5(h4) / clamped_temp_sigmoid)
 		h5 = self.sigmoid(self.l5(h4)/clamped_temp_sigmoid)
-		print("Params", h5.shape, h5)
+
 
 		# # check if h5 is nan
 		# if torch.isnan(h5).any():
@@ -1465,7 +1468,6 @@ class nn_model(nn.Module):
 			simu_soc = fun_model_prediction(h5, forcing, self.vertical_mixing)
 		else:
 			simu_soc = fun_model_simu(h5, forcing, obs_depth, self.vertical_mixing)
-		
 		return simu_soc, h5
 # end nn_model
 
@@ -1642,10 +1644,12 @@ def worker(rank, world_size, job_id):
 
 	elif args.model == 'nn_only':
 		model_class = nn_only
-		y_values = train_y.flatten()[~torch.isnan(train_y.flatten())]
-		min_val = torch.min(y_values)
-		max_val = torch.max(y_values)
-		print("NN only, range of Y is", min_val, max_val)
+
+		# Calculate mean/std of Y
+		output_values = train_y.flatten()[~torch.isnan(train_y.flatten())]
+		output_mean = torch.mean(output_values)
+		output_std = torch.std(output_values)
+		print("NN only, output_mean", output_mean, "output_std", output_std)
 		model_kwargs = {"input_vars": len(var4nn),
 						"var_idx_to_emb": var_idx_to_emb,
 						"pos_enc": args.pos_enc,
@@ -1657,8 +1661,8 @@ def worker(rank, world_size, job_id):
 						"leaky_relu": args.leaky_relu,
 						"losses": args.losses,
 						"device": device,
-						"min_val": min_val,
-						"max_val": max_val}
+						"output_mean": output_mean,
+						"output_std": output_std}
 		if args.model == "lipmlp":
 			model_kwargs["lipschitz"] = True
 	elif args.model == 'gnn':
@@ -1741,9 +1745,11 @@ def worker(rank, world_size, job_id):
 	else:
 		# Add a learning rate scheduler that decreases the learning rate by a factor of 0.1 every 50 epochs
 		if args.scheduler == "reduce_on_plateau":
-			scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max")
+			scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)  #, mode="max")
 		elif args.scheduler == "step":
 			scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
+		elif args.scheduler == "cosine":
+			scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=20)
 		elif args.scheduler == "none":
 			scheduler = None
 		else:
@@ -1782,7 +1788,9 @@ def worker(rank, world_size, job_id):
 		# record the loss history
 		train_loss_history = np.ones((num_epoch, len(args.losses)))*np.nan
 		val_loss_history = np.ones((num_epoch, len(args.losses)))*np.nan
+		train_NSE_history = np.ones((num_epoch, 1))*np.nan
 		val_NSE_history = np.ones((num_epoch, 1))*np.nan
+		lr_history = np.ones((num_epoch))*np.nan
 		best_model_epoch = torch.tensor(0) # epoch with the best model so far
 
 		# Early stopping parameters
@@ -1805,8 +1813,8 @@ def worker(rank, world_size, job_id):
 
 		# try to save the predicted parameters before training
 		elif rank == 0:
-			val_pred_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
-			val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
+			val_pred_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, device=device)  # dtype = torch.float32, 
+			val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, device=device)  #  dtype = torch.float32,
 			model.eval()
 			with torch.no_grad():
 				temp_SOC, temp_pred_para = model(val_x, val_z, val_c, whether_predict=0)
@@ -1819,7 +1827,9 @@ def worker(rank, world_size, job_id):
 		# record the loss history
 		train_loss_history = checkpoint_worker['train_loss_history']
 		val_loss_history = checkpoint_worker['val_loss_history']
+		train_NSE_history = checkpoint_worker['train_NSE_history']
 		val_NSE_history = checkpoint_worker['val_NSE_history']
+		lr_history = checkpoint_worker['lr_history']
 		best_model_epoch = checkpoint_worker['best_model_epoch']
 
 		# Early stopping parameters
@@ -1866,6 +1876,9 @@ def worker(rank, world_size, job_id):
 		# clear gradients
 		optimizer.zero_grad()
 		model.zero_grad()
+		if scheduler is not None and rank == 0:
+			print(f"Epoch {iepoch}: lr = {scheduler.get_last_lr()}")
+			lr_history[iepoch] = scheduler.get_last_lr()[0]
 
 		# -------------------------------------training
 		loss_record_train = list()  # List of Tensors. Each Tensor contains losses in the order of args.losses.
@@ -1875,7 +1888,7 @@ def worker(rank, world_size, job_id):
 		if args.use_ddp == 1:
 			train_loader.sampler.set_epoch(iepoch)  # Set sampler's epoch number, so we use a different order per epoch
 
-		torch.autograd.set_detect_anomaly(True)   # <- helps debug gradient anomalies but is VERY SLOW
+		# torch.autograd.set_detect_anomaly(True)   # <- helps debug gradient anomalies but is VERY SLOW
 		for batch_info in train_loader:
 			batch_x, batch_y, batch_z, batch_c, batch_profile_id = batch_info
 
@@ -2222,8 +2235,104 @@ def worker(rank, world_size, job_id):
 		# record the loss history
 		train_loss_history[iepoch, :] = torch.stack(all_train_losses, dim=0).mean(dim=0).detach().cpu().numpy()
 		val_loss_history[iepoch, :] = torch.stack(all_val_losses, dim=0).mean(dim=0).detach().cpu().numpy()
+		train_NSE_history[iepoch, :] = torch.stack(all_train_NSE).mean().detach().cpu().numpy()
 		val_NSE_history[iepoch, :] = torch.stack(all_val_NSE).mean().detach().cpu().numpy()
 
+		# Create tensors of {train/val} {pred/true} SOC over all sites in THIS RANK.
+		# These are of shape [n_examples_per_rank, 200] where 200 is the max number of observed depths per site.
+		# Note that DistributedSampler contains repeated examples. We do not remove them.
+		all_train_pred_soc = torch.cat(all_train_pred_soc, dim=0)  # Pred SOC for this rank
+		all_train_true_soc = torch.cat(all_train_true_soc, dim=0)
+		all_val_pred_soc = torch.cat(all_val_pred_soc, dim=0)
+		all_val_true_soc = torch.cat(all_val_true_soc, dim=0)
+
+		# Estimate max examples per rank. Ok for some to be nan
+		train_examples_per_rank = len(train_sampler)  # math.ceil(len(train_sampler) / world_size)
+		val_examples_per_rank = len(val_sampler)  # math.ceil(len(val_sampler) / world_size)
+
+		# Pad the SOC arrays to this length
+		def pad_tensor(tensor, new_length, device):
+			"""
+			Given tensor of shape [L, D], pads it to shape [new_length, D], where the
+			extra rows are filled with nan. new_length must be greater than L.
+			"""
+			padded = torch.full([new_length, tensor.shape[1]], torch.nan, device=device)
+			padded[0:tensor.shape[0]] = tensor
+			return padded
+		all_train_pred_soc = pad_tensor(all_train_pred_soc, train_examples_per_rank, device)
+		all_train_true_soc = pad_tensor(all_train_true_soc, train_examples_per_rank, device)
+		all_val_pred_soc = pad_tensor(all_val_pred_soc, val_examples_per_rank, device)
+		all_val_true_soc = pad_tensor(all_val_true_soc, val_examples_per_rank, device)
+
+		# Gather true/pred SOC from all processes
+		train_pred_soc_list = [torch.full([train_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]  # Empty list of per-rank pred SOCs
+		train_true_soc_list = [torch.full([train_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]
+		val_pred_soc_list = [torch.full([val_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]
+		val_true_soc_list = [torch.full([val_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]
+		dist.all_gather(train_pred_soc_list, all_train_pred_soc)
+		dist.all_gather(train_true_soc_list, all_train_true_soc)
+		dist.all_gather(val_pred_soc_list, all_val_pred_soc)
+		dist.all_gather(val_true_soc_list, all_val_true_soc)
+		allrank_train_pred_soc = torch.cat(train_pred_soc_list, dim=0)
+		allrank_train_true_soc = torch.cat(train_true_soc_list, dim=0)
+		allrank_val_pred_soc = torch.cat(val_pred_soc_list, dim=0)
+		allrank_val_true_soc = torch.cat(val_true_soc_list, dim=0)
+		# smooth_l1_loss, l2_loss, param_reg_loss, val_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
+
+		####################################################
+		## Create true vs predicted scatters per 50 epoch ##
+		####################################################
+		if rank == 0 and iepoch % 50 == 0:
+			# True/pred SOC across all ranks
+			train_pred_soc_flat = torch.reshape(allrank_train_pred_soc, [1, -1])
+			train_true_soc_flat = torch.reshape(allrank_train_true_soc, [1, -1])
+			valid_loc = torch.where(torch.isnan(train_pred_soc_flat+train_true_soc_flat) == False)
+			visualization_utils.plot_true_vs_predicted(os.path.join(PLOT_DIR, f"epoch{iepoch}_train_scatter.png"),
+													   train_pred_soc_flat[valid_loc], train_true_soc_flat[valid_loc])
+			val_pred_soc_flat = torch.reshape(allrank_val_pred_soc, [1, -1])
+			val_true_soc_flat = torch.reshape(allrank_val_true_soc, [1, -1])
+			valid_loc = torch.where(torch.isnan(val_pred_soc_flat+val_true_soc_flat) == False)
+			visualization_utils.plot_true_vs_predicted(os.path.join(PLOT_DIR, f"epoch{iepoch}_val_scatter.png"),
+													   val_pred_soc_flat[valid_loc], val_true_soc_flat[valid_loc])
+
+			# True/pred SOC for this rank only
+			train_pred_soc_flat = torch.reshape(all_train_pred_soc, [1, -1])
+			train_true_soc_flat = torch.reshape(all_train_true_soc, [1, -1])
+			valid_loc = torch.where(torch.isnan(train_pred_soc_flat+train_true_soc_flat) == False)
+			visualization_utils.plot_true_vs_predicted(os.path.join(PLOT_DIR, f"epoch{iepoch}_train_scatter_rank0.png"),
+													   train_pred_soc_flat[valid_loc], train_true_soc_flat[valid_loc])
+			val_pred_soc_flat = torch.reshape(all_val_pred_soc, [1, -1])
+			val_true_soc_flat = torch.reshape(all_val_true_soc, [1, -1])
+			valid_loc = torch.where(torch.isnan(val_pred_soc_flat+val_true_soc_flat) == False)
+			visualization_utils.plot_true_vs_predicted(os.path.join(PLOT_DIR, f"epoch{iepoch}_val_scatter_rank0.png"),
+													   val_pred_soc_flat[valid_loc], val_true_soc_flat[valid_loc])
+
+			# # Pred SOC maps. Currently taking the mean of all observations per site
+			# # (regardless of depth), which will be noisy.
+			# visualization_utils.plot_observations_world_map(all_train_coords[:, 0].detach().cpu().numpy(),
+			# 												all_train_coords[:, 1].detach().cpu().numpy(),
+			# 												torch.nanmean(all_train_pred_soc, dim=1).detach().cpu().numpy(),
+			# 												PLOT_DIR,
+			# 												f"epoch{iepoch}_train_pred_soc", us_only=True)
+			# visualization_utils.plot_observations_world_map(all_val_coords[:, 0].detach().cpu().numpy(),
+			# 												all_val_coords[:, 1].detach().cpu().numpy(),
+			# 												torch.nanmean(all_val_pred_soc, dim=1).detach().cpu().numpy(),
+			# 												PLOT_DIR,
+			# 												f"epoch{iepoch}_val_pred_soc", us_only=True)
+
+			# # Para maps
+			# for para_idx in [0, 20]:
+			# 	visualization_utils.plot_observations_world_map(all_train_coords[:, 0].detach().cpu().numpy(),
+			# 													all_train_coords[:, 1].detach().cpu().numpy(),
+			# 													all_train_pred_para[:, para_idx].detach().cpu().numpy(),
+			# 													PLOT_DIR,
+			# 													f"epoch{iepoch}_train_para_{para_names[para_idx]}", us_only=True)
+			# 	visualization_utils.plot_observations_world_map(all_val_coords[:, 0].detach().cpu().numpy(),
+			# 													all_val_coords[:, 1].detach().cpu().numpy(),
+			# 													all_val_pred_para[:, para_idx].detach().cpu().numpy(),
+			# 													PLOT_DIR,
+			# 													f"epoch{iepoch}_val_para_{para_names[para_idx]}_epoch{iepoch}", us_only=True)
+		
 
 		# # Reshape the predictions before gathering
 		# val_loss_start_time = time.time()
@@ -2332,12 +2441,12 @@ def worker(rank, world_size, job_id):
 		# 		# save data
 		# 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_train_pred_para_' + job_id + "_" + str(iepoch) + '.csv', train_pred_para.detach().numpy(), delimiter = ',')
 
-		if rank == 0: 
+		if rank == 0 or True: 
 			train_losses_epoch = {loss: round(train_loss_history[iepoch, loss_idx], 2) for loss_idx, loss in enumerate(args.losses)}
 			val_losses_epoch = {loss: round(val_loss_history[iepoch, loss_idx], 2) for loss_idx, loss in enumerate(args.losses)}
-			print(f'Epoch {iepoch}, train losses: {train_losses_epoch}')
-			print(f'Validation losses: {val_losses_epoch}')
-			print(f'Train NSE: {torch.tensor(NSE_record_train).mean():.2f}, validation NSE: {torch.tensor(NSE_record_val).mean():.2f}, time: {train_time:.2f}', flush=True)
+			#print(f'Epoch {iepoch}, train losses: {train_losses_epoch}')
+			#print(f'Validation losses: {val_losses_epoch}')
+			print(f'Epoch {iepoch} Rank {rank} - Train NSE: {torch.tensor(NSE_record_train).mean():.2f}, validation NSE: {torch.tensor(NSE_record_val).mean():.2f}, time: {train_time:.2f}', flush=True)
 
 			# Relobralo update
 			if args.loss_weighting == "relobralo" and iepoch >= 1:
@@ -2357,56 +2466,56 @@ def worker(rank, world_size, job_id):
 					dist.broadcast(args.lambdas, src=0)
 
 
-			#############################################
-			## Create para map & scatters per 50 epoch ##
-			#############################################
-			if iepoch % 50 == 0:
-				all_train_pred_para = torch.cat(all_train_pred_para, dim=0)
-				all_train_coords = torch.cat(all_train_coords, dim=0)
-				all_val_pred_para = torch.cat(all_val_pred_para, dim=0)
-				all_val_coords = torch.cat(all_val_coords, dim=0)
-				all_train_pred_soc = torch.cat(all_train_pred_soc, dim=0)
-				all_train_true_soc = torch.cat(all_train_true_soc, dim=0)
-				all_val_pred_soc = torch.cat(all_val_pred_soc, dim=0)
-				all_val_true_soc = torch.cat(all_val_true_soc, dim=0)
+			# #############################################
+			# ## Create para map & scatters per 50 epoch ##
+			# #############################################
+			# if iepoch % 50 == 0:
+			# 	all_train_pred_para = torch.cat(all_train_pred_para, dim=0)
+			# 	all_train_coords = torch.cat(all_train_coords, dim=0)
+			# 	all_val_pred_para = torch.cat(all_val_pred_para, dim=0)
+			# 	all_val_coords = torch.cat(all_val_coords, dim=0)
+			# 	all_train_pred_soc = torch.cat(all_train_pred_soc, dim=0)
+			# 	all_train_true_soc = torch.cat(all_train_true_soc, dim=0)
+			# 	all_val_pred_soc = torch.cat(all_val_pred_soc, dim=0)
+			# 	all_val_true_soc = torch.cat(all_val_true_soc, dim=0)
 
-				# Scatterplots: true vs predicted
-				train_pred_soc_flat = torch.reshape(all_train_pred_soc, [1, -1])
-				train_true_soc_flat = torch.reshape(all_train_true_soc, [1, -1])
-				valid_loc = torch.where(torch.isnan(train_pred_soc_flat+train_true_soc_flat) == False)
-				visualization_utils.plot_true_vs_predicted(os.path.join(PLOT_DIR, f"epoch{iepoch}_train_scatter.png"),
-														train_pred_soc_flat[valid_loc], train_true_soc_flat[valid_loc])
-				val_pred_soc_flat = torch.reshape(all_val_pred_soc, [1, -1])
-				val_true_soc_flat = torch.reshape(all_val_true_soc, [1, -1])
-				valid_loc = torch.where(torch.isnan(val_pred_soc_flat+val_true_soc_flat) == False)
-				visualization_utils.plot_true_vs_predicted(os.path.join(PLOT_DIR, f"epoch{iepoch}_val_scatter.png"),
-														val_pred_soc_flat[valid_loc], val_true_soc_flat[valid_loc])
+			# 	# Scatterplots: true vs predicted
+			# 	train_pred_soc_flat = torch.reshape(all_train_pred_soc, [1, -1])
+			# 	train_true_soc_flat = torch.reshape(all_train_true_soc, [1, -1])
+			# 	valid_loc = torch.where(torch.isnan(train_pred_soc_flat+train_true_soc_flat) == False)
+			# 	visualization_utils.plot_true_vs_predicted(os.path.join(PLOT_DIR, f"epoch{iepoch}_train_scatter.png"),
+			# 											train_pred_soc_flat[valid_loc], train_true_soc_flat[valid_loc])
+			# 	val_pred_soc_flat = torch.reshape(all_val_pred_soc, [1, -1])
+			# 	val_true_soc_flat = torch.reshape(all_val_true_soc, [1, -1])
+			# 	valid_loc = torch.where(torch.isnan(val_pred_soc_flat+val_true_soc_flat) == False)
+			# 	visualization_utils.plot_true_vs_predicted(os.path.join(PLOT_DIR, f"epoch{iepoch}_val_scatter.png"),
+			# 											val_pred_soc_flat[valid_loc], val_true_soc_flat[valid_loc])
 
-				# Pred SOC maps. Currently taking the mean of all observations per site
-				# (regardless of depth), which will be noisy.
-				visualization_utils.plot_observations_world_map(all_train_coords[:, 0].detach().cpu().numpy(),
-																all_train_coords[:, 1].detach().cpu().numpy(),
-																torch.nanmean(all_train_pred_soc, dim=1).detach().cpu().numpy(),
-																PLOT_DIR,
-																f"epoch{iepoch}_train_pred_soc", us_only=True)
-				visualization_utils.plot_observations_world_map(all_val_coords[:, 0].detach().cpu().numpy(),
-																all_val_coords[:, 1].detach().cpu().numpy(),
-																torch.nanmean(all_val_pred_soc, dim=1).detach().cpu().numpy(),
-																PLOT_DIR,
-																f"epoch{iepoch}_val_pred_soc", us_only=True)
+			# 	# Pred SOC maps. Currently taking the mean of all observations per site
+			# 	# (regardless of depth), which will be noisy.
+			# 	visualization_utils.plot_observations_world_map(all_train_coords[:, 0].detach().cpu().numpy(),
+			# 													all_train_coords[:, 1].detach().cpu().numpy(),
+			# 													torch.nanmean(all_train_pred_soc, dim=1).detach().cpu().numpy(),
+			# 													PLOT_DIR,
+			# 													f"epoch{iepoch}_train_pred_soc", us_only=True)
+			# 	visualization_utils.plot_observations_world_map(all_val_coords[:, 0].detach().cpu().numpy(),
+			# 													all_val_coords[:, 1].detach().cpu().numpy(),
+			# 													torch.nanmean(all_val_pred_soc, dim=1).detach().cpu().numpy(),
+			# 													PLOT_DIR,
+			# 													f"epoch{iepoch}_val_pred_soc", us_only=True)
 
-				# Para maps
-				for para_idx in [0, 20]:
-					visualization_utils.plot_observations_world_map(all_train_coords[:, 0].detach().cpu().numpy(),
-																	all_train_coords[:, 1].detach().cpu().numpy(),
-																	all_train_pred_para[:, para_idx].detach().cpu().numpy(),
-																	PLOT_DIR,
-																	f"epoch{iepoch}_train_para_{para_names[para_idx]}", us_only=True)
-					visualization_utils.plot_observations_world_map(all_val_coords[:, 0].detach().cpu().numpy(),
-																	all_val_coords[:, 1].detach().cpu().numpy(),
-																	all_val_pred_para[:, para_idx].detach().cpu().numpy(),
-																	PLOT_DIR,
-																	f"epoch{iepoch}_val_para_{para_names[para_idx]}_epoch{iepoch}", us_only=True)
+			# 	# Para maps
+			# 	for para_idx in [0, 20]:
+			# 		visualization_utils.plot_observations_world_map(all_train_coords[:, 0].detach().cpu().numpy(),
+			# 														all_train_coords[:, 1].detach().cpu().numpy(),
+			# 														all_train_pred_para[:, para_idx].detach().cpu().numpy(),
+			# 														PLOT_DIR,
+			# 														f"epoch{iepoch}_train_para_{para_names[para_idx]}", us_only=True)
+			# 		visualization_utils.plot_observations_world_map(all_val_coords[:, 0].detach().cpu().numpy(),
+			# 														all_val_coords[:, 1].detach().cpu().numpy(),
+			# 														all_val_pred_para[:, para_idx].detach().cpu().numpy(),
+			# 														PLOT_DIR,
+			# 														f"epoch{iepoch}_val_para_{para_names[para_idx]}_epoch{iepoch}", us_only=True)
 
 			# If this model is the best so far, save the checkpoint into 'opt_nn_{job_id}.pt'
 			if val_NSE_history[iepoch, :] <= best_val_NSE:  # @joshuafan: removed the iepoch==0 condition
@@ -2423,7 +2532,9 @@ def worker(rank, world_size, job_id):
 					'best_model_epoch': best_model_epoch,
 					'train_loss_history': train_loss_history,
 					'val_loss_history': val_loss_history,
+					'train_NSE_history': train_NSE_history,
 					'val_NSE_history': val_NSE_history,
+					'lr_history': lr_history,
 					'train_indices': train_loc,
 					'val_indices': val_loc,
 					'test_indices': test_loc,
@@ -2543,6 +2654,7 @@ def worker(rank, world_size, job_id):
 					'best_model_epoch': best_model_epoch,
 					'train_loss_history': train_loss_history,
 					'val_loss_history': val_loss_history,
+					'train_NSE_history': train_NSE_history,
 					'val_NSE_history': val_NSE_history,
 					'train_indices': train_loc,
 					'val_indices': val_loc,
@@ -2656,16 +2768,29 @@ def worker(rank, world_size, job_id):
 	if rank == 0:
 		# Plot loss curves throughout training. Normalize each curve relative to its mean,
 		# to make the scales comparable.
-		print("TRAIN LOSS HISOTRY", train_loss_history)
 		train_loss_history = train_loss_history[~np.any(np.isnan(train_loss_history), axis=1)]
-		print("AFTER REMOVING NAN", train_loss_history)
 		val_loss_history = val_loss_history[~np.any(np.isnan(val_loss_history), axis=1)]
-
 		losses = [(train_loss_history[:, loss_idx] / train_loss_history[:, loss_idx].mean()) for loss_idx in range(len(args.losses))] + \
 				[(val_loss_history[:, loss_idx] / val_loss_history[:, loss_idx].mean()) for loss_idx in range(len(args.losses))]
-		print("Losses", losses)
 		labels = [f"{loss} loss (train)" for loss in args.losses] + [f"{loss} loss (val)" for loss in args.losses]
 		visualization_utils.plot_losses(os.path.join(PLOT_DIR, "losses.png"), losses, labels)
+
+		# Also plot NSE curves: first remove nans
+		train_NSE_history = train_NSE_history[~np.any(np.isnan(train_NSE_history), axis=1)].flatten().tolist()
+		val_NSE_history = val_NSE_history[~np.any(np.isnan(val_NSE_history), axis=1)].flatten().tolist()
+		visualization_utils.plot_losses(os.path.join(PLOT_DIR, "nses.png"),
+									    [train_NSE_history, val_NSE_history],
+										["Train NSE", "Val NSE"],
+										min_val=0, max_val=1)
+
+		# Plot learning rate schedule
+		if scheduler is not None:
+			plt.plot(np.arange(lr_history.size), lr_history)
+			plt.xlabel('Epoch #')
+			plt.ylabel('Learning rate')
+			plt.title('Learning rate schedule')
+			plt.savefig(os.path.join(PLOT_DIR, "lr_schedule.png"))
+			plt.close()
 
 		#######################################################
 		# Get best model's predictions on train/val/test sets
@@ -2697,7 +2822,7 @@ def worker(rank, world_size, job_id):
 		train_simu_all_layers, _ = best_guess_model(train_x.to(device), train_z.to(device), train_c.to(device), whether_predict=1)
 		val_simu_all_layers, _ = best_guess_model(val_x.to(device), val_z.to(device), val_c.to(device), whether_predict=1)
 		test_simu_all_layers, _ = best_guess_model(test_x.to(device), test_z.to(device), test_c.to(device), whether_predict=1)
-		simu_soc_all_layers = torch.tensor(np.ones((wosis_profile_info.shape[0], 20))*np.nan, dtype = torch.float32, device=device)
+		simu_soc_all_layers = torch.tensor(np.ones((wosis_profile_info.shape[0], 20))*np.nan, device=device)  # dtype = torch.float32,
 		simu_soc_all_layers[train_profile_id, :] = train_simu_all_layers[:, 0:20]
 		simu_soc_all_layers[val_profile_id, :] = val_simu_all_layers[:, 0:20]
 		simu_soc_all_layers[test_profile_id, :] = test_simu_all_layers[:, 0:20]
@@ -2730,8 +2855,8 @@ def worker(rank, world_size, job_id):
 
 		## predictions and parameters for the test profiles ##
 
-		best_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
-		best_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
+		best_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, device=device)  # dtype = torch.float32, 
+		best_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, device=device)  # dtype = torch.float32, 
 		upper_depth_all = np.ones((wosis_profile_info.shape[0], 200))*np.nan
 		lower_depth_all = np.ones((wosis_profile_info.shape[0], 200))*np.nan
 
@@ -2815,8 +2940,8 @@ def worker(rank, world_size, job_id):
 		## predictions and parameters for the validation profiles ##
 
 		# initializz a seperate array to store the prediction results for the validation profiles
-		val_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
-		val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
+		val_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, device=device)  # dtype = torch.float32,
+		val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, device=device)  # dtype = torch.float32,
 
 		val_simu_soc[val_profile_id, :] = best_guess_val_y_hat
 		val_pred_para[val_profile_id, :] = best_guess_val_pred_para
@@ -2889,8 +3014,8 @@ def worker(rank, world_size, job_id):
 		## predictions and parameters for the training profiles ##
 
 		# initializz a seperate array to store the prediction results for the training profiles
-		train_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, dtype = torch.float32, device=device)
-		train_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, dtype = torch.float32, device=device)
+		train_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, device=device)  # dtype = torch.float32, 
+		train_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, device=device)  # dtype = torch.float32, 
 
 		train_simu_soc[train_profile_id, :] = best_guess_train_y_hat
 		train_pred_para[train_profile_id, :] = best_guess_train_pred_para
@@ -3043,17 +3168,20 @@ def worker(rank, world_size, job_id):
 		visualization_utils.plot_observations_world_map(test_lons, test_lats, scaled_diff, PLOT_DIR, "test_scaled_diff_" + job_id, us_only=True)
 
 
-		# Plot pred SOC and parameters
-		visualization_utils.plot_observations_world_map(test_lons[np.array(test_profile_id_ordered)],
-														test_lats[np.array(test_profile_id_ordered)],
-														np.array(pred_test_soc),  #.detach().cpu().numpy(),
-														PLOT_DIR,
-														"test_pred_soc_FINAL", us_only=(args.split != 'us_vs_world'))
-		visualization_utils.plot_observations_world_map(test_lons[np.array(test_profile_id_ordered)],
-														test_lats[np.array(test_profile_id_ordered)],
-														np.array(true_test_soc),  #.detach().cpu().numpy(),
-														PLOT_DIR,
-														"test_true_soc_FINAL", us_only=(args.split != 'us_vs_world'))
+		# TODO: These pred/true values calculated in scaled difference above seem wrong.
+		# # Plot pred SOC and parameters
+		# visualization_utils.plot_observations_world_map(test_lons[np.array(test_profile_id_ordered)],
+		# 												test_lats[np.array(test_profile_id_ordered)],
+		# 												np.array(pred_test_soc),  #.detach().cpu().numpy(),
+		# 												PLOT_DIR,
+		# 												"test_pred_soc_FINAL", us_only=(args.split != 'us_vs_world'))
+		# visualization_utils.plot_observations_world_map(test_lons[np.array(test_profile_id_ordered)],
+		# 												test_lats[np.array(test_profile_id_ordered)],
+		# 												np.array(true_test_soc),  #.detach().cpu().numpy(),
+		# 												PLOT_DIR,
+		# 												"test_true_soc_FINAL", us_only=(args.split != 'us_vs_world'))
+
+		
 		for i, para_name in enumerate(para_names):  # in range(best_pred_para.shape[1]):
 			visualization_utils.plot_observations_world_map(test_lons[test_profile_id_num],
 															test_lats[test_profile_id_num],
@@ -3209,8 +3337,8 @@ def worker(rank, world_size, job_id):
 		print("-----------------Model Test Finished at " + str(datetime.now()) + "-----------------")
 
 		# Predict the SOC values based on Grid environmental information using the best model
-		grid_simu_soc, grid_pred_para = best_guess_model(torch.tensor(predict_data_x, dtype=torch.float32, device=device), torch.tensor(predict_data_z, dtype=torch.float32, device=device),
-										                 torch.tensor(predict_data_c, dtype=torch.float32, device=device), whether_predict = 1)
+		grid_simu_soc, grid_pred_para = best_guess_model(torch.tensor(predict_data_x, device=device), torch.tensor(predict_data_z, device=device),  # dtype = torch.float32, 
+										                 torch.tensor(predict_data_c, device=device), whether_predict = 1)  
 		# Save the predicted SOC values, parameters and location data into csv files
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_simu_soc_' + job_id + '.csv', grid_simu_soc.detach().cpu().numpy(), delimiter = ',')
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_pred_para_' + job_id + '.csv', grid_pred_para.detach().cpu().numpy(), delimiter = ',')
@@ -3237,7 +3365,7 @@ def worker(rank, world_size, job_id):
 			carbon_input_pred, cpool_steady_state_pred, cpools_layer_pred, soc_layer_pred, total_res_time_pred, \
 				total_res_time_base_pred, res_time_base_pools_pred, t_scaler_pred, bulk_A_pred, \
 				w_scaler_pred, bulk_K_pred, bulk_V_pred, bulk_xi_pred, bulk_I_pred, litter_fraction_pred = fun_bulk_simu(grid_pred_para.to(device), \
-																												torch.tensor(predict_data_x, dtype=torch.float32, device=device), args.vertical_mixing)
+																												torch.tensor(predict_data_x, device=device), args.vertical_mixing)  # dtype = torch.float32, 
 
 			# Save the bulk simulation results into csv files
 			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_carbon_input_' + job_id + '.csv', carbon_input_pred.detach().cpu().numpy(), delimiter = ',')
@@ -3275,6 +3403,7 @@ def worker(rank, world_size, job_id):
 
 
 if __name__ == '__main__':
+
 	# Number of CPUs requester
 	world_size = args.num_CPU
 	processes = []

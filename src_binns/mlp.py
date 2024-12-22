@@ -478,11 +478,13 @@ class nn_only(nn.Module):
 	def __init__(self, input_vars, var_idx_to_emb, pos_enc, output_dim=140,
 				 lipschitz=False, one_hot=False, use_bn=False, dropout_prob=0.0,
 				 leaky_relu=False, rep_grad=False,
-				 losses=["l1", "param_reg"], device="cpu", min_val=None, max_val=None):
+				 losses=["l1", "param_reg"], device="cpu", output_mean=None, output_std=None):
 		"""
 		var_idx_to_emb is a dictionary mapping from categorical variable index to either
 		(1) Embedding layer (if one_hot is False)
 		(2) Number of categories (if one_hot is True)
+
+		If output_mean and output_std are provided, uses them to rescale the output.
 		"""
 		super().__init__()
 
@@ -506,14 +508,13 @@ class nn_only(nn.Module):
 			self.var_idx_to_emb = nn.ModuleDict(self.var_idx_to_emb)
 			for _, emb in self.var_idx_to_emb.items():
 				self.new_input_size += emb.embedding_dim
-		print("NN only")
 
 		# Number of parameters (totally fake)
 		self.num_params = 22
 
 		# Output transformation
-		self.min_val = min_val
-		self.max_val = max_val
+		self.output_mean = output_mean
+		self.output_std = output_std
 
 		# Spatial Encoder from PE-GNN
 		if pos_enc != "none":
@@ -582,8 +583,8 @@ class nn_only(nn.Module):
 		# Pass through MLP to get fake pred_para
 		pred_para = self.mlp(new_input)
 		pred_output = self.final_layer(F.relu(pred_para))
-		if self.min_val is not None and self.max_val is not None:
-			pred_output = pred_output*(self.max_val-self.min_val) + self.min_val
+		if self.output_mean is not None and self.output_std is not None:
+			pred_output = pred_output * self.output_std + self.output_mean
 
 		# Convert 140 pools to 20 layers
 		pred_output = pred_output.reshape((pred_output.shape[0], 20, 7)).mean(dim=2)
