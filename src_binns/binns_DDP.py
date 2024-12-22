@@ -102,7 +102,7 @@ parser.add_argument("--vertical_mixing", type=str, default='original', choices=[
 
 # Data split
 parser.add_argument("--data_seed", type=int, default=-1, help="Random seed for splitting data. -1 means use same as args.seed")
-parser.add_argument("--n_datapoints", type=int, default=-1, help="Set this to train on a random subset of this many datapoints (includes train+val+test). -1 to use the whole dataset")
+parser.add_argument("--n_datapoints", type=int, default=-1, help="Set this to train on a random subset of this many datapoints (for train+val+test). -1 to use the whole dataset")
 parser.add_argument("--cross_val_idx", type=int, default=0, help="Cross-validation index")
 parser.add_argument("--split", type=str, default='random', choices=['random', 'north', 'east', 'south', 'west', 'us_vs_world'],
 					help='How to split val/test sets. If `random`, just hold out random examples. If `north`, hold out `test_fraction` most' +
@@ -128,24 +128,24 @@ parser.add_argument("--weight_decay", type=float, default=1e-4)
 parser.add_argument("--use_swa", action='store_true', help="Whether to use Stochastic Weight Averaging")
 parser.add_argument("--clip_value", type=float, default=-1, help="Clip value for gradient clipping. -1 for no clipping.")
 
-# Loss balancing
+# Losses and loss weights
 parser.add_argument("--losses", nargs="+", choices=["l1", "l2", "param_reg", "spectral", "lipmlp", "cure", "spatial_error", "spatial_emb_smoothness", "param_smoothness", "residual"], default=["l1", "param_reg"])
 parser.add_argument("--loss_weighting", default="manual", choices=["manual", "relobralo", "IMTL", "two_stage"])
 parser.add_argument("--lambdas", nargs="+", type=float, default=[1.0, 10.0], help="If loss_weighting is manual, provide weights in the same order that you listed losses in `args.losses`")
 parser.add_argument("--second_start", type=int, default=30, help="If loss_weighting is two_stage, epoch the second phase starts")
 parser.add_argument("--second_lambdas", nargs="+", type=float, default=[1.0, 10.0], help="If loss_weighting is two_stage, weights for the second stage - in the same order that you listed losses in `args.losses`")
 
-# Relobralo specific hyperparams (specific method of loss balancing; only used if you set `--loss_weighting relobralo`)
+# Relobralo specific hyperparams (specific method of loss balancing: only used if you set `--loss_weighting relobralo`)
 parser.add_argument("--relobralo_alpha", type=float, default=0.9, help="Exponential decay rate for Relobralo")
 parser.add_argument("--relobralo_temp", type=float, default=0.1, help="Softmax temperature for Relobralo")
 parser.add_argument("--relobralo_saudade", type=float, default=0.999, help="Saudade (1 minus probability of looking back to epoch 0)")
 
 # Positional encoding / GNN
-parser.add_argument("--graph_conv", type=str, default="gcn", choices=["gcn", "gat", "gcn1", "gat1"], help="For GNN, which graph conv to use")
-parser.add_argument("--k", type=int, default=20, help="Nearest neighbors for graph (GNN/Spatial only)")
+parser.add_argument("--lonlat_features", action='store_true', help="Whether longitude and latitude should be passed as features")
 parser.add_argument("--pos_enc", type=str, default='none', choices=['none', 'early', 'late'],
 					help="How lon/lat features are encoded. 'none' means not used. 'early' means that positional encoding is concatenated with other features. 'late' means that it is only used as an error term for the latent parameters.")
-parser.add_argument("--lonlat_features", action='store_true', help="Whether longitude and latitude should be passed as features")
+parser.add_argument("--graph_conv", type=str, default="gcn", choices=["gcn", "gat", "gcn1", "gat1"], help="For GNN, which graph conv to use")
+parser.add_argument("--k", type=int, default=20, help="Nearest neighbors for graph (GNN/Spatial only)")
 
 # Computational environment
 parser.add_argument("--use_ddp", type=int, default=1, help="Whether to use DDP")
@@ -291,8 +291,9 @@ else:
 	if args.vertical_mixing == 'simple_two_intercepts':
 		para_names.append('intercept_leach')
 
-# Parameters index for retrieval test
-para_index = np.arange(0, len(para_names))  # If choosing all parameters
+# parameters index for retrieval test
+# If choosing all parameters
+para_index = np.arange(0, len(para_names))
 # para_index = [0, 2, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20]
 
 # Soil depths info
@@ -897,6 +898,7 @@ if args.whether_resume == 0:
 		else:
 			# Compute train/val/test indices
 			if args.split == 'random':
+				# Randomly split US datapoints into train/val/test (ignoring geography) 
 				rng = np.random.default_rng(seed=args.data_seed)
 				# Determine the number of training samples based on the ratios
 				train_loc = rng.choice(np.arange(0, n_datapoints), size=round((1 - args.val_ratio - args.test_ratio) * n_datapoints), replace=False)
@@ -907,7 +909,7 @@ if args.whether_resume == 0:
 				val_loc = rng.choice(remaining_loc, size=num_val_samples, replace=False)
 				test_loc = np.setdiff1d(remaining_loc, val_loc)
 			elif args.split == 'us_vs_world':
-				# choose the profile id with lat and lon within the range of the United States
+				# Train set is southern US, validation set is northern US, test set is rest of world
 				train_loc = np.flatnonzero(
 					(wosis_profile_info[current_data_profile_id, 2] == 156) &
 					(wosis_profile_info[current_data_profile_id, 3] >= -124.763068) &
@@ -925,8 +927,9 @@ if args.whether_resume == 0:
 				test_loc = np.setdiff1d(np.arange(0, n_datapoints), train_loc)
 				test_loc = np.setdiff1d(test_loc, val_loc)
 
-			elif args.split == 'north':  # current_data_c[:, 1] contains lats
-				sorted_lats = np.sort(current_data_c[:, 1])
+			elif args.split == 'north':
+				# Test set is 20% furthest-north datapoints, validation set is next furthest-north 20%
+				sorted_lats = np.sort(current_data_c[:, 1])   # current_data_c[:, 1] contains lats
 				val_thresh = sorted_lats[int((1-args.val_ratio-args.test_ratio)*n_datapoints)]
 				test_thresh = sorted_lats[int((1-args.test_ratio)*n_datapoints)]
 				train_loc = np.flatnonzero(current_data_c[:, 1] < val_thresh)  # Indices where lat < val_thresh
@@ -1606,7 +1609,7 @@ def worker(rank, world_size, job_id):
 			var_idx_to_emb[str(idx)] = emb
 
 	# TODO Not sure if "global model" is correct
-	# global model
+	global model
 	if args.model == 'old_mlp':
 		model_class = nn_model
 		model_kwargs = {"input_vars": len(var4nn),
@@ -1736,14 +1739,14 @@ def worker(rank, world_size, job_id):
 
 	# Scheduler
 	if args.use_swa:
-		# TODO Double-check Stochastic Weight Averaging implementation
+		# Stochastic Weight Averaging. TODO - not tested fully.
 		swa_model = AveragedModel(model)
 		# scheduler = CosineAnnealingLR(optimizer, T_max=20, verbose=True)
 		scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr, gamma=0.1)
 		swa_start = 25
 		swa_scheduler = SWALR(optimizer, swa_lr=args.lr)
 	else:
-		# Add a learning rate scheduler that decreases the learning rate by a factor of 0.1 every 50 epochs
+		# If desired, add a learning rate scheduler that decays the learning rate throughout training
 		if args.scheduler == "reduce_on_plateau":
 			scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)  #, mode="max")
 		elif args.scheduler == "step":
@@ -1902,12 +1905,15 @@ def worker(rank, world_size, job_id):
 
 			#------------ 1 forward
 			# train_nn_start = time.time()
-			if args.model in ['gnn', 'spatial']:
+			if args.model in ['gnn', 'spatial']: 
+				# GNN/spatial models return extra information about spatial smoothness that might be used in loss function
 				plot_dir = PLOT_DIR if (ibatch==1 and iepoch%5==0) else None
 				batch_y_hat, batch_pred_para, spatial_emb, laplacian = model(batch_x, batch_z, batch_c, whether_predict=0, return_extra=True, plot_dir=plot_dir)
 			elif args.model == 'binn_hybrid':
+				# BINN hybrid model also returns "residual", which could be penalized in loss function
 				batch_y_hat, batch_pred_para, residual = model(batch_x, batch_z, batch_c, whether_predict=0, return_residual=True)
 			else:
+				# Normal models just return predicted (1) SOC, (2) parameters
 				batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0)
 
 			# Check if batch_pred_para is nan or inf
@@ -2239,7 +2245,8 @@ def worker(rank, world_size, job_id):
 		val_NSE_history[iepoch, :] = torch.stack(all_val_NSE).mean().detach().cpu().numpy()
 
 		# Create tensors of {train/val} {pred/true} SOC over all sites in THIS RANK.
-		# These are of shape [n_examples_per_rank, 200] where 200 is the max number of observed depths per site.
+		# We do this so we can calculate NSE across ALL SITES (across all ranks).
+		# These have shape [n_examples_per_rank, 200] where 200 is the max number of observed depths per site.
 		# Note that DistributedSampler contains repeated examples. We do not remove them.
 		all_train_pred_soc = torch.cat(all_train_pred_soc, dim=0)  # Pred SOC for this rank
 		all_train_true_soc = torch.cat(all_train_true_soc, dim=0)
@@ -2277,7 +2284,6 @@ def worker(rank, world_size, job_id):
 		allrank_train_true_soc = torch.cat(train_true_soc_list, dim=0)
 		allrank_val_pred_soc = torch.cat(val_pred_soc_list, dim=0)
 		allrank_val_true_soc = torch.cat(val_true_soc_list, dim=0)
-		# smooth_l1_loss, l2_loss, param_reg_loss, val_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
 
 		####################################################
 		## Create true vs predicted scatters per 50 epoch ##
@@ -3131,6 +3137,8 @@ def worker(rank, world_size, job_id):
 		test_profile_id_ordered = []
 
 		# for each location, calculate the difference between the predicted and observed SOC values
+		# TODO: Not sure if this is correct. binn_obs_soc contains SOC at the observed depths (given in z),
+		# but best_simu_soc contains SOC at the fixed 20 layers.
 		for i in range(binn_obs_soc.shape[0]):
 			if np.isnan(binn_obs_soc[i, :]).all() or torch.isnan(best_simu_soc[i, :]).all():
 				continue
