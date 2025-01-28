@@ -14,7 +14,7 @@ class mlp(torch.nn.Module):
 	"""
 	New MLP from this repo: https://github.com/whitneychiu/lipmlp_pytorch/blob/main/models/mlp.py
 	"""
-	def __init__(self, dims, use_bn=False, dropout_prob=0.0, leaky_relu=False):
+	def __init__(self, dims, use_bn=False, dropout_prob=0.0, leaky_relu=False, init='xavier_uniform'):
 		"""
 		dim[0]: input dim
 		dim[1:-1]: hidden dims
@@ -44,9 +44,25 @@ class mlp(torch.nn.Module):
 			self.relu = torch.nn.ReLU()
 
 		# Initialize linear layers
-		for layer in self.layers + [self.layer_output]:
-			nn.init.xavier_uniform_(layer.weight)
-			nn.init.zeros_(layer.bias)
+		if init == "xavier_uniform":
+			gain_leaky_relu = nn.init.calculate_gain('leaky_relu', 0.3)
+			gain_sigmoid = nn.init.calculate_gain('sigmoid')
+			for layer in self.layers:
+				nn.init.xavier_uniform_(layer.weight, gain=gain_leaky_relu)
+				nn.init.zeros_(layer.bias)
+			nn.init.xavier_uniform_(self.layer_output.weight, gain=gain_sigmoid)
+			nn.init.zeros_(self.layer_output.bias)
+		elif init == "kaiming_uniform":
+			for layer in self.layers + [self.layer_output]:
+				if leaky_relu:
+					nn.init.kaiming_uniform_(layer.weight, nonlinearity='leaky_relu', a=0.3)
+				else:
+					nn.init.kaiming_uniform_(layer.weight, nonlinearity='relu')
+			nn.init.zeros_(self.layer_output.bias)
+		elif init == 'default':
+			pass
+		else:
+			raise NotImplementedError("Unsupported init")
 
 		# Power iteration for spectral norm
 		self.sr_u = {}
@@ -132,11 +148,15 @@ class mlp_wrapper(nn.Module):
 	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, pos_enc,
 				 lipschitz=False, one_hot=False, use_bn=False, dropout_prob=0.0,
 				 leaky_relu=False, rep_grad=False,
-				 losses=["l1", "param_reg"], device="cpu"):
+				 losses=["l1", "param_reg"], device="cpu", train_x=None,
+				 min_temp=10, max_temp=109, init="xavier_uniform", width=128):
 		"""
 		var_idx_to_emb is a dictionary mapping from categorical variable index to either
 		(1) Embedding layer (if one_hot is False)
 		(2) Number of categories (if one_hot is True)
+
+		If train_x is provided, use this to rescale the input. Specifically, compute mean/std
+		for non-categorical variables as train_x[:, self.non_categorical_indices, 0, 0].mean(dim=0).
 		"""
 		super().__init__()
 
@@ -167,6 +187,15 @@ class mlp_wrapper(nn.Module):
 		else:
 			self.num_params = 21
 
+		# Input transformation
+		if train_x is not None:
+			train_features = train_x[:, self.non_categorical_indices, 0, 0]
+			self.input_mean = train_features.mean(dim=0, keepdim=True)
+			self.input_std = train_features.std(dim=0, keepdim=True)
+		else:
+			self.input_mean = None
+			self.input_std = None
+
 		# Spatial Encoder from PE-GNN
 		if pos_enc != "none":
 			self.spatial_encoder = GridCellSpatialRelationEncoder(
@@ -176,21 +205,23 @@ class mlp_wrapper(nn.Module):
 				max_radius=360,
 				min_radius=1e-06,
 				freq_init="geometric",
-				ffn=True # Enable feedforward network for final spatial embeddings
+				ffn=False,  # TODO True # Enable feedforward network for final spatial embeddings
 			)
 		if pos_enc == "early":
 			self.new_input_size += self.num_params  # Add the spatial embeddings
 
 		# MLP backbone
 		if lipschitz:
-			self.mlp = lipmlp((self.new_input_size, 256, 256, self.num_params),
-							  use_bn=use_bn, dropout_prob=dropout_prob)  # TODO different initialization methods, leaky relu, dropout, etc. not supported
+			self.mlp = lipmlp((self.new_input_size, width, width, self.num_params),
+							   use_bn=use_bn, dropout_prob=dropout_prob)  # TODO different initialization methods, leaky relu, dropout, etc. not supported
 		else:
-			self.mlp = mlp((self.new_input_size, 256, 256, self.num_params),
-							  use_bn=use_bn, dropout_prob=dropout_prob, leaky_relu=leaky_relu)
+			self.mlp = mlp((self.new_input_size, width, width, self.num_params),  # TEMP TODO @joshuafan, 256, 256
+							  use_bn=use_bn, dropout_prob=dropout_prob, leaky_relu=leaky_relu, init=init)
 
 		# sigmoid parameter
 		self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)
+		self.min_temp = min_temp
+		self.max_temp = max_temp
 		self.sigmoid = nn.Sigmoid()
 
 		# LibMTL specific
@@ -201,7 +232,7 @@ class mlp_wrapper(nn.Module):
 
 
 	def forward(self, input_var, wosis_depth, coords, whether_predict,
-				return_spatial_embedding=False):
+				return_spatial_embedding=False, one_param_only=False):
 		predictor = input_var[:, :, 0, 0]
 		forcing = input_var[:, :, :, :]
 		obs_depth = wosis_depth
@@ -217,14 +248,22 @@ class mlp_wrapper(nn.Module):
 				emb = 0.1*F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
 			else:
 				emb = embedding_layer(predictor[:, idx].int())
-				emb = F.normalize(emb, p=2, dim=1)  # New @joshuafan: normalize embeddings
+				emb = F.normalize(emb, p=2, dim=1)  # New @joshuafan: normalize embeddings. TODO Reconsider this
 			embs.append(emb)
 		all_embs = torch.concatenate(embs, dim=1)
-		new_input = torch.concatenate([predictor[:, self.non_categorical_indices], all_embs], dim=1)
+
+		# Preprocess numeric (non-categorical) features
+		features = predictor[:, self.non_categorical_indices]  # [batch, n_features]
+		if self.input_mean is not None and self.input_std is not None:
+			features = (features - self.input_mean) / self.input_std
+
+		# Combine numeric features and categorical embeddings
+		new_input = torch.concatenate([features, all_embs], dim=1)
 
 		# Spatial Encoding
 		if self.pos_enc == "early":
 			spatial_embeddings = self.spatial_encoder(coords).squeeze(1) # Remove the channel dimension. [batch, params]
+			# print("Spatial embeds", spatial_embeddings)
 			new_input = torch.concatenate([spatial_embeddings, new_input], dim=1)
 
 		# check if new_input is nan
@@ -233,6 +272,7 @@ class mlp_wrapper(nn.Module):
 			exit(1)
 
 		# Pass through MLP
+		self.new_input = new_input
 		mlp_output = self.mlp(new_input)
 
 		# check if mlp output is nan
@@ -240,8 +280,8 @@ class mlp_wrapper(nn.Module):
 			print("mlp_output was nan", mlp_output)
 			exit(1)
 
-		# Clamp temp_sigmoid to be between 10 and 200
-		clamped_temp_sigmoid = 10 + 99*self.sigmoid(self.temp_sigmoid)   #10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range
+		# Clamp temp_sigmoid to be within a range
+		clamped_temp_sigmoid = self.min_temp + (self.max_temp - self.min_temp) * self.sigmoid(self.temp_sigmoid)  # 10 + 90*self.sigmoid(self.temp_sigmoid)   #10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range
 
 		# Positional encoder correction (if using)
 		if self.pos_enc == "late":
@@ -250,6 +290,24 @@ class mlp_wrapper(nn.Module):
 
 		# Pass parameters through sigmoid to constrain their range
 		h5 = self.sigmoid(mlp_output / clamped_temp_sigmoid)
+		if h5.requires_grad:
+			h5.retain_grad()
+
+		# import misc_utils
+		# misc_utils.print_summary(self.mlp.layer_output.weight, "FINAL WEIGHT")
+		# misc_utils.print_summary(self.mlp.layer_output.bias, "FINAL BIAS")
+		# misc_utils.print_summary(mlp_output, "MLP OUTPUT")
+		# misc_utils.print_summary(h5, "PRED PARAMS", dim=0)
+		# print(self.mlp.layer_output.weight.requires_grad)
+
+		if one_param_only:
+			# Choose one parameter to update, stop gradient w.r.t. other params
+			import random
+			param_idx = random.randint(0, h5.shape[1])
+			prev = h5[:, :param_idx].detach()
+			param_vals = h5[:, param_idx:param_idx+1]
+			next = h5[:, param_idx:].detach()
+			h5 = torch.cat([prev, param_vals, next], dim=1)
 
 		# check if h5 is nan
 		if torch.isnan(h5).any() or torch.isinf(h5).any():
@@ -266,6 +324,72 @@ class mlp_wrapper(nn.Module):
 			return simu_soc, h5, spatial_embeddings
 		else:
 			return simu_soc, h5
+
+
+	def forward_ignoring_input(self, input_var, wosis_depth):
+		"""
+		Use same parameter set for all sites (determined by layer_output's bias).
+		"""
+		predictor = input_var[:, :, 0, 0]
+		forcing = input_var[:, :, :, :]
+		obs_depth = wosis_depth
+
+		# Use "layer_output.bias" as globally-fixed parameter set
+		clamped_temp_sigmoid = 0.5 + 1*self.sigmoid(self.temp_sigmoid)  # 10 + 90*self.sigmoid(self.temp_sigmoid)   #10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range
+		bias = self.mlp.layer_output.bias  # [n_params]
+		bias = bias.repeat((predictor.shape[0], 1))  # [batch, n_params]
+		h5 = self.sigmoid(bias / clamped_temp_sigmoid)
+		# print("forward_ignoring_input Current params", h5[0, :])
+		simu_soc = fun_model_simu(h5, forcing, obs_depth, self.vertical_mixing)  # [batch, n_depths]
+		return simu_soc, h5
+
+
+	def predict_params_summed(self, func, input):
+		return func(input).sum(0)
+
+	def get_jacobian(self, input=None):
+		"""
+		Returns Jacobian, of shape [batch, n_param, n_input].
+		For each batch item, it is dParam/dInput.
+
+		If input is not provided, assume something is cached in self.new_input
+		"""
+		if input is None:
+			input = self.new_input  
+
+		# # Naive jacobian. Includes a lot of zero entries as one example's output
+		# # is not influenced by other examples' input.
+		# batch_jacobian0 = torch.autograd.functional.jacobian(self.mlp, self.new_input)
+		# print("Jacobian0", batch_jacobian0.shape)
+		# batch_jacobian0 = batch_jacobian0.sum(0)
+
+		# Using jacrev, summing the outputs across batch as each example's output
+		# only depends on that example's input
+		# perturbed_input = self.new_input + 0.1*torch.randn_like(self.new_input)  # Add noise to input
+		batch_jacobian1 = torch.func.jacrev(self.predict_params_summed, argnums=1)(self.mlp, input)  # [n_params, batch, n_inputs]
+		batch_jacobian1 = batch_jacobian1.permute((1, 0, 2))  # [batch, n_params, n_inputs]
+		# print("Batch jacobian", batch_jacobian1.shape)
+		# assert torch.allclose(batch_jacobian0, batch_jacobian1)
+
+		# # Finite difference check
+		# x = self.new_input[0, :]
+		# eps = 0.01 * torch.randn_like(x)
+		# f_x = self.mlp(x.unsqueeze(0))[:, 5]
+		# f_x_eps = self.mlp((x+eps).unsqueeze(0))[:, 5]  # f(x+eps)
+		# gradient = batch_jacobian1[0, 5, :]
+		# f_x_eps_approx = f_x + torch.dot(gradient, eps)
+		# assert torch.allclose(f_x_eps, f_x_eps_approx)
+		# print("f(x)", f_x)
+		# print("f(x+eps)", f_x_eps)
+		# print("f(x) + grad f(x) * eps", f_x_eps_approx)
+
+
+		return batch_jacobian1
+		
+ 
+
+
+
 
 
 	def partial_forward(self, new_input, input_var, wosis_depth):
@@ -316,6 +440,8 @@ class mlp_wrapper(nn.Module):
 		self.mlp.zero_grad(set_to_none=False)
 		for idx, emb in self.var_idx_to_emb.items():
 			emb.zero_grad(set_to_none=False)
+
+
 
 
 #---------------------------------------------------
@@ -430,6 +556,7 @@ class BINN_Hybrid(nn.Module):
 			exit(1)
 
 		# Pass through MLP
+		self.new_input = new_input
 		mlp_output = self.mlp(new_input)
 
 		# check if mlp output is nan
@@ -478,13 +605,16 @@ class nn_only(nn.Module):
 	def __init__(self, input_vars, var_idx_to_emb, pos_enc, output_dim=140,
 				 lipschitz=False, one_hot=False, use_bn=False, dropout_prob=0.0,
 				 leaky_relu=False, rep_grad=False,
-				 losses=["l1", "param_reg"], device="cpu", output_mean=None, output_std=None):
+				 losses=["l1", "param_reg"], device="cpu", output_mean=None, output_std=None, train_x=None,
+				 min_temp=10, max_temp=109, init="xavier_uniform"):
 		"""
 		var_idx_to_emb is a dictionary mapping from categorical variable index to either
 		(1) Embedding layer (if one_hot is False)
 		(2) Number of categories (if one_hot is True)
 
 		If output_mean and output_std are provided, uses them to rescale the output.
+		If train_x is provided, use this to rescale the input. Specifically, compute mean/std
+		for non-categorical variables as train_x[:, self.non_categorical_indices, 0, 0].mean(dim=0).
 		"""
 		super().__init__()
 
@@ -512,6 +642,15 @@ class nn_only(nn.Module):
 		# Number of parameters (totally fake)
 		self.num_params = 22
 
+		# Input transformation
+		if train_x is not None:
+			train_features = train_x[:, self.non_categorical_indices, 0, 0]
+			self.input_mean = train_features.mean(dim=0, keepdim=True)
+			self.input_std = train_features.std(dim=0, keepdim=True)
+		else:
+			self.input_mean = None
+			self.input_std = None
+
 		# Output transformation
 		self.output_mean = output_mean
 		self.output_std = output_std
@@ -533,20 +672,20 @@ class nn_only(nn.Module):
 		# MLP backbone
 		if lipschitz:
 			self.mlp = lipmlp((self.new_input_size, 256, 256, self.num_params),
-							  use_bn=use_bn, dropout_prob=dropout_prob)  # TODO different initialization methods, leaky relu, dropout, etc. not supported
+							   use_bn=use_bn, dropout_prob=dropout_prob)  # TODO different initialization methods, leaky relu, dropout, etc. not supported
 		else:
 			self.mlp = mlp((self.new_input_size, 256, 256, self.num_params),
-							  use_bn=use_bn, dropout_prob=dropout_prob, leaky_relu=leaky_relu)
+							use_bn=use_bn, dropout_prob=dropout_prob, leaky_relu=leaky_relu, init=init)
 		self.final_layer = nn.Linear(self.num_params, self.output_dim)
-		nn.init.xavier_uniform_(self.final_layer.weight)
-		nn.init.zeros_(self.final_layer.bias)
+		# nn.init.xavier_uniform_(self.final_layer.weight)
+		# nn.init.zeros_(self.final_layer.bias)
 
 		# sigmoid parameter
 		self.sigmoid = nn.Sigmoid()
 
 
 	def forward(self, input_var, wosis_depth, coords, whether_predict,
-				return_spatial_embedding=False):
+				return_spatial_embedding=False, **kwargs):
 		predictor = input_var[:, :, 0, 0]
 		forcing = input_var[:, :, :, :]
 		obs_depth = wosis_depth
@@ -565,7 +704,14 @@ class nn_only(nn.Module):
 				emb = F.normalize(emb, p=2, dim=1)  # New @joshuafan: normalize embeddings
 			embs.append(emb)
 		all_embs = torch.concatenate(embs, dim=1)
-		new_input = torch.concatenate([predictor[:, self.non_categorical_indices], all_embs], dim=1)
+
+		# Preprocess numeric (non-categorical) features
+		features = predictor[:, self.non_categorical_indices]  # [batch, n_features]
+		if self.input_mean is not None and self.input_std is not None:
+			features = (features - self.input_mean) / self.input_std
+
+		# Combine numeric features and categorical embeddings
+		new_input = torch.concatenate([features, all_embs], dim=1)
 
 		# Spatial Encoding
 		if self.pos_enc == "early":
@@ -581,6 +727,7 @@ class nn_only(nn.Module):
 			exit(1)
 
 		# Pass through MLP to get fake pred_para
+		self.new_input = new_input
 		pred_para = self.mlp(new_input)
 		pred_output = self.final_layer(F.relu(pred_para))
 		if self.output_mean is not None and self.output_std is not None:

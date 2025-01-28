@@ -95,32 +95,33 @@ def _find_z(new_input, batch_y, batch_z, model, criterion, h):
 	return z, norm_grad, new_input
 
 
-def regularizer(batch_x, batch_y, batch_z, model, criterion, h = 3.):
-	'''
-	Regularizer term in CURE
+# def regularizer(batch_x, batch_y, batch_z, model, criterion, h = 3.):
+# 	'''
+# 	ARCHIVED. For now, instead of using gradient of loss w.r.t. input, use gradient of params w.r.t. input.
+# 	Regularizer term in CURE
 
-	Returns both curvature loss
-	'''
-	with torch.no_grad():
-		outputs, h5, new_input = model.eval()(batch_x, batch_z, whether_predict=0, return_input=True)
+# 	Returns both curvature loss
+# 	'''
+# 	with torch.no_grad():
+# 		outputs, h5, new_input = model.eval()(batch_x, batch_z, whether_predict=0, return_input=True)
 
-	# z is a direction of high curvature (pointing in similar direction to the gradient)
-	z, norm_grad, new_input = _find_z(batch_x, batch_y, batch_z, model, criterion, h)
+# 	# z is a direction of high curvature (pointing in similar direction to the gradient)
+# 	z, norm_grad, new_input = _find_z(batch_x, batch_y, batch_z, model, criterion, h)
 
-	new_input.requires_grad_()
+# 	new_input.requires_grad_()
 
-	# Compute
-	outputs_pos, _ = model.eval().partial_forward(new_input + z)
-	outputs_orig, _ = model.eval().partial_forward(new_input)
-	loss_pos = criterion(outputs_pos, batch_y)
-	loss_orig = criterion(outputs_orig, batch_y)
-	grad_diff = torch.autograd.grad((loss_pos-loss_orig), new_input,
-									 grad_outputs=torch.ones(batch_y.shape).to(batch_y.device),
-									 create_graph=True)[0]
-	reg = grad_diff.reshape(grad_diff.size(0), -1).norm(dim=1)
-	model.zero_grad()
+# 	# Compute
+# 	outputs_pos, _ = model.eval().partial_forward(new_input + z)
+# 	outputs_orig, _ = model.eval().partial_forward(new_input)
+# 	loss_pos = criterion(outputs_pos, batch_y)
+# 	loss_orig = criterion(outputs_orig, batch_y)
+# 	grad_diff = torch.autograd.grad((loss_pos-loss_orig), new_input,
+# 									 grad_outputs=torch.ones(batch_y.shape).to(batch_y.device),
+# 									 create_graph=True)[0]
+# 	reg = grad_diff.reshape(grad_diff.size(0), -1).norm(dim=1)
+# 	model.zero_grad()
 
-	return torch.sum(reg) / float(new_input.size(0)), norm_grad
+# 	return torch.sum(reg) / float(new_input.size(0)), norm_grad
 
 
 
@@ -193,3 +194,47 @@ def select_depth(tensor_simu, tensor_frocing_steady_state, tensor_obs_layer_dept
 	#end for iprofile
 	return simu_ouput
 # end nn_model
+
+
+
+def inject_noise(model, noise_std):
+	"""
+	Adds a small amount of random noise to the parameters of the network.
+
+	Source: https://github.com/shibhansh/loss-of-plasticity/blob/main/lop/incremental_cifar/incremental_cifar_experiment.py
+	"""
+	with torch.no_grad():
+		for param in model.parameters():
+			param.add_(torch.randn(param.size(), device=param.device) * noise_std)
+
+
+
+def print_summary(tensor, message="", dim=None):
+	if dim is None:
+		print(message, "- Shape", tensor.shape, "Mean", tensor.mean(), "Std", tensor.std(), "Min", tensor.min(), "Max", tensor.max())
+	else:
+		print(message, "- Shape", tensor.shape, "Mean", tensor.mean(dim=dim), "Std", tensor.std(dim=dim), "Min", tensor.min(dim=dim).values, "Max", tensor.max(dim=dim).values)
+
+
+import sys
+
+class Logger(object):
+	"""
+	Logger that writes printed statements to both stdout (terminal) and log file.
+	To use, set "sys.stdout = Logger(log_file)"
+	Source: https://stackoverflow.com/questions/14906764/how-to-redirect-stdout-to-both-file-and-console-with-scripting
+	"""
+	def __init__(self, log_file):
+		self.terminal = sys.stdout
+		self.log = open(log_file, "a")
+   
+	def write(self, message):
+		self.terminal.write(message)
+		self.log.write(message)  
+
+	def flush(self):
+		# this flush method is needed for python 3 compatibility.
+		# this handles the flush command by doing nothing.
+		# you might want to specify some extra behavior here.
+		pass    
+

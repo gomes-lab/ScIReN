@@ -45,6 +45,8 @@ def get_activation_function(activation, context_str):
         return nn.Sigmoid()
     elif activation == 'tanh':
         return nn.Tanh()
+    elif activation == 'none':  # @joshuafan: added option for no activation function
+        return nn.Identity()  # Does nothing
     else:
         raise Exception("{} activation not recognized.".format(context_str))
 
@@ -97,7 +99,7 @@ class SingleFeedForwardNN(nn.Module):
             self.skip_connection = False
         
         self.linear = nn.Linear(self.input_dim, self.output_dim)
-        nn.init.xavier_uniform(self.linear.weight)
+        nn.init.xavier_uniform_(self.linear.weight)
         
 
 
@@ -199,8 +201,8 @@ class MultiLayerFeedForwardNN(nn.Module):
 
             self.layers.append( SingleFeedForwardNN(input_dim = self.hidden_dim,
                                                     output_dim = self.output_dim,
-                                                    dropout_rate = self.dropout_rate,
-                                                    activation = self.activation,
+                                                    dropout_rate = None,  # self.dropout_rate,  # @joshuafan: documentation claims last layer has no dropout/activation, but the code had them. Updated code to match documentation.
+                                                    activation = 'none',  # self.activation,
                                                     use_layernormalize = False,
                                                     skip_connection = False,
                                                     context_str = self.context_str))
@@ -262,7 +264,8 @@ class GridCellSpatialRelationEncoder(nn.Module):
         self.input_embed_dim = self.cal_input_dim()
 
         if self.ffn is not None:
-          self.ffn = MultiLayerFeedForwardNN(2 * frequency_num * 2, spa_embed_dim)
+            # @joshuafan: added hidden layer here
+          self.ffn = MultiLayerFeedForwardNN(2 * frequency_num * 2, spa_embed_dim, num_hidden_layers=1, hidden_dim=128)
 
     def cal_elementwise_angle(self, coord, cur_freq):
         '''

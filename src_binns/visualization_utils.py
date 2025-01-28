@@ -28,8 +28,7 @@ def plot_losses(filename, losses, labels, min_val=None, max_val=None):
     for loss_idx, loss_curve in enumerate(losses):
         plt.plot(np.arange(len(loss_curve)), loss_curve, label=labels[loss_idx])
     plt.xlabel('Epoch #')
-    plt.ylabel('Loss')
-    plt.title('Losses')
+    plt.ylabel('Value')
     if min_val is not None and max_val is not None:
         plt.ylim([min_val, max_val])
     plt.legend()
@@ -139,24 +138,50 @@ def plot_true_vs_predicted(filename, y_hat, y):
     plt.savefig(filename)
     plt.close()
 
-    # Below logic is if there are multiple outputs
-    # num_outputs = y.shape[1]
-    # rows = math.ceil(num_outputs / 4)
-    # cols = 4
-    # fig, axeslist = plt.subplots(rows, cols, figsize=(9*cols, 9*rows), squeeze=False)
-    # fig.suptitle('True vs predicted soil carbon', fontsize=13)
-    # for i in range(num_outputs):
-    #     ax = axeslist.ravel()[i]
-    #     plot_single_scatter(ax, y_hat[:, i], y[:, i], "Predicted", "True", f"Layer {i+1}")
-    # plt.tight_layout()
-    # fig.subplots_adjust(top=0.90)
-    # plt.savefig(filename)
-    # plt.close()
+
+def plot_true_vs_predicted_multiple(filename, y_hats, ys, titles, cols=None):
+    """
+    Plots multiple scatters to a single filename.
+    Scatter i plots y_hats[i] as prediction and ys[i] as true values,
+    and will have title titles[i].
+
+    y_hats is a list of 1D numpy arrays or Tensors
+    ys is a list of 1D numpy arrays or Tensors
+    titles is a list of strings
+    All lists must have same length
+    """
+    n_plots = len(y_hats)
+    assert len(y_hats) == len(ys)
+    assert len(y_hats) == len(titles)
+
+    if cols is None:
+        cols = min(4, n_plots)
+    rows = math.ceil(n_plots / cols)
+    fig, axeslist = plt.subplots(rows, cols, figsize=(7*cols, 7*rows), squeeze=False)
+    fig.suptitle('True vs predicted', fontsize=13)
+    for i in range(n_plots):
+        ax = axeslist.ravel()[i]
+        plot_single_scatter(ax, y_hats[i], ys[i], "Predicted", "True", titles[i])
+    plt.tight_layout()
+    fig.subplots_adjust(top=0.90)
+    plt.savefig(filename)
+    plt.close()
 
 
-def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=None, categorical=False, us_only=False):
+def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=None, us_only=False, ax=None):
     if title is None:
         title = var_name
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(12, 5))
+
+    # If data were tensors, first convert to numpy
+    if torch.is_tensor(lons):
+        lons = lons.detach().cpu().numpy()
+    if torch.is_tensor(lats):
+        lats = lats.detach().cpu().numpy()
+    if torch.is_tensor(values):
+        values = values.detach().cpu().numpy()
+
     # Exclude NaNs and Infs
     df = pd.DataFrame({"lon": lons,
                        "lat": lats,
@@ -167,14 +192,16 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
     # Plot world map
     gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
     world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
-    ax = world.boundary.plot(color='gray', figsize=(20, 10))
+    world.boundary.plot(ax=ax, color='gray')
     if us_only:
         ax.set_xlim(-124.8, -66.9)
         ax.set_ylim(24.5, 49.4)
     gdf.plot(column=var_name, ax=ax, marker='o', markersize=8, legend=True, zorder=10)  # legend_kwds={'shrink': 0.7},
-    plt.title(title)
-    plt.savefig(os.path.join(plot_dir, "map_{}.png".format(var_name)), bbox_inches='tight')
-    plt.close()
+    ax.set_title(title)
+
+    if plot_dir is not None:
+        plt.savefig(os.path.join(plot_dir, "map_{}.png".format(var_name)), bbox_inches='tight')
+        plt.close()
 
     # # Plot histograms of the raw values
     # # filtered_values = values[~np.isnan(values)]
@@ -185,3 +212,23 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
     # plt.title(title)
     # plt.savefig(os.path.join(plot_dir, "histogram_{}.png".format(var_name)))
     # plt.close()
+
+def plot_map_grid(filename, lons_list, lats_list, values_list, vars_list, us_only=False, cols=None):
+    n_plots = len(lons_list)
+    assert len(lons_list) == len(lats_list)
+    assert len(lons_list) == len(values_list)
+    assert len(lons_list) == len(vars_list)
+
+    if cols is None:
+        cols = min(4, n_plots)
+    rows = math.ceil(n_plots / cols)
+    fig, axeslist = plt.subplots(rows, cols, figsize=(12*cols, 6*rows), squeeze=False)
+    for i in range(n_plots):
+        ax = axeslist.ravel()[i]
+        plot_observations_world_map(lons_list[i], lats_list[i], values_list[i], plot_dir=None, 
+                                    var_name=vars_list[i], title=None, us_only=us_only, ax=ax)
+    plt.tight_layout()
+    fig.subplots_adjust(top=0.90)
+    plt.savefig(filename)
+    plt.close()
+
