@@ -910,11 +910,6 @@ def tri_matrix_alternative_vectorized(nbedrock, slope, intercept, intercept_leac
 	transport_rate_leach = -10**(intercept_leach + slope*torch.log10(zsoi[0:20]*100)) # convert zsoi from m to cm
 	transport_rate_leach[nbedrock:] = -10**(-30)
 
-	# float_ratio = 1.0
-	# leach_ratio = 1.0
-	# transport_rate_float = transport_rate*float_ratio
-	# transport_rate_leach = transport_rate*leach_ratio
-
 	# Create a tridiagonal matrix for each pool type
 	tri_ma_middle = torch.zeros(n_soil_layer, n_soil_layer, device=device)
 	tri_ma_middle = torch.diagonal_scatter(tri_ma_middle, -1*(transport_rate_float[0:n_soil_layer]+transport_rate_leach[0:n_soil_layer]), offset=0)

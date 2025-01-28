@@ -2942,20 +2942,19 @@ def worker(rank, world_size, job_id):
 			simu_soc_all_layers[test_profile_id, :] = test_simu_all_layers[:, 0:20]
 
 		# @joshuafan: Summary csv file of all results. Create this if it doesn't exist
-		if args.n_epochs >= 1:
-			results_summary_file = os.path.join(data_dir_output, f"neural_network/results_summary_{args.note}.csv")
-			if not os.path.isfile(results_summary_file):
-				with open(results_summary_file, mode='w') as f:
-					csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-					csv_writer.writerow(['job_id', 'command', 'data_string', 'lr', 'weight_decay', 'seed', 'model_path', 'best_val_NSE', 'best_val_loss', 'test_NSE', 'test_loss'])
-			command_string = " ".join(sys.argv)
-			data_string = f"Fold {args.cross_val_idx} {args.split} (data_seed = {args.data_seed}, n_datapoints = {args.n_datapoints})"
-
-			# Add a row to the summary csv file
-			with open(results_summary_file, mode='a+') as f:
+		results_summary_file = os.path.join(data_dir_output, f"neural_network/results_summary_{args.note}.csv")
+		if not os.path.isfile(results_summary_file):
+			with open(results_summary_file, mode='w') as f:
 				csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-				best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt'
-				csv_writer.writerow([job_id, command_string, data_string, args.lr, args.weight_decay, args.seed, best_model_path, val_NSE.item(), val_l1_loss.item(), test_NSE.item(), test_l1_loss.item()])
+				csv_writer.writerow(['job_id', 'command', 'data_string', 'lr', 'weight_decay', 'seed', 'model_path', 'best_val_NSE', 'best_val_loss', 'test_NSE', 'test_loss'])
+		command_string = " ".join(sys.argv)
+		data_string = f"Fold {args.cross_val_idx} {args.split} (data_seed = {args.data_seed}, n_datapoints = {args.n_datapoints})"
+
+		# Add a row to the summary csv file
+		with open(results_summary_file, mode='a+') as f:
+			csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+			best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt'
+			csv_writer.writerow([job_id, command_string, data_string, args.lr, args.weight_decay, args.seed, best_model_path, val_NSE.item(), val_l1_loss.item(), test_NSE.item(), test_l1_loss.item()])
 
 
 		# create folder for the results
@@ -3241,13 +3240,8 @@ def worker(rank, world_size, job_id):
 
 		# initialize the scaled difference
 		scaled_diff = np.ones((wosis_profile_info.shape[0]))*np.nan
-		true_test_soc = []
-		pred_test_soc = []
-		test_profile_id_ordered = []
 
 		# for each location, calculate the difference between the predicted and observed SOC values
-		# TODO: Not sure if this is correct. binn_obs_soc contains SOC at the observed depths (given in z),
-		# but best_simu_soc contains SOC at the fixed 20 layers.
 		for i in range(binn_obs_soc.shape[0]):
 			if np.isnan(binn_obs_soc[i, :]).all() or torch.isnan(best_simu_soc[i, :]).all():
 				continue
@@ -3273,13 +3267,6 @@ def worker(rank, world_size, job_id):
 				# # print outlier
 				if scaled_diff[i] > 2:
 					print('outlier: ', test_profile_id_all[i], scaled_diff[i])
-
-				# TODO Why do we need test_profile_id_ordered?
-				# TODO Plot depthwise profiles
-				pred_test_soc.append(temp_simu_sum.item())
-				true_test_soc.append(temp_obs_sum.item())
-				curr_profile = int(test_profile_id_all[i])
-				test_profile_id_ordered.append(curr_profile)
 
 		# Plot the scaled difference
 		visualization_utils.plot_observations_world_map(test_lons, test_lats, scaled_diff, PLOT_DIR, "test_scaled_diff_" + job_id, us_only=True)
@@ -3430,7 +3417,6 @@ def worker(rank, world_size, job_id):
 		# Predict the SOC values based on Grid environmental information using the best model
 		grid_simu_soc, grid_pred_para = best_guess_model(torch.tensor(predict_data_x, device=device), torch.tensor(predict_data_z, device=device),  # dtype = torch.float32, 
 														torch.tensor(predict_data_c, device=device), whether_predict = 1)
-		print("GRID PREDICTION DONE")
 		# Save the predicted SOC values, parameters and location data into csv files
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_simu_soc_' + job_id + '.csv', grid_simu_soc.detach().cpu().numpy(), delimiter = ',')
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_pred_para_' + job_id + '.csv', grid_pred_para.detach().cpu().numpy(), delimiter = ',')
@@ -3445,7 +3431,6 @@ def worker(rank, world_size, job_id):
 				total_res_time_base_pred, res_time_base_pools_pred, t_scaler_pred, bulk_A_pred, \
 				w_scaler_pred, bulk_K_pred, bulk_V_pred, bulk_xi_pred, bulk_I_pred, litter_fraction_pred = fun_bulk_simu(grid_pred_para.to(device), \
 																												torch.tensor(predict_data_x, device=device), args.vertical_mixing)  # dtype = torch.float32, 
-			print("GRID BULK SIMU DONE")
 
 			# Save the bulk simulation results into csv files
 			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_carbon_input_' + job_id + '.csv', carbon_input_pred.detach().cpu().numpy(), delimiter = ',')
