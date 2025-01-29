@@ -5,7 +5,7 @@ import traceback
 import math
 
 
-def fun_bulk_simu(tensor_para, tensor_frocing_steady_state, vertical_mixing, vectorized):
+def fun_bulk_simu(tensor_para, tensor_frocing_steady_state, vertical_mixing, vectorized='true'):
 	"""
 	Runs the same CLM5 model as fun_matrix_clm5_vectorized.py, but returns more
 	variables describing the underlying processes, instead of just predicted SOC.
@@ -112,7 +112,7 @@ def fun_bulk_simu(tensor_para, tensor_frocing_steady_state, vertical_mixing, vec
 #######################################################
 # forward simulation for clm5
 #######################################################
-def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing, vectorized):
+def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing, vectorized='true'):
 	device = para.device
 	#---------------------------------------------------
 	# offical starting simulation

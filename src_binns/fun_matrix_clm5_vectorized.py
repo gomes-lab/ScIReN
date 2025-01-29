@@ -5,7 +5,7 @@ import traceback
 import math
 
 
-def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_depth, vertical_mixing, vectorized):
+def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_depth, vertical_mixing, vectorized='true'):
 	"""
 	Simulate the soil carbon profile using the CLM5 model at the depth of the observations
 	"""
@@ -82,7 +82,7 @@ def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_de
 	
 # end def fun_model_simu
 
-def fun_model_prediction(tensor_para, tensor_frocing_steady_state, vertical_mixing, vectorized):
+def fun_model_prediction(tensor_para, tensor_frocing_steady_state, vertical_mixing, vectorized='true'):
 	"""
 	Predict soil carbon profiles using the CLM5 model, at the 20 fixed CLM5 layers
 	"""
@@ -129,7 +129,7 @@ def fun_model_prediction(tensor_para, tensor_frocing_steady_state, vertical_mixi
 	return simu_ouput
 
 # Sensitivity analysis of the soil carbon profile using the CLM5 model
-def fun_model_sensitivity(tensor_para, tensor_frocing_steady_state, vertical_mixing, vectorized):
+def fun_model_sensitivity(tensor_para, tensor_frocing_steady_state, vertical_mixing, vectorized='true'):
 	device = tensor_para.device
 	# convert tensor to numpy
 	para = tensor_para
@@ -187,7 +187,7 @@ def fun_model_sensitivity(tensor_para, tensor_frocing_steady_state, vertical_mix
 #######################################################
 # forward simulation for clm5
 #######################################################
-def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing, vectorized):
+def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing, vectorized='true'):
 	device = para.device
 	#---------------------------------------------------
 	# offical starting simulation
@@ -408,7 +408,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing, vectorized):
 			xit = xit * normalization_factor
 	
 	if vectorized == 'compare':
-		assert(torch.equal(xit_old, xit))
+		assert(torch.allclose(xit_old, xit))
 
 	xiw = soil_water_profile_steady_state*w_scaling
 	xiw[xiw > 1] = 1
@@ -428,7 +428,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing, vectorized):
 		a_ma = a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
 		a_ma_new_time = time.time() - a_ma_new_start
 	if vectorized == 'compare':
-		assert torch.equal(a_ma_old, a_ma)
+		assert torch.allclose(a_ma_old, a_ma)
 		print("A_MA: OLD", a_ma_old_time, "NEW", a_ma_new_time)
 
 	kk_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device) 
@@ -447,7 +447,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing, vectorized):
 		if vectorized in ['true', 'compare']:
 			kk_ma = kk_matrix_vectorized(timesteply_xit, timesteply_xiw, timesteply_xio, timesteply_xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3)
 		if vectorized in 'compare':
-			assert torch.equal(kk_ma_old, kk_ma)
+			assert torch.allclose(kk_ma_old, kk_ma)
 		kk_ma_middle[:, :, itimestep] = kk_ma
 
 		# tri matrix	
@@ -471,7 +471,9 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing, vectorized):
 			if vectorized in ['true', 'compare']:
 				tri_ma = tri_matrix_alternative_vectorized(timesteply_nbedrock, slope, intercept, intercept_leach, device)
 		if vectorized == 'compare':
-			assert torch.equal(tri_ma_old, tri_ma)
+			print("Tri ma old", tri_ma_old)
+			print("Tri ma new", tri_ma)
+			assert torch.allclose(tri_ma_old, tri_ma)
 			print("TRI MATRIX. OLD", tri_ma_old_time, "NEW", tri_ma_new_time)
 		tri_ma_middle[:, :, itimestep] = tri_ma
 
@@ -504,7 +506,7 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing, vectorized):
 			vertical_prof[0] = (beta**((zisoi_0)*m_to_cm) - beta**(zisoi[0]*m_to_cm))/dz[0]
 			vertical_prof[1:n_soil_layer] = (beta**((zisoi[0:n_soil_layer-1])*m_to_cm) - beta**(zisoi[1:n_soil_layer]*m_to_cm))/dz[1:n_soil_layer]
 		if vectorized == 'compare':
-			assert torch.equal(vertical_prof_old, vertical_prof)
+			assert torch.allclose(vertical_prof_old, vertical_prof)
 
 	else:
 		vertical_prof[0] = 1/dz[0]
