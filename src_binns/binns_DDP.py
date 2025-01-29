@@ -1600,6 +1600,7 @@ def worker(rank, world_size, job_id):
 
 	else: 
 		# record the loss history
+		print("Checkpint worker", checkpoint_worker.keys())
 		train_loss_history = checkpoint_worker['train_loss_history']
 		val_loss_history = checkpoint_worker['val_loss_history']
 		train_NSE_history = checkpoint_worker['train_NSE_history']
@@ -1852,6 +1853,17 @@ def worker(rank, world_size, job_id):
 		train_NSE_history[iepoch, :] = torch.stack(all_train_NSE).mean().detach().cpu().numpy()
 		val_NSE_history[iepoch, :] = torch.stack(all_val_NSE).mean().detach().cpu().numpy()
 
+		all_train_pred_para = torch.cat(all_train_pred_para, dim=0)  # Pred params for this rank
+		all_train_coords = torch.cat(all_train_coords, dim=0)  # Coords for this rank
+		all_train_z = torch.cat(all_train_z, dim=0)
+		all_train_pred_soc = torch.cat(all_train_pred_soc, dim=0)  # Pred SOC for this rank
+		all_train_true_soc = torch.cat(all_train_true_soc, dim=0)
+		all_val_pred_para = torch.cat(all_val_pred_para, dim=0)
+		all_val_coords = torch.cat(all_val_coords, dim=0)
+		all_val_z = torch.cat(all_val_z, dim=0)
+		all_val_pred_soc = torch.cat(all_val_pred_soc, dim=0)
+		all_val_true_soc = torch.cat(all_val_true_soc, dim=0)
+
 		if iepoch % 50 == 0:
 			####################################################
 			## Create true vs predicted scatters per 50 epoch ##
@@ -1865,16 +1877,6 @@ def worker(rank, world_size, job_id):
 			# First aggregate for this rank, then combine all ranks.
 			# (Note that DistributedSampler contains repeated examples. We do not remove them.)
 			print("Syncing all preds")
-			all_train_pred_para = torch.cat(all_train_pred_para, dim=0)  # Pred params for this rank
-			all_train_coords = torch.cat(all_train_coords, dim=0)  # Coords for this rank
-			all_train_z = torch.cat(all_train_z, dim=0)
-			all_train_pred_soc = torch.cat(all_train_pred_soc, dim=0)  # Pred SOC for this rank
-			all_train_true_soc = torch.cat(all_train_true_soc, dim=0)
-			all_val_pred_para = torch.cat(all_val_pred_para, dim=0)
-			all_val_coords = torch.cat(all_val_coords, dim=0)
-			all_val_z = torch.cat(all_val_z, dim=0)
-			all_val_pred_soc = torch.cat(all_val_pred_soc, dim=0)
-			all_val_true_soc = torch.cat(all_val_true_soc, dim=0)
 
 			# Estimate max examples per rank. Ok for some to be nan
 			train_examples_per_rank = len(train_sampler)  # math.ceil(len(train_sampler) / world_size)
@@ -2100,6 +2102,7 @@ def worker(rank, world_size, job_id):
 					'val_loss_history': val_loss_history,
 					'train_NSE_history': train_NSE_history,
 					'val_NSE_history': val_NSE_history,
+					'lr_history': lr_history,
 					'train_indices': train_loc,
 					'val_indices': val_loc,
 					'test_indices': test_loc,

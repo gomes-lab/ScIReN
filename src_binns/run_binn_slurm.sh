@@ -19,7 +19,7 @@
 # Request a total of 50GB RAM
 #SBATCH --mem=50GB
 # Request a walltime limit of 24 hours
-#SBATCH -t 24:00:00
+#SBATCH -t 72:00:00
 
 # INFO: Print properties of job as submitted
 echo "SLURM_JOB_ID = $SLURM_JOB_ID"
@@ -62,7 +62,7 @@ conda activate binn
 # Original training
 for LR in 1e-2
 do
-    for FOLD in 1
+    for FOLD in 1 2 3
     do
         for SEED in 0
         do
@@ -72,8 +72,7 @@ do
                 --n_epochs 200 --patience 100 --model new_mlp --vertical_mixing original \
                 --leaky_relu --use_bn --embed_dim 5 --pos_enc early \
                 --losses l1 param_reg --lambdas 1 100 \
-                --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_REPRO" \
-                --whether_resume 1 --previous_job_id "20250127-214804_BINN_REPRO_lr=1e-02_seed=0_fold=1"
+                --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 71.5 --note "BINN_REPRO"
         done
     done
 done

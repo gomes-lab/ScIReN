@@ -420,16 +420,16 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing, vectorized='tru
 
 	# allocation matrix
 	if vectorized in ['false', 'compare']:
-		a_ma_old_start = time.time()
+		# a_ma_old_start = time.time()
 		a_ma = a_ma_old = a_matrix(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
-		a_ma_old_time = time.time() - a_ma_old_start
+		# a_ma_old_time = time.time() - a_ma_old_start
 	if vectorized in ['true', 'compare']:
-		a_ma_new_start = time.time()
+		# a_ma_new_start = time.time()
 		a_ma = a_matrix_vectorized(fl1s1, fl2s1, fl3s2, fs1s2, fs1s3, fs2s1, fs2s3, fs3s1, fcwdl2, sand_vector)
-		a_ma_new_time = time.time() - a_ma_new_start
+		# a_ma_new_time = time.time() - a_ma_new_start
 	if vectorized == 'compare':
 		assert torch.allclose(a_ma_old, a_ma)
-		print("A_MA: OLD", a_ma_old_time, "NEW", a_ma_new_time)
+		# print("A_MA: OLD", a_ma_old_time, "NEW", a_ma_new_time)
 
 	kk_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device) 
 	tri_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device) 
