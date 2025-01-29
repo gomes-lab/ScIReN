@@ -135,7 +135,7 @@ class mlp(torch.nn.Module):
 #---------------------------------------------------
 # define model
 class mlp_wrapper(nn.Module):
-	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, vectorized, pos_enc,
+	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, vectorized='true', pos_enc='early',
 				 lipschitz=False, one_hot=False, use_bn=False, dropout_prob=0.0,
 				 leaky_relu=False, train_x=None,
 				 min_temp=10, max_temp=109, init="xavier_uniform", width=128):
