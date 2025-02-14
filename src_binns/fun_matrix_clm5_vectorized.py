@@ -471,14 +471,14 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing, vectorized='tru
 			if vectorized in ['true', 'compare']:
 				tri_ma = tri_matrix_alternative_vectorized(timesteply_nbedrock, slope, intercept, intercept_leach, device)
 		if vectorized == 'compare':
+			# Check that both tri_matrix methods produce same result, and that
+			# all entries outside the middle 3 diagonals are zero
 			assert torch.allclose(tri_ma_old, tri_ma)
-
 			tridiag_mask = torch.zeros((140, 140)).bool()
 			tridiag_mask[torch.arange(0,140), torch.arange(0,140)] = True
 			tridiag_mask[torch.arange(0,139), torch.arange(1,140)] = True
 			tridiag_mask[torch.arange(1,140), torch.arange(0,139)] = True
 			assert torch.all(tri_ma[~tridiag_mask] == 0.0)
-			print("TRI MATRIX. OLD", tri_ma_old_time, "NEW", tri_ma_new_time)
 		tri_ma_middle[:, :, itimestep] = tri_ma
 
 	# end for itimestep
@@ -818,7 +818,6 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 
 	#------ first get diffusivity / advection terms -------
 	# Convert conditions to tensor operations
-	# @joshuafan TODO item() removes differentiability, confirm if this is ok
 	active_layer_depth = torch.tensor(max(altmax.item(), altmax_lastyear.item())).to(device)
 	# is_active_layer = zisoi[:nbedrock+1] < active_layer_depth
 	# is_below_active_layer_and_cryoturb = (zisoi[:nbedrock+1] >= active_layer_depth) & (zisoi[:nbedrock+1] <= torch.min(torch.tensor(max_depth_cryoturb), zisoi[nbedrock+1]))
@@ -899,7 +898,7 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	d_m1_zm1 = torch.cat([d_m1_zm1[:1], torch.where(inner_layers, 1. / ((1. - w_m1[1:]) / diffus[1:] + w_m1[1:] / diffus[:-1]), torch.zeros_like(d_m1_zm1[1:]))])
 
 	# Original line:
-	# d_p1_zp1_temp = torch.where(inner_layers, 1. / ((1. - w_p1[:-1]) / diffus[:-1] + w_p1[:-1] / diffus[1:]), (1. - w_m1[:-1]) * diffus[:-1] + w_p1[:-1] * diffus[1:])  # NOTE: Replaced 1-w_m1 with 1-w_p1, I believe this was a typo in the original Fortran code.
+	# d_p1_zp1_temp = torch.where(inner_layers, 1. / ((1. - w_p1[:-1]) / diffus[:-1] + w_p1[:-1] / diffus[1:]), (1. - w_m1[:-1]) * diffus[:-1] + w_p1[:-1] * diffus[1:])
 
 	# Fixed line:
 	d_p1_zp1_temp = torch.where(inner_layers, 1. / ((1. - w_p1[:-1]) / diffus[:-1] + w_p1[:-1] / diffus[1:]), (1. - w_p1[:-1]) * diffus[:-1] + w_p1[:-1] * diffus[1:])  # NOTE: Replaced 1-w_m1 with 1-w_p1, I believe this was a typo in the original Fortran code.
@@ -1038,7 +1037,7 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	bottom_boundary_indices = torch.arange(39, 140, 20)
 	tri_ma[bottom_boundary_indices, bottom_boundary_indices] = -expanded_a[bottom_boundary_indices]
 
-	# Fill off-diagonals for c_tri_dz
+	# Fill right off-diagonal with c_tri_dz
 	# off_diag_indices_right = torch.arange(19, 139)  # Right off-diagonal
 	# tri_ma[torch.arange(19, 139), torch.arange(20, 140)] = expanded_c[off_diag_indices_right]
 	tri_ma[torch.arange(20, 139), torch.arange(21, 140)] = expanded_c[torch.arange(20, 139)]  # NOTE changed
@@ -1186,7 +1185,7 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 			diffus[j] = som_diffus_coef[j]
 		# end if abs(som_diffus_coef[j])  < epsilon:
 	
-	for j in range(nlevdecomp+1):  # NOTE changed	
+	for j in range(nlevdecomp+1):  # NOTE changed so all diffus get calculated above
 		# Calculate the D and F terms in the Patankar algorithm
 		if j == 0:
 			d_m1_zm1[j] = 0.
@@ -1202,9 +1201,10 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 			d_p1_zp1[j] = d_p1_zp1[j] / dz_node[j+1]
 			f_m1[j] = adv_flux[j]  # Include infiltration here
 			f_p1[j] = adv_flux[j+1]
+
 			# pe_m1[j] = 0.
 			# pe_p1[j] = f_p1[j].clone() / d_p1_zp1[j] # Peclet #
-		elif j >= nbedrock:  # TODO nbedrock-1:
+		elif j >= nbedrock:  # NOTE used to be nbedrock-1:
 			# At the bottom, assume no gradient in d_z (i.e., they're the same)
 			w_m1[j] = (zisoi[j-1] - zsoi[j-1]) / dz_node[j]
 			w_p1[j] = 0.
@@ -1220,6 +1220,7 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 			f_m1[j] = adv_flux[j]
 			# f_p1(j) = adv_flux(j+1)
 			f_p1[j] = 0.
+
 			# pe_m1[j] = f_m1[j].clone() / d_m1_zm1[j] # Peclet #
 			# pe_p1[j] = f_p1[j].clone() / d_p1_zp1[j] # Peclet #
 		else:
@@ -1236,7 +1237,7 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 			if diffus[j+1] > 0. and diffus[j] > 0.:
 				d_p1_zp1[j] = 1. / ((1. - w_p1[j].clone()) / diffus[j].clone() + w_p1[j].clone() / diffus[j+1].clone()) # Harmonic mean of diffus
 			else:
-				d_p1_zp1[j] = (1. - w_p1[j].clone()) * diffus[j].clone() + w_p1[j].clone() * diffus[j+1].clone() # Arithmetic mean of diffus.  NOTE: Replaced 1-w_m1 with 1-w_p1, I believe this was a typo in the original Fortran code.
+				d_p1_zp1[j] = (1. - w_m1[j].clone()) * diffus[j].clone() + w_p1[j].clone() * diffus[j+1].clone() # Arithmetic mean of diffus.  NOTE: Replaced 1-w_m1 with 1-w_p1, I believe this was a typo in the original Fortran code.
 
 			# end if diffus[j+1] > 0. and diffus[j] > 0.:
 			
@@ -1244,6 +1245,7 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 			d_p1_zp1[j] = d_p1_zp1[j] / dz_node[j+1]
 			f_m1[j] = adv_flux[j]
 			f_p1[j] = adv_flux[j+1]
+
 			# pe_m1[j] = f_m1[j].clone() / d_m1_zm1[j] # Peclet #
 			# pe_p1[j] = f_p1[j].clone() / d_p1_zp1[j] # Peclet #
 		# end j == 0:
@@ -1266,9 +1268,10 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 	for j in range(-1, (nlevdecomp+1)): # 0:nlevdecomp+1
 		if j == -1: # top layer (atmosphere)
 			pass
-			# a_tri(j) = 0.
-			# b_tri(j) = 1.
-			# c_tri(j) = -1.
+
+			# a_tri_e[j] = 0.
+			# b_tri_e[j] = 1.
+			# c_tri_e[j] = -1.
 			# b_tri_e(j) = b_tri(j)
 		elif j == 0: #  Set statement functions
 			aaa = max (0., (1. - 0.1 * abs(pe_m1[j]))**5)  # A function from Patankar, Table 5.2, pg 95
@@ -1284,9 +1287,10 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 			b_tri_e[j] = -a_tri_e[j] - c_tri_e[j]
 		else: # j==nlevdecomp; 0 concentration gradient at bottom
 			pass
-			# a_tri(j) = -1.
-			# b_tri(j) = 1.
-			# c_tri(j) = 0.
+
+			# a_tri_e[j] = -1.
+			# b_tri_e[j] = 1.
+			# c_tri_e[j] = 0.
 		# end if j == 0: 
 	# end for j in range(nlevdecomp+2)
 	
@@ -1309,7 +1313,7 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 
 		# Upper boundary condition adjustment
 		if nlevdecomp > 1:
-			tri_ma[start_idx, start_idx] = -c_tri_dz[0]   # NOTE used to be -c_tri_dz[1]
+			tri_ma[start_idx, start_idx] = -c_tri_dz[1]   # NOTE used to be -c_tri_dz[1]
 
 
 		# Bottom boundary condition adjustment
