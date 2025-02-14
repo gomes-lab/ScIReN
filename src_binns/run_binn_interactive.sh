@@ -6,6 +6,45 @@
 # TODO Figure out what is wrong with the vertical mixing
 
 
+# TUNING: Default init
+for LR in 1e-4 1e-3 1e-2 1e-1
+do
+    for FOLD in 1 2 3 4 5
+    do
+        for SEED in 0 1 2
+        do
+            python3 binns_DDP.py --data_seed 12345 --n_datapoints 400 --split grid2 --cross_val_idx $FOLD --n_folds 5 \
+                --lr $LR --optimizer AdamW --weight_decay 0 \
+                --seed $SEED --init default --min_temp 1 --max_temp 1 --standardize_input \
+                --n_epochs 200 --patience 100 --model new_mlp --vertical_mixing original --vectorized "true" \
+                --activation leaky_relu --use_bn --categorical one_hot --pos_enc none \
+                --losses l2 --loss_weighting manual --lambdas 1 \
+                --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_GRID2_L2ONLY"
+        done
+    done
+done
+
+
+# # TUNING: Default init
+# for LR in 1e-4 1e-3 1e-2 1e-1 1
+# do
+#     for FOLD in 1
+#     do
+#         for SEED in 0 1 2
+#         do
+#             python3 binns_DDP.py --data_seed 12345 --n_datapoints 400 --split vertical --cross_val_idx $FOLD --n_folds 5 \
+#                 --lr $LR --optimizer AdamW --weight_decay 0 \
+#                 --seed $SEED --init default --min_temp 1 --max_temp 1 --standardize_input \
+#                 --n_epochs 200 --patience 100 --model new_mlp --vertical_mixing original --vectorized "true" \
+#                 --leaky_relu --use_bn --embed_dim 5 --pos_enc none \
+#                 --losses l1 param_reg --loss_weighting manual --lambdas 1 100 \
+#                 --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_VERTICAL400_TUNING"
+#         done
+#     done
+# done
+
+
+
 # # TUNING: Original training
 # for LR in 1e-4 1e-3 1e-2 1e-1 1
 # do
@@ -23,40 +62,6 @@
 #         done
 #     done
 # done
-
-# TUNING: Default init
-for LR in 1e-2 1e-1
-do
-    for FOLD in 1
-    do
-        for SEED in 0 1 2
-        do
-            python3 binns_DDP.py --data_seed 12345 --n_datapoints 200 --split horizontal --cross_val_idx $FOLD --n_folds 5 \
-                --lr $LR --optimizer AdamW --weight_decay 0 \
-                --seed $SEED --init default --min_temp 1 --max_temp 1 --standardize_input \
-                --n_epochs 200 --patience 100 --model new_mlp --vertical_mixing original \
-                --leaky_relu --use_bn --embed_dim 5 --pos_enc none \
-                --losses l1 param_reg --loss_weighting manual --lambdas 1 100 \
-                --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_DEFAULTINIT_TUNING"
-        done
-    done
-done
-for LR in 1
-do
-    for FOLD in 1
-    do
-        for SEED in 0
-        do
-            python3 binns_DDP.py --data_seed 12345 --n_datapoints 200 --split horizontal --cross_val_idx $FOLD --n_folds 5 \
-                --lr $LR --optimizer AdamW --weight_decay 0 \
-                --seed $SEED --init default --min_temp 1 --max_temp 1 --standardize_input \
-                --n_epochs 200 --patience 100 --model new_mlp --vertical_mixing original \
-                --leaky_relu --use_bn --embed_dim 5 --pos_enc none \
-                --losses l1 param_reg --loss_weighting manual --lambdas 1 100 \
-                --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_DEFAULTINIT_TUNING"
-        done
-    done
-done
 
 
 

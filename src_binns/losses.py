@@ -100,3 +100,8 @@ def binns_loss_simple(y_pred, y_true):
 	pred_para = torch.zeros_like(y_pred)  # Not used
 	l1_loss, _, _, _ = binns_loss(y_pred, y_true, pred_para)
 	return l1_loss
+
+
+
+def compute_param_violation_loss(unconstrained_params):
+	return torch.mean(torch.clamp(torch.abs(unconstrained_params) - 3.0, min=0))

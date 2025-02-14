@@ -5,59 +5,81 @@
 # ./run_interactive.sh
 # TODO Figure out what is wrong with the vertical mixing. Right now setting simple_two_intercepts only for the "bulk simulations" which are actually meaningless.
 
-# TUNING: NO STANDARDIZE OUTPUT
-for LR in 1e-4 1e-3 1e-2 1e-1 1 10 100
-do
-    for FOLD in 1
-    do
-        for SEED in 0 1 2
-        do
-            python3 binns_DDP.py --data_seed 12345 --n_datapoints 200 --split horizontal --cross_val_idx $FOLD --n_folds 5 \
-                --lr $LR --optimizer AdamW --weight_decay 0 \
-                --seed $SEED --init default \
-                --n_epochs 200 --patience 100 --model nn_only --vertical_mixing simple_two_intercepts \
-                --leaky_relu --use_bn --embed_dim 5 --pos_enc none \
-                --losses l1 --loss_weighting manual --lambdas 1 \
-                --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "NNONLY_TUNING"
-        done
-    done
-done
-
-# TUNING: STANDARDIZE OUTPUT
-for LR in 1e-4 1e-3 1e-2 1e-1 1 10 100
-do
-    for FOLD in 1
-    do
-        for SEED in 0 1 2
-        do
-            python3 binns_DDP.py --data_seed 12345 --n_datapoints 200 --split horizontal --cross_val_idx $FOLD --n_folds 5 \
-                --lr $LR --optimizer AdamW --weight_decay 0 \
-                --seed $SEED --init default --standardize_output \
-                --n_epochs 200 --patience 100 --model nn_only --vertical_mixing simple_two_intercepts \
-                --leaky_relu --use_bn --embed_dim 5 --pos_enc none \
-                --losses l1 --loss_weighting manual --lambdas 1 \
-                --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "NNONLY_TUNING_STDOUTPUT"
-        done
-    done
-done
 
 # TUNING: STANDARDIZE OUTPUT+INPUT
-for LR in 1e-4 1e-3 1e-2 1e-1 1 10 100
+for LR in 1e-4 1e-3 1e-2 1e-1
 do
-    for FOLD in 1
+    for FOLD in 1 2 3 4 5
     do
         for SEED in 0 1 2
         do
-            python3 binns_DDP.py --data_seed 12345 --n_datapoints 200 --split horizontal --cross_val_idx $FOLD --n_folds 5 \
+            python3 binns_DDP.py --data_seed 12345 --n_datapoints 400 --split grid2 --cross_val_idx $FOLD --n_folds 5 \
                 --lr $LR --optimizer AdamW --weight_decay 0 \
                 --seed $SEED --init default --standardize_output --standardize_input \
-                --n_epochs 200 --patience 100 --model nn_only --vertical_mixing simple_two_intercepts \
-                --leaky_relu --use_bn --embed_dim 5 --pos_enc none \
-                --losses l1 --loss_weighting manual --lambdas 1 \
-                --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "NNONLY_TUNING_STDOUTPUTINPUT"
+                --n_epochs 200 --patience 100 --model nn_only --vertical_mixing original \
+                --activation leaky_relu --use_bn --categorical one_hot --pos_enc none \
+                --losses l2 --loss_weighting manual --lambdas 1 \
+                --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "NNONLY_GRID2_ONEHOT_L2"
         done
     done
 done
+
+
+
+# # TUNING: STANDARDIZE OUTPUT+INPUT
+# for LR in 1e-4 1e-3 1e-2 1e-1 1 10 100
+# do
+#     for FOLD in 1
+#     do
+#         for SEED in 0 1 2
+#         do
+#             python3 binns_DDP.py --data_seed 12345 --n_datapoints 400 --split vertical --cross_val_idx $FOLD --n_folds 5 \
+#                 --lr $LR --optimizer AdamW --weight_decay 0 \
+#                 --seed $SEED --init default --standardize_output --standardize_input \
+#                 --n_epochs 200 --patience 100 --model nn_only --vertical_mixing simple_two_intercepts \
+#                 --activation leaky_relu --use_bn --embed_dim 5 --pos_enc none \
+#                 --losses l1 --loss_weighting manual --lambdas 1 \
+#                 --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "NNONLY_STDOUTPUTINPUT_VERTICAL400_TUNING"
+#         done
+#     done
+# done
+
+
+# # TUNING: NO STANDARDIZE OUTPUT
+# for LR in 1e-4 1e-3 1e-2 1e-1 1 10 100
+# do
+#     for FOLD in 1
+#     do
+#         for SEED in 0 1 2
+#         do
+#             python3 binns_DDP.py --data_seed 12345 --n_datapoints 200 --split horizontal --cross_val_idx $FOLD --n_folds 5 \
+#                 --lr $LR --optimizer AdamW --weight_decay 0 \
+#                 --seed $SEED --init default \
+#                 --n_epochs 200 --patience 100 --model nn_only --vertical_mixing simple_two_intercepts \
+#                 --activation leaky_relu --use_bn --embed_dim 5 --pos_enc none \
+#                 --losses l1 --loss_weighting manual --lambdas 1 \
+#                 --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "NNONLY_TUNING"
+#         done
+#     done
+# done
+
+# # TUNING: STANDARDIZE OUTPUT
+# for LR in 1e-4 1e-3 1e-2 1e-1 1 10 100
+# do
+#     for FOLD in 1
+#     do
+#         for SEED in 0 1 2
+#         do
+#             python3 binns_DDP.py --data_seed 12345 --n_datapoints 200 --split horizontal --cross_val_idx $FOLD --n_folds 5 \
+#                 --lr $LR --optimizer AdamW --weight_decay 0 \
+#                 --seed $SEED --init default --standardize_output \
+#                 --n_epochs 200 --patience 100 --model nn_only --vertical_mixing simple_two_intercepts \
+#                 --activation leaky_relu --use_bn --embed_dim 5 --pos_enc none \
+#                 --losses l1 --loss_weighting manual --lambdas 1 \
+#                 --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "NNONLY_TUNING_STDOUTPUT"
+#         done
+#     done
+# done
 
 # for LR in 1e-2
 # do
@@ -68,7 +90,7 @@ done
 #             python3 binns_DDP.py --data_seed 12345 --n_datapoints 200 --split horizontal --cross_val_idx $FOLD --n_folds 5 \
 #                 --lr $LR --optimizer AdamW --weight_decay 0 --seed $SEED \
 #                 --n_epochs 200 --patience 100 --model nn_only --vertical_mixing simple_two_intercepts \
-#                 --leaky_relu --use_bn --embed_dim 5 --pos_enc none \
+#                 --activation leaky_relu --use_bn --embed_dim 5 --pos_enc none \
 #                 --losses l1 --loss_weighting manual --lambdas 1 \
 #                 --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "NNONLY"
 #             exit

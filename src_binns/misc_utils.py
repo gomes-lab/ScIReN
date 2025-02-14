@@ -238,3 +238,24 @@ class Logger(object):
 		# you might want to specify some extra behavior here.
 		pass    
 
+
+def get_activation(activation):
+	if activation == 'relu':
+		return torch.nn.ReLU()
+	elif activation == 'leaky_relu':
+		return torch.nn.LeakyReLU(negative_slope=0.3)
+	elif activation == 'tanh':
+		return torch.nn.Tanh()
+	else:
+		raise ValueError("Unsupported activation")
+	return act
+
+def get_param_constraint(param_constraint):
+	if param_constraint == "sigmoid":
+		return torch.nn.Sigmoid()
+	elif param_constraint == "hardsigmoid":
+		return torch.nn.Hardsigmoid()
+	elif param_constraint == "none":
+		return torch.nn.Identity()
+	else:
+		raise ValueError("Invalid param_constraint")

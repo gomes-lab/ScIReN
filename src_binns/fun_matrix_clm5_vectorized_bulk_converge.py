@@ -5,7 +5,7 @@ import traceback
 import math
 
 
-def fun_bulk_simu(tensor_para, tensor_frocing_steady_state, vertical_mixing):
+def fun_bulk_simu(tensor_para, tensor_frocing_steady_state, vertical_mixing, vectorized='true'):
 	"""
 	Runs the same CLM5 model as fun_matrix_clm5_vectorized.py, but returns more
 	variables describing the underlying processes, instead of just predicted SOC.
@@ -65,7 +65,7 @@ def fun_bulk_simu(tensor_para, tensor_frocing_steady_state, vertical_mixing):
 			carbon_input_sum_profile, cpool_steady_state_profile, cpools_layer_profile, soc_layer_profile, \
 			total_res_time_profile, total_res_time_base_profile, res_time_base_pools_profile, t_scaler_profile, \
 			bulk_A_profile, w_scaler_profile, bulk_K_profile, bulk_V_profile, bulk_xi_profile, bulk_I_profile, \
-			litter_fraction_profile = fun_matrix_clm5(profile_para, profile_force_steady_state, vertical_mixing)
+			litter_fraction_profile = fun_matrix_clm5(profile_para, profile_force_steady_state, vertical_mixing, vectorized)
 
 			# print the shape of the outputs
 			# print("carbon_input_sum_profile", carbon_input_sum_profile.shape)
@@ -112,7 +112,7 @@ def fun_bulk_simu(tensor_para, tensor_frocing_steady_state, vertical_mixing):
 #######################################################
 # forward simulation for clm5
 #######################################################
-def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
+def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing, vectorized='true'):
 	device = para.device
 	#---------------------------------------------------
 	# offical starting simulation
@@ -299,48 +299,43 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	xio = xio_steady_state
 	xin = xin_steady_state
 
-	# # Old way of calculating xit
-	# # start = time.time()
-	# xit_old = (torch.ones(n_soil_layer, timestep_num)*np.nan).to(device)
-	# for itimestep in range(timestep_num):
-	# 	# temperature related function xit
-	# 	# calculate rate constant scalar for soil temperature
-	# 	# assuming that the base rate constants are assigned for non-moisture
-	# 	# limiting conditions at 25 C.
-	# 	for ilayer in range(n_soil_layer):
-	# 		if soil_temp_profile_steady_state[ilayer, itimestep] >= (0 + kelvin_to_celsius):
-	# 			xit_old[ilayer, itimestep] = q10**((soil_temp_profile_steady_state[ilayer, itimestep] - (kelvin_to_celsius + 25))/10)
-	# 		else:
-	# 			xit_old[ilayer, itimestep] = q10**((273.15 - 298.15)/10)*(fq10**((soil_temp_profile_steady_state[ilayer, itimestep] - (0 + kelvin_to_celsius))/10))
-	# 		# end if soil_temp_profile[ilayer, itimestep] >= 0 + kelvin_to_celsius:
-	# 	# end for layer
-		
-	# 	catanf_30 = catanf(torch.tensor(30.0).to(device))
-	# 	normalization_tref = torch.tensor(15).to(device)
-	# 	if normalize_q10_to_century_tfunc == True:
-	# 		# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
-	# 		normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
-	# 		xit_old[:, itimestep] = xit_old[:, itimestep]*normalization_factor
-	# xit = xit_old
-		# end if normalize_q10_to_century_tfunc == True:
-	# end for itimestep
-	# # print("XIT old", time.time()-start)
-	# # start = time.time()
+	if vectorized in ['false', 'compare']:  # Old way of calculating xit
+		xit_old = (torch.ones(n_soil_layer, timestep_num)*np.nan).to(device)
+		for itimestep in range(timestep_num):
+			# temperature related function xit
+			# calculate rate constant scalar for soil temperature
+			# assuming that the base rate constants are assigned for non-moisture
+			# limiting conditions at 25 C.
+			for ilayer in range(n_soil_layer):
+				if soil_temp_profile_steady_state[ilayer, itimestep] >= (0 + kelvin_to_celsius):
+					xit_old[ilayer, itimestep] = q10**((soil_temp_profile_steady_state[ilayer, itimestep] - (kelvin_to_celsius + 25))/10)
+				else:
+					xit_old[ilayer, itimestep] = q10**((273.15 - 298.15)/10)*(fq10**((soil_temp_profile_steady_state[ilayer, itimestep] - (0 + kelvin_to_celsius))/10))
+				# end if soil_temp_profile[ilayer, itimestep] >= 0 + kelvin_to_celsius:
+			# end for layer
+			
+			catanf_30 = catanf(torch.tensor(30.0).to(device))
+			normalization_tref = torch.tensor(15).to(device)
+			if normalize_q10_to_century_tfunc == True:
+				# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
+				normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
+				xit_old[:, itimestep] = xit_old[:, itimestep]*normalization_factor
+		xit = xit_old
 
-	# New way to calculate xit (vectorized))
-	xit_above_freezing = torch.pow(q10, ((soil_temp_profile_steady_state - (kelvin_to_celsius + 25))/10))  # Above freezing case first
-	xit_below_freezing = torch.pow(q10, ((273.15 - 298.15)/10)) * torch.pow(fq10, ((soil_temp_profile_steady_state - (0 + kelvin_to_celsius))/10))	
-	freezing_mask = (soil_temp_profile_steady_state < (0 + kelvin_to_celsius)).detach().int()  # Create a mask which is True when the soil temperatue is below freezing
-	xit = xit_above_freezing * (1-freezing_mask) + xit_below_freezing * freezing_mask  # [freezing_mask] = xit_below_freezing[freezing_mask].clone()
-	catanf_30 = catanf(torch.tensor(30.0).to(device))
-	normalization_tref = torch.tensor(15).to(device)
-	if normalize_q10_to_century_tfunc == True:
-		# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
-		normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
-		xit = xit * normalization_factor
-	# print("XIT new", time.time() - start)
-	# assert(torch.equal(xit_old, xit))
+	if vectorized in ['true', 'compare']:  # New way to calculate xit (vectorized))
+		xit_above_freezing = torch.pow(q10, ((soil_temp_profile_steady_state - (kelvin_to_celsius + 25))/10))  # Above freezing case first
+		xit_below_freezing = torch.pow(q10, ((273.15 - 298.15)/10)) * torch.pow(fq10, ((soil_temp_profile_steady_state - (0 + kelvin_to_celsius))/10))	
+		freezing_mask = (soil_temp_profile_steady_state < (0 + kelvin_to_celsius)).detach().int()  # Create a mask which is True when the soil temperatue is below freezing
+		xit = xit_above_freezing * (1-freezing_mask) + xit_below_freezing * freezing_mask  # [freezing_mask] = xit_below_freezing[freezing_mask].clone()
+		catanf_30 = catanf(torch.tensor(30.0).to(device))
+		normalization_tref = torch.tensor(15).to(device)
+		if normalize_q10_to_century_tfunc == True:
+			# scale all decomposition rates by a constant to compensate for offset between original CENTURY temp func and Q10
+			normalization_factor = (catanf(normalization_tref)/catanf_30) / (q10**((normalization_tref-25)/10))
+			xit = xit * normalization_factor
 
+	if vectorized == 'compare':
+		assert(torch.equal(xit_old, xit))
 
 	xiw = soil_water_profile_steady_state*w_scaling
 	xiw[xiw > 1] = 1
@@ -371,15 +366,12 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 		timesteply_xin = xin[:, itimestep]
 
 		# K matrix
-		# start = time.time()
-		# kk_ma_old = kk_matrix(timesteply_xit, timesteply_xiw, timesteply_xio, timesteply_xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3)
-		# print("kk_ma old", time.time() - start)
-		# start = time.time()
-		kk_ma = kk_matrix_vectorized(timesteply_xit, timesteply_xiw, timesteply_xio, timesteply_xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3)
-		# check whether kk_ma requires grad
-		# print("kk_ma requires grad", kk_ma.requires_grad)
-		# print("kk_ma_vectorized", time.time() - start)
-		# assert torch.equal(kk_ma_old, kk_ma)
+		if vectorized in ['false', 'compare']:
+			kk_ma = kk_ma_old = kk_matrix(timesteply_xit, timesteply_xiw, timesteply_xio, timesteply_xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3)
+		if vectorized in ['true', 'compare']:
+			kk_ma = kk_matrix_vectorized(timesteply_xit, timesteply_xiw, timesteply_xio, timesteply_xin, efolding, tau4cwd, tau4l1, tau4l2, tau4l3, tau4s1, tau4s2, tau4s3)
+		if vectorized in 'compare':
+			assert torch.equal(kk_ma_old, kk_ma)
 		kk_ma_middle[:, :, itimestep] = kk_ma
 
 		# tri matrix	
@@ -387,27 +379,24 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 		timesteply_altmax_current_profile = altmax_current_profile_steady_state[itimestep]
 		timesteply_altmax_lastyear_profile = altmax_lastyear_profile_steady_state[itimestep]
 
-		# start = time.time()
-		# tri_ma_alternative_old = tri_matrix_alternative(timesteply_nbedrock, slope, intercept, device)
-		# print("tri_ma_alt", time.time()-start)
-
-		# start = time.time()
-		# tri_ma_alternative = tri_matrix_alternative_vectorized(timesteply_nbedrock, slope, intercept, device)
-		# print("tri_ma_alt_vectorized", time.time()-start)
-		# assert torch.equal(tri_ma_alternative_old[20:140, 20:140], tri_ma_alternative[20:140, 20:140])
-		# tri_ma_middle[:, :, itimestep] = tri_ma_alternative
-
 		if vertical_mixing == 'original':
-			tri_ma_middle[:, :, itimestep] = tri_matrix_old_improved(timesteply_nbedrock, timesteply_altmax_current_profile, timesteply_altmax_lastyear_profile, bio, adv, cryo)
+			if vectorized in ['false', 'compare']:
+				tri_ma = tri_ma_old = tri_matrix_old(timesteply_nbedrock, timesteply_altmax_current_profile, timesteply_altmax_lastyear_profile, bio, adv, cryo)
+			if vectorized in ['true', 'compare']:
+				tri_ma = tri_matrix_old_improved(timesteply_nbedrock, timesteply_altmax_current_profile, timesteply_altmax_lastyear_profile, bio, adv, cryo)
 		else:
-			tri_ma_middle[:, :, itimestep] = tri_matrix_alternative_vectorized(timesteply_nbedrock, slope, intercept, intercept_leach, device)
+			if vectorized in ['false', 'compare']:
+				assert vertical_mixing == 'simple_one_intercept'  # For non-vectorized tri_matrix_alternative, only one intercept is supported
+				tri_ma = tri_ma_old = tri_matrix_alternative(timesteply_nbedrock, slope, intercept, device)
+			if vectorized in ['true', 'compare']:
+				tri_ma = tri_matrix_alternative_vectorized(timesteply_nbedrock, slope, intercept, intercept_leach, device)
+		if vectorized == 'compare':
+			assert torch.equal(tri_ma_old, tri_ma)
+		tri_ma_middle[:, :, itimestep] = tri_ma
 
 	# end for itimestep
 	tri_ma = torch.mean(tri_ma_middle, axis = 2)
 	kk_ma = torch.mean(kk_ma_middle, axis = 2)
-	# check whether kk_ma requires grad
-	# print("kk_ma requires grad", kk_ma.requires_grad)
-	# print("tri_ma requires grad", tri_ma.requires_grad)
 	
 	#---------------------------------------------------
 	# steady state vertical profile, input allocation
@@ -417,21 +406,24 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 
 	vertical_prof = (torch.ones(n_soil_layer)*np.nan).to(device) 
 	if torch.mean(altmax_lastyear_profile_steady_state) > 0:
-		# # Old way of calculating vertical_prof
-		# vertical_prof_old = (torch.ones(n_soil_layer)*np.nan).to(device) 
-		# for j in range(n_soil_layer): #1:n_soil_layer
-		# 	if j == 0: # first layer
-		# 		vertical_prof_old[j] = (beta**((zisoi_0)*m_to_cm) - beta**(zisoi[j]*m_to_cm))/dz[j]
-		# 	else:
-		# 		vertical_prof_old[j] = (beta**((zisoi[j - 1])*m_to_cm) - beta**(zisoi[j]*m_to_cm))/dz[j]
-		# 	# end j == 0:
-		# # end for j in range(n_soil_layer):
-
-		# New way to calculate vertical_prof (vectorized)
-		vertical_prof = (torch.ones(n_soil_layer)*np.nan).to(device) 
-		vertical_prof[0] = (beta**((zisoi_0)*m_to_cm) - beta**(zisoi[0]*m_to_cm))/dz[0]
-		vertical_prof[1:n_soil_layer] = (beta**((zisoi[0:n_soil_layer-1])*m_to_cm) - beta**(zisoi[1:n_soil_layer]*m_to_cm))/dz[1:n_soil_layer]
-		# assert torch.equal(vertical_prof_old, vertical_prof)
+		if vectorized in ['false', 'compare']:
+			# Old way of calculating vertical_prof
+			vertical_prof_old = (torch.ones(n_soil_layer)*np.nan).to(device) 
+			for j in range(n_soil_layer): #1:n_soil_layer
+				if j == 0: # first layer
+					vertical_prof_old[j] = (beta**((zisoi_0)*m_to_cm) - beta**(zisoi[j]*m_to_cm))/dz[j]
+				else:
+					vertical_prof_old[j] = (beta**((zisoi[j - 1])*m_to_cm) - beta**(zisoi[j]*m_to_cm))/dz[j]
+				# end j == 0:
+			# end for j in range(n_soil_layer):
+			vertical_prof = vertical_prof_old
+		if vectorized in ['true', 'compare']:
+			# New way to calculate vertical_prof (vectorized)
+			vertical_prof = (torch.ones(n_soil_layer)*np.nan).to(device) 
+			vertical_prof[0] = (beta**((zisoi_0)*m_to_cm) - beta**(zisoi[0]*m_to_cm))/dz[0]
+			vertical_prof[1:n_soil_layer] = (beta**((zisoi[0:n_soil_layer-1])*m_to_cm) - beta**(zisoi[1:n_soil_layer]*m_to_cm))/dz[1:n_soil_layer]
+		if vectorized == 'compare':
+			assert torch.equal(vertical_prof_old, vertical_prof)
 
 	else:
 		vertical_prof[0] = 1/dz[0]
@@ -457,24 +449,12 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 	matrix_in[60:80, 0] = input_tot_litter3*vertical_input/dz[0:n_soil_layer]
 	matrix_in[80:140, 0] = 0
 
-	# # redistribution by beta in gc/m2/day
-	# matrix_in[0:20, 0] = input_tot_cwd*vertical_input # litter input gc/m2/day
-	# matrix_in[20:40, 0] = input_tot_litter1*vertical_input
-	# matrix_in[40:60, 0] = input_tot_litter2*vertical_input
-	# matrix_in[60:80, 0] = input_tot_litter3*vertical_input
-	# matrix_in[80:140, 0] = 0
-
 	# calculate the sum of the input
 	carbon_input_sum = (input_tot_cwd + input_tot_litter1 + input_tot_litter2 + input_tot_litter3) * days_per_year # unit gc/m2/yr
 	
 	# analytical solution of soc pools
 	try:
-		# torch 1.7
-		# cpool_steady_state = torch.solve((-matrix_in), (torch.matmul(a_ma, kk_ma)-tri_ma)).solution
-		# torch 1.11
-		# cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma)- tri_ma), (-matrix_in))
 		cpool_steady_state = torch.linalg.solve((torch.matmul(a_ma, kk_ma)- tri_ma), (-matrix_in))
-		# cpool_steady_state = torch.div(cpool_steady_state, dz_matrix_diagonal)
 	except Exception:
 		traceback.print_exc()
 		print("Predicted Parameters in Bulk simu cpool: ", para)
@@ -501,18 +481,12 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing):
 		# check matrix_in
 		if torch.isnan(torch.sum(matrix_in)):
 			print("matrix_in contains nan")
-		# if torch.det(matrix_in) == 0:
-		# 	print("matrix_in is singular")
-		# 	print(matrix_in)
 		if torch.det(torch.matmul(a_ma, kk_ma)-tri_ma) == 0:
 			print("a_ma*kk_ma - tri_ma is singular")
 		
-
-		# cpool_steady_state = torch.linalg.lstsq((torch.matmul(a_ma, kk_ma)-tri_ma), (-matrix_in)).solution 
 		cpool_steady_state = (torch.ones([140, 1])*(-1.0)).to(device)*torch.sum(para)/torch.sum(para)
 	# end try
-	# cpool_steady_state = (torch.ones([140, 1])*(-9999.)).to(device)*torch.sum(para)/torch.sum(para) 
-	# end try
+
 	# convert cpools_steady_state to a vector with size [20]
 	cpools_layer = torch.cat((cpool_steady_state[0:20, :], cpool_steady_state[20:40, :], cpool_steady_state[40:60, :], cpool_steady_state[60:80, :], cpool_steady_state[80:100, :], cpool_steady_state[100:120, :], cpool_steady_state[120:140, :]), dim = 1)	
 	cpools_layer = torch.sum(cpools_layer, axis = 1) # unit gC/m3

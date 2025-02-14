@@ -6,7 +6,7 @@ from fun_matrix_clm5_vectorized import fun_model_simu, fun_model_prediction
 from pe_gcn_model import GCN, PEGCN, GridCellSpatialRelationEncoder, SpatialSmoother
 from torch_geometric.nn import GCNConv, GATConv, SimpleConv, knn_graph
 from torch_geometric.utils import get_laplacian, to_dense_adj, to_torch_coo_tensor
-from misc_utils import select_depth
+from misc_utils import get_activation, get_param_constraint, select_depth
 from spatial_utils import *
 import visualization_utils
 
@@ -14,7 +14,7 @@ class mlp(torch.nn.Module):
 	"""
 	New MLP from this repo: https://github.com/whitneychiu/lipmlp_pytorch/blob/main/models/mlp.py
 	"""
-	def __init__(self, dims, use_bn=False, dropout_prob=0.0, leaky_relu=False, init='xavier_uniform'):
+	def __init__(self, dims, use_bn=False, dropout_prob=0.0, activation='relu', init='xavier_uniform'):
 		"""
 		dim[0]: input dim
 		dim[1:-1]: hidden dims
@@ -38,26 +38,33 @@ class mlp(torch.nn.Module):
 			if use_bn:
 				self.bns.append(torch.nn.BatchNorm1d(dims[ii+1]))
 		self.layer_output = torch.nn.Linear(dims[-2], dims[-1])
-		if leaky_relu:
-			self.relu = nn.LeakyReLU(negative_slope=0.3)
+		if activation == 'relu':
+			self.act = torch.nn.ReLU()
+		elif activation == 'leaky_relu':
+			self.act = nn.LeakyReLU(negative_slope=0.3)
+		elif activation == 'tanh':
+			self.act = torch.nn.Tanh()
 		else:
-			self.relu = torch.nn.ReLU()
+			raise ValueError("Invalid activation")
 
 		# Initialize linear layers
 		if init == "xavier_uniform":
-			gain_leaky_relu = nn.init.calculate_gain('leaky_relu', 0.3)
+			if activation == 'leaky_relu':
+				gain_activation = nn.init.calculate_gain(activation, 0.3)
+			else:
+				gain_activation = nn.init.calculate_gain(activation)
 			gain_sigmoid = nn.init.calculate_gain('sigmoid')
 			for layer in self.layers:
-				nn.init.xavier_uniform_(layer.weight, gain=gain_leaky_relu)
+				nn.init.xavier_uniform_(layer.weight, gain=gain_activation)
 				nn.init.zeros_(layer.bias)
 			nn.init.xavier_uniform_(self.layer_output.weight, gain=gain_sigmoid)
 			nn.init.zeros_(self.layer_output.bias)
 		elif init == "kaiming_uniform":
 			for layer in self.layers + [self.layer_output]:
-				if leaky_relu:
-					nn.init.kaiming_uniform_(layer.weight, nonlinearity='leaky_relu', a=0.3)
+				if activation == 'leaky_relu':
+					nn.init.kaiming_uniform_(layer.weight, nonlinearity=activation, a=0.3)
 				else:
-					nn.init.kaiming_uniform_(layer.weight, nonlinearity='relu')
+					nn.init.kaiming_uniform_(layer.weight, nonlinearity=activation)
 			nn.init.zeros_(self.layer_output.bias)
 		elif init == 'default':
 			pass
@@ -75,7 +82,7 @@ class mlp(torch.nn.Module):
 			x = self.layers[ii](x)
 			if self.use_bn:
 				x = self.bns[ii](x)
-			x = self.relu(x)
+			x = self.act(x)
 			if self.dropout_prob > 0:
 				x = self.dropout(x)
 
@@ -140,14 +147,56 @@ class mlp(torch.nn.Module):
 	# 	return loss
 
 
+class SENN(nn.Module):
+	def __init__(self,
+				 num_inputs: int,
+				 num_outputs: int,
+				 num_hidden: int,
+				 num_layers: int,
+				 use_bn: bool = False,
+				 dropout_prob: float = 0.0,
+				 activation: str = 'relu',
+				 init: str = 'xavier_uniform') -> None:
+		"""
+		Following the idea of 'Self-Explaining Neural Networks', learns a function
+
+			f(x) = \theta(x)^T x
+		
+			where x \in R^{num_inputs}, and theta(x): R^{num_inputs} -> R^{(num_inputs + 1) * num_outputs}
+			is parameterized by a neural network. The commandline arguments
+			all refer to the theta(x) neural network, except for num_outputs.
+		"""
+		super().__init__()
+		self.num_inputs = num_inputs
+		self.num_outputs = num_outputs
+		layer_sizes = [self.num_inputs] + ([num_hidden] * (num_layers-1)) + [(self.num_inputs + 1) * self.num_outputs]
+		self.theta = mlp(layer_sizes, use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init)
+
+	# x has shape [batch, num_inputs]
+	def forward(self, x):
+		coefs_and_biases = self.theta(x)
+		self.biases = coefs_and_biases[:, 0:self.num_outputs]
+		self.coefs = coefs_and_biases[:, self.num_outputs:].reshape((x.shape[0], self.num_outputs, self.num_inputs))
+
+		# print("X", x[0])
+		# print("Coefs", self.coefs[0])
+		# print("Biases", self.biases[0])
+		self.predictions = torch.bmm(self.coefs, x.unsqueeze(-1)).squeeze(-1) + self.biases  # [batch, num_outputs]
+		# print("Final preds", self.predictions)
+		return self.predictions
+	
+
+	
+	
+
 #---------------------------------------------------
 # Wrapper for MLP and LipMLP from this repo: https://github.com/whitneychiu/lipmlp_pytorch/blob/main/models/mlp.py
 #---------------------------------------------------
 # define model
 class mlp_wrapper(nn.Module):
-	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, pos_enc,
-				 lipschitz=False, one_hot=False, use_bn=False, dropout_prob=0.0,
-				 leaky_relu=False, rep_grad=False,
+	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, vectorized='true', pos_enc='early',
+				 base_model="new_mlp", one_hot=False, use_bn=False, dropout_prob=0.0,
+				 activation='relu', param_constraint='sigmoid', rep_grad=False,
 				 losses=["l1", "param_reg"], device="cpu", train_x=None,
 				 min_temp=10, max_temp=109, init="xavier_uniform", width=128):
 		"""
@@ -163,7 +212,9 @@ class mlp_wrapper(nn.Module):
 		self.one_hot = one_hot
 		self.var_idx_to_emb = var_idx_to_emb
 		self.vertical_mixing = vertical_mixing
+		self.vectorized = vectorized
 		self.pos_enc = pos_enc
+		self.base_model = base_model
 
 		# List of non-categorical variable indices
 		self.non_categorical_indices = list(set(list(range(input_vars))).difference(var_idx_to_emb.keys()))
@@ -187,7 +238,7 @@ class mlp_wrapper(nn.Module):
 		else:
 			self.num_params = 21
 
-		# Input transformation
+		# Standardize input to (mean 0, std 1) if desired
 		if train_x is not None:
 			train_features = train_x[:, self.non_categorical_indices, 0, 0]
 			self.input_mean = train_features.mean(dim=0, keepdim=True)
@@ -197,7 +248,18 @@ class mlp_wrapper(nn.Module):
 			self.input_std = None
 
 		# Spatial Encoder from PE-GNN
-		if pos_enc != "none":
+		if pos_enc == "early":
+			self.spatial_encoder = GridCellSpatialRelationEncoder(
+				spa_embed_dim=128,
+				coord_dim=2, # Longitude and latitude
+				frequency_num=16,
+				max_radius=360,
+				min_radius=1e-06,
+				freq_init="geometric",
+				ffn=True,  # TODO True # Enable feedforward network for final spatial embeddings
+			)
+			self.new_input_size += 128  # Add the spatial embeddings
+		elif pos_enc == "late":
 			self.spatial_encoder = GridCellSpatialRelationEncoder(
 				spa_embed_dim=self.num_params,
 				coord_dim=2, # Longitude and latitude
@@ -205,24 +267,31 @@ class mlp_wrapper(nn.Module):
 				max_radius=360,
 				min_radius=1e-06,
 				freq_init="geometric",
-				ffn=False,  # TODO True # Enable feedforward network for final spatial embeddings
+				ffn=True,  # TODO True # Enable feedforward network for final spatial embeddings
 			)
 		if pos_enc == "early":
 			self.new_input_size += self.num_params  # Add the spatial embeddings
 
 		# MLP backbone
-		if lipschitz:
+		if base_model == "lipmlp":
 			self.mlp = lipmlp((self.new_input_size, width, width, self.num_params),
 							   use_bn=use_bn, dropout_prob=dropout_prob)  # TODO different initialization methods, leaky relu, dropout, etc. not supported
-		else:
+		elif base_model == "senn":
+			assert self.one_hot, "SENN makes most sense with one-hot encodings"
+			self.mlp = SENN(num_inputs=self.new_input_size, num_outputs=self.num_params,
+							num_hidden=width, num_layers=3,
+				   			use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init)
+		elif base_model == "new_mlp":
 			self.mlp = mlp((self.new_input_size, width, width, self.num_params),  # TEMP TODO @joshuafan, 256, 256
-							  use_bn=use_bn, dropout_prob=dropout_prob, leaky_relu=leaky_relu, init=init)
+							  use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init)
+		else:
+			raise ValueError("Unsupported base_model")
 
 		# sigmoid parameter
 		self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)
 		self.min_temp = min_temp
 		self.max_temp = max_temp
-		self.sigmoid = nn.Sigmoid()
+		self.sigmoid = get_param_constraint(param_constraint)
 
 		# LibMTL specific
 		self.rep_grad = rep_grad  # Whether to compute gradients w.r.t. parameters as well
@@ -245,7 +314,7 @@ class mlp_wrapper(nn.Module):
 		for idx, embedding_layer in self.var_idx_to_emb.items():
 			idx = int(idx)
 			if self.one_hot:
-				emb = 0.1*F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
+				emb = F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
 			else:
 				emb = embedding_layer(predictor[:, idx].int())
 				emb = F.normalize(emb, p=2, dim=1)  # New @joshuafan: normalize embeddings. TODO Reconsider this
@@ -262,7 +331,7 @@ class mlp_wrapper(nn.Module):
 
 		# Spatial Encoding
 		if self.pos_enc == "early":
-			spatial_embeddings = self.spatial_encoder(coords).squeeze(1) # Remove the channel dimension. [batch, params]
+			spatial_embeddings = self.spatial_encoder(coords).squeeze(1)  # Remove the channel dimension. [batch, params]
 			# print("Spatial embeds", spatial_embeddings)
 			new_input = torch.concatenate([spatial_embeddings, new_input], dim=1)
 
@@ -281,17 +350,18 @@ class mlp_wrapper(nn.Module):
 			exit(1)
 
 		# Clamp temp_sigmoid to be within a range
-		clamped_temp_sigmoid = self.min_temp + (self.max_temp - self.min_temp) * self.sigmoid(self.temp_sigmoid)  # 10 + 90*self.sigmoid(self.temp_sigmoid)   #10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range
+		clamped_temp_sigmoid = self.min_temp + (self.max_temp - self.min_temp) * F.sigmoid(self.temp_sigmoid)  # 10 + 90*self.sigmoid(self.temp_sigmoid)   #10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range
 
 		# Positional encoder correction (if using)
 		if self.pos_enc == "late":
-			spatial_embeddings = self.spatial_encoder(coords).squeeze(1) # Remove the channel dimension. [batch, params]
+			spatial_embeddings = self.spatial_encoder(coords).squeeze(1)  # Remove the channel dimension. [batch, params]
 			mlp_output += spatial_embeddings
 
 		# Pass parameters through sigmoid to constrain their range
-		h5 = self.sigmoid(mlp_output / clamped_temp_sigmoid)
-		if h5.requires_grad:
-			h5.retain_grad()
+		self.unconstrained_params = mlp_output / clamped_temp_sigmoid
+		predicted_para = self.sigmoid(self.unconstrained_params)
+		if predicted_para.requires_grad:
+			predicted_para.retain_grad()
 
 		# import misc_utils
 		# misc_utils.print_summary(self.mlp.layer_output.weight, "FINAL WEIGHT")
@@ -303,27 +373,27 @@ class mlp_wrapper(nn.Module):
 		if one_param_only:
 			# Choose one parameter to update, stop gradient w.r.t. other params
 			import random
-			param_idx = random.randint(0, h5.shape[1])
-			prev = h5[:, :param_idx].detach()
-			param_vals = h5[:, param_idx:param_idx+1]
-			next = h5[:, param_idx:].detach()
-			h5 = torch.cat([prev, param_vals, next], dim=1)
+			param_idx = random.randint(0, predicted_para.shape[1])
+			prev = predicted_para[:, :param_idx].detach()
+			param_vals = predicted_para[:, param_idx:param_idx+1]
+			next = predicted_para[:, param_idx:].detach()
+			predicted_para = torch.cat([prev, param_vals, next], dim=1)
 
 		# check if h5 is nan
-		if torch.isnan(h5).any() or torch.isinf(h5).any():
-			print("h5 was nan", h5)
+		if torch.isnan(predicted_para).any() or torch.isinf(predicted_para).any():
+			print("predicted_para was nan", predicted_para)
 			exit(1)
 
 		# CLM5 process-based model
 		if whether_predict == 1:
-			simu_soc = fun_model_prediction(h5, forcing, self.vertical_mixing)
+			simu_soc = fun_model_prediction(predicted_para, forcing, self.vertical_mixing, self.vectorized)
 		else:
-			simu_soc = fun_model_simu(h5, forcing, obs_depth, self.vertical_mixing)
+			simu_soc = fun_model_simu(predicted_para, forcing, obs_depth, self.vertical_mixing, self.vectorized)
 
 		if return_spatial_embedding:
-			return simu_soc, h5, spatial_embeddings
+			return simu_soc, predicted_para, spatial_embeddings
 		else:
-			return simu_soc, h5
+			return simu_soc, predicted_para
 
 
 	def forward_ignoring_input(self, input_var, wosis_depth):
@@ -335,7 +405,7 @@ class mlp_wrapper(nn.Module):
 		obs_depth = wosis_depth
 
 		# Use "layer_output.bias" as globally-fixed parameter set
-		clamped_temp_sigmoid = 0.5 + 1*self.sigmoid(self.temp_sigmoid)  # 10 + 90*self.sigmoid(self.temp_sigmoid)   #10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range
+		clamped_temp_sigmoid = self.min_temp + (self.max_temp - self.min_temp) * F.sigmoid(self.temp_sigmoid)
 		bias = self.mlp.layer_output.bias  # [n_params]
 		bias = bias.repeat((predictor.shape[0], 1))  # [batch, n_params]
 		h5 = self.sigmoid(bias / clamped_temp_sigmoid)
@@ -345,7 +415,11 @@ class mlp_wrapper(nn.Module):
 
 
 	def predict_params_summed(self, func, input):
-		return func(input).sum(0)
+		# Returns predicted parameters (post-sigmoid), summed across the batch dim
+		mlp_output = func(input)
+		clamped_temp_sigmoid = self.min_temp + (self.max_temp - self.min_temp) * F.sigmoid(self.temp_sigmoid)
+		predicted_para = self.sigmoid(mlp_output / clamped_temp_sigmoid)
+		return predicted_para.sum(0)
 
 	def get_jacobian(self, input=None):
 		"""
@@ -386,40 +460,65 @@ class mlp_wrapper(nn.Module):
 
 		return batch_jacobian1
 		
- 
 
-
-
-
-
-	def partial_forward(self, new_input, input_var, wosis_depth):
+	def senn_robustness_loss(self, input=None):
 		"""
-		Helper function which skips the embedding layer and directly passes
-		`new_input` through the MLP and process_based model. We only need
-		this to use curvature regularization on the MLP."""
-		forcing = input_var[:, :, :, :]
-		obs_depth = wosis_depth
+		Computes robustness loss of Self-Explaining Neural Networks:
+	
+			\| \grad_x f(x) - \theta(x) \|_2^2
 
-		# Pass through MLP
-		mlp_output = self.mlp(new_input)
+		base_model must be SENN. input should have shape [batch, num_inputs].
+		We must have previously called forward() on the model, so that self.mlp.coefs
+		(theta(x)) are populated.
+		"""
+		assert self.base_model == "senn"
+		if input is None:
+			input = self.new_input
 
-		# check if mlp output is nan
-		if torch.isnan(mlp_output).any() or torch.isinf(mlp_output).any():
-			print("mlp_output was nan", mlp_output)
-			exit(1)
+		# TODO: Possibly perturb the input	
+		J_yx = torch.func.jacrev(self.predict_params_summed, argnums=1)(self.mlp, input)  # [n_params, batch, n_inputs]
+		J_yx = J_yx.permute((1, 0, 2))  # [batch, n_params, n_inputs]
+		robustness_loss = J_yx - self.mlp.coefs
+		# print("Robustness loss", J_yx.shape, self.mlp.coefs.shape, self.mlp.biases.shape)
+		return robustness_loss.norm(p='fro')
 
-		# Clamp temp_sigmoid to be between 10 and 100
-		clamped_temp_sigmoid = 10 + 99 * torch.sigmoid(self.temp_sigmoid) # constrain the temp_sigmoid between 10 and 100
-		h5 = torch.sigmoid(mlp_output / clamped_temp_sigmoid)
+	def senn_l1_loss(self):
+		assert self.base_model == "senn"
+		return self.mlp.coefs.abs().mean()
 
-		# check if h5 is nan
-		if torch.isnan(h5).any() or torch.isinf(h5).any():
-			print("h5 was nan", h5)
-			exit(1)
+	def senn_sparsity(self):
+		assert self.base_model == "senn"
+		return (self.mlp.coefs.abs() < 1e-5).float().mean()
 
-		# CLM5 process-based model
-		simu_soc = fun_model_simu(h5, forcing, obs_depth, self.vertical_mixing)
-		return simu_soc, h5
+
+	# def partial_forward(self, new_input, input_var, wosis_depth):
+	# 	"""
+	# 	Helper function which skips the embedding layer and directly passes
+	# 	`new_input` through the MLP and process_based model. We only need
+	# 	this to use curvature regularization on the MLP."""
+	# 	forcing = input_var[:, :, :, :]
+	# 	obs_depth = wosis_depth
+
+	# 	# Pass through MLP
+	# 	mlp_output = self.mlp(new_input)
+
+	# 	# check if mlp output is nan
+	# 	if torch.isnan(mlp_output).any() or torch.isinf(mlp_output).any():
+	# 		print("mlp_output was nan", mlp_output)
+	# 		exit(1)
+
+	# 	# Clamp temp_sigmoid to be between 10 and 100
+	# 	clamped_temp_sigmoid = 10 + 99 * torch.sigmoid(self.temp_sigmoid) # constrain the temp_sigmoid between 10 and 100
+	# 	h5 = torch.sigmoid(mlp_output / clamped_temp_sigmoid)
+
+	# 	# check if h5 is nan
+	# 	if torch.isnan(h5).any() or torch.isinf(h5).any():
+	# 		print("h5 was nan", h5)
+	# 		exit(1)
+
+	# 	# CLM5 process-based model
+	# 	simu_soc = fun_model_simu(h5, forcing, obs_depth, self.vertical_mixing)
+	# 	return simu_soc, h5
 
 
 	"""
@@ -442,7 +541,174 @@ class mlp_wrapper(nn.Module):
 			emb.zero_grad(set_to_none=False)
 
 
+#---------------------------------------------------
+# Pure NN without process-based model
+#---------------------------------------------------
+class nn_only(nn.Module):
+	def __init__(self, input_vars, var_idx_to_emb, pos_enc, output_dim=140,
+				 base_model="new_mlp", one_hot=False, use_bn=False, dropout_prob=0.0,
+				 activation="relu", rep_grad=False,
+				 losses=["l1", "param_reg"], device="cpu", output_mean=None, output_std=None, train_x=None,
+				 min_temp=10, max_temp=109, init="xavier_uniform", width=128):
+		"""
+		var_idx_to_emb is a dictionary mapping from categorical variable index to either
+		(1) Embedding layer (if one_hot is False)
+		(2) Number of categories (if one_hot is True)
 
+		If output_mean and output_std are provided, uses them to rescale the output.
+		If train_x is provided, use this to rescale the input. Specifically, compute mean/std
+		for non-categorical variables as train_x[:, self.non_categorical_indices, 0, 0].mean(dim=0).
+		"""
+		super().__init__()
+
+		self.one_hot = one_hot
+		self.var_idx_to_emb = var_idx_to_emb
+		self.pos_enc = pos_enc
+		self.output_dim = output_dim
+
+		# List of non-categorical variable indices
+		self.non_categorical_indices = list(set(list(range(input_vars))).difference(var_idx_to_emb.keys()))
+		self.new_input_size = len(self.non_categorical_indices)
+
+		# Setup categorical encoding
+		if self.one_hot:
+			# If one-hot, just calculate the input size
+			for _, num_classes in self.var_idx_to_emb.items():
+				self.new_input_size += num_classes
+		else:
+			# Create ModuleDict so that all Embedding layers in var_idx_to_emb
+			# are registered as parameters
+			self.var_idx_to_emb = nn.ModuleDict(self.var_idx_to_emb)
+			for _, emb in self.var_idx_to_emb.items():
+				self.new_input_size += emb.embedding_dim
+
+		# Number of parameters (totally fake)
+		self.num_params = 21
+
+		# Standardize input to (mean 0, std 1) if desired
+		if train_x is not None:
+			train_features = train_x[:, self.non_categorical_indices, 0, 0]
+			self.input_mean = train_features.mean(dim=0, keepdim=True)
+			self.input_std = train_features.std(dim=0, keepdim=True)
+		else:
+			self.input_mean = None
+			self.input_std = None
+
+		# Output transformation
+		self.output_mean = output_mean
+		self.output_std = output_std
+
+		# Spatial Encoder from PE-GNN
+		if pos_enc == "early":
+			self.spatial_encoder = GridCellSpatialRelationEncoder(
+				spa_embed_dim=128,
+				coord_dim=2, # Longitude and latitude
+				frequency_num=16,
+				max_radius=360,
+				min_radius=1e-06,
+				freq_init="geometric",
+				ffn=True,  # Enable feedforward network for final spatial embeddings
+			)
+			self.new_input_size += 128  # Add the spatial embeddings
+		elif pos_enc == "late":
+			self.spatial_encoder = GridCellSpatialRelationEncoder(
+				spa_embed_dim=self.num_params,
+				coord_dim=2, # Longitude and latitude
+				frequency_num=16,
+				max_radius=360,
+				min_radius=1e-06,
+				freq_init="geometric",
+				ffn=True,  # Enable feedforward network for final spatial embeddings
+			)
+
+		# MLP backbone
+		if base_model == "lipmlp":
+			self.mlp = lipmlp((self.new_input_size, width, width, self.num_params),
+							   use_bn=use_bn, dropout_prob=dropout_prob)  # TODO different initialization methods, activations, dropout, etc. not supported
+		elif base_model == "new_mlp":
+			self.mlp = mlp((self.new_input_size, width, width, self.num_params),
+							use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init)
+		else:
+			raise ValueError("Unsupported base_model")
+
+		self.act = get_activation(activation)
+		self.final_layer = nn.Linear(self.num_params, self.output_dim)
+		if init == 'xavier_uniform':
+			nn.init.xavier_uniform_(self.final_layer.weight)
+			nn.init.zeros_(self.final_layer.bias)
+		elif init == 'kaiming_uniform':
+			nn.init.kaiming_uniform_(self.final_layer.weight)
+			nn.init.zeros_(self.final_layer.bias)
+
+		# sigmoid parameter
+		self.sigmoid = nn.Sigmoid()
+
+
+	def forward(self, input_var, wosis_depth, coords, whether_predict,
+				return_spatial_embedding=False, **kwargs):
+		predictor = input_var[:, :, 0, 0]
+		forcing = input_var[:, :, :, :]
+		obs_depth = wosis_depth
+
+		# For some reason spatial encoder requires coords to have shape [batch, 1, 2] 
+		coords = coords.unsqueeze(1).detach()
+
+		# Compute embeddings for all categorical variables
+		embs = []
+		for idx, embedding_layer in self.var_idx_to_emb.items():
+			idx = int(idx)
+			if self.one_hot:
+				emb = F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
+			else:
+				emb = embedding_layer(predictor[:, idx].int())
+				emb = F.normalize(emb, p=2, dim=1)  # New @joshuafan: normalize embeddings
+			embs.append(emb)
+		all_embs = torch.concatenate(embs, dim=1)
+
+		# Preprocess numeric (non-categorical) features
+		features = predictor[:, self.non_categorical_indices]  # [batch, n_features]
+		if self.input_mean is not None and self.input_std is not None:
+			features = (features - self.input_mean) / self.input_std
+
+		# Combine numeric features and categorical embeddings
+		new_input = torch.concatenate([features, all_embs], dim=1)
+
+		# Spatial Encoding
+		if self.pos_enc == "early":
+			spatial_embeddings = self.spatial_encoder(coords).squeeze(1) # Remove the channel dimension. [batch, params]
+			# print("Spatial emb", spatial_embeddings.shape, "new input", new_input.shape, "coords", coords.shape)
+			new_input = torch.concatenate([spatial_embeddings, new_input], dim=1)
+		elif self.pos_enc == "late":
+			raise ValueError("Late pos_enc not supported for nn_only")
+
+		# check if new_input is nan
+		if torch.isnan(new_input).any() or torch.isinf(new_input).any():
+			print("new_input was nan", new_input)
+			exit(1)
+
+		# Pass through MLP to get fake pred_para
+		self.new_input = new_input
+		pred_para = self.mlp(new_input)
+		pred_output = self.final_layer(self.act(pred_para))
+		if self.output_mean is not None and self.output_std is not None:
+			pred_output = pred_output * self.output_std + self.output_mean
+
+		# Convert 140 pools to 20 layers
+		pred_output = pred_output.reshape((pred_output.shape[0], 20, 7)).mean(dim=2)
+
+		if whether_predict == 1:
+			return pred_output, self.sigmoid(pred_para)
+		else:
+			simu_soc = select_depth(pred_output, forcing, obs_depth)
+			return simu_soc, self.sigmoid(pred_para)
+
+
+
+"""
+=====================================================================================
+BELOW MODELS ARE EXPERIMENTAL. NOT ALL OPTIONS ARE IMPLEMENTED CURRENTLY.
+=====================================================================================
+"""
 
 #---------------------------------------------------
 # EXPERIMENTAL: BINN Hybrid: process-based model predicts SOC, but NN can correct it
@@ -450,8 +716,8 @@ class mlp_wrapper(nn.Module):
 # define model
 class BINN_Hybrid(nn.Module):
 	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, pos_enc,
-				 lipschitz=False, one_hot=False, use_bn=False, dropout_prob=0.0,
-				 leaky_relu=False, rep_grad=False,
+				 base_model="new_mlp", one_hot=False, use_bn=False, dropout_prob=0.0,
+				 activation='relu', param_constraint='sigmoid', rep_grad=False,
 				 losses=["l1", "param_reg"], device="cpu"):
 		"""
 		var_idx_to_emb is a dictionary mapping from categorical variable index to either
@@ -496,18 +762,20 @@ class BINN_Hybrid(nn.Module):
 				max_radius=360,
 				min_radius=1e-06,
 				freq_init="geometric",
-				ffn=True # Enable feedforward network for final spatial embeddings
+				ffn=True,  # Enable feedforward network for final spatial embeddings
 			)
 		if pos_enc == "early":
 			self.new_input_size += self.num_params  # Add the spatial embeddings
 
 		# MLP backbone
-		if lipschitz:
+		if base_model == "lipmlp":
 			self.mlp = lipmlp((self.new_input_size, 256, 256, self.num_params*2),
 							  use_bn=use_bn, dropout_prob=dropout_prob)  # TODO different initialization methods, leaky relu, dropout, etc. not supported
-		else:
+		elif base_model == "new_mlp":
 			self.mlp = mlp((self.new_input_size, 256, 256, self.num_params*2),
-							  use_bn=use_bn, dropout_prob=dropout_prob, leaky_relu=leaky_relu)
+							  use_bn=use_bn, dropout_prob=dropout_prob, activation=activation)
+		else:
+			raise ValueError("Unsupported base_model")
 
 		# Use second half of MLP output to directly predict residual (error)
 		# of process-based model
@@ -515,7 +783,7 @@ class BINN_Hybrid(nn.Module):
 
 		# sigmoid parameter
 		self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)
-		self.sigmoid = nn.Sigmoid()
+		self.sigmoid = get_param_constraint(param_constraint)
 
 		# LibMTL specific
 		self.rep_grad = rep_grad  # Whether to compute gradients w.r.t. parameters as well
@@ -536,7 +804,7 @@ class BINN_Hybrid(nn.Module):
 		for idx, embedding_layer in self.var_idx_to_emb.items():
 			idx = int(idx)
 			if self.one_hot:
-				emb = 0.1*F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
+				emb = F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
 			else:
 				emb = embedding_layer(predictor[:, idx].int())
 				emb = F.normalize(emb, p=2, dim=1)  # New @joshuafan: normalize embeddings
@@ -565,7 +833,7 @@ class BINN_Hybrid(nn.Module):
 			exit(1)
 
 		# Clamp temp_sigmoid to be between 10 and 200
-		clamped_temp_sigmoid = 10 + 99*self.sigmoid(self.temp_sigmoid)   #10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range
+		clamped_temp_sigmoid = 10 + 99*F.sigmoid(self.temp_sigmoid)   #10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range
 
 		# Positional encoder correction (if using)
 		if self.pos_enc == "late":
@@ -595,161 +863,13 @@ class BINN_Hybrid(nn.Module):
 			return simu_soc, pred_para
 
 
-
-
-
-#---------------------------------------------------
-# Pure NN without process-based model
-#---------------------------------------------------
-class nn_only(nn.Module):
-	def __init__(self, input_vars, var_idx_to_emb, pos_enc, output_dim=140,
-				 lipschitz=False, one_hot=False, use_bn=False, dropout_prob=0.0,
-				 leaky_relu=False, rep_grad=False,
-				 losses=["l1", "param_reg"], device="cpu", output_mean=None, output_std=None, train_x=None,
-				 min_temp=10, max_temp=109, init="xavier_uniform"):
-		"""
-		var_idx_to_emb is a dictionary mapping from categorical variable index to either
-		(1) Embedding layer (if one_hot is False)
-		(2) Number of categories (if one_hot is True)
-
-		If output_mean and output_std are provided, uses them to rescale the output.
-		If train_x is provided, use this to rescale the input. Specifically, compute mean/std
-		for non-categorical variables as train_x[:, self.non_categorical_indices, 0, 0].mean(dim=0).
-		"""
-		super().__init__()
-
-		self.one_hot = one_hot
-		self.var_idx_to_emb = var_idx_to_emb
-		self.pos_enc = pos_enc
-		self.output_dim = output_dim
-
-		# List of non-categorical variable indices
-		self.non_categorical_indices = list(set(list(range(input_vars))).difference(var_idx_to_emb.keys()))
-		self.new_input_size = len(self.non_categorical_indices)
-
-		# Setup categorical encoding
-		if self.one_hot:
-			# If one-hot, just calculate the input size
-			for _, num_classes in self.var_idx_to_emb.items():
-				self.new_input_size += num_classes
-		else:
-			# Create ModuleDict so that all Embedding layers in var_idx_to_emb
-			# are registered as parameters
-			self.var_idx_to_emb = nn.ModuleDict(self.var_idx_to_emb)
-			for _, emb in self.var_idx_to_emb.items():
-				self.new_input_size += emb.embedding_dim
-
-		# Number of parameters (totally fake)
-		self.num_params = 22
-
-		# Input transformation
-		if train_x is not None:
-			train_features = train_x[:, self.non_categorical_indices, 0, 0]
-			self.input_mean = train_features.mean(dim=0, keepdim=True)
-			self.input_std = train_features.std(dim=0, keepdim=True)
-		else:
-			self.input_mean = None
-			self.input_std = None
-
-		# Output transformation
-		self.output_mean = output_mean
-		self.output_std = output_std
-
-		# Spatial Encoder from PE-GNN
-		if pos_enc != "none":
-			self.spatial_encoder = GridCellSpatialRelationEncoder(
-				spa_embed_dim=self.num_params,
-				coord_dim=2, # Longitude and latitude
-				frequency_num=16,
-				max_radius=360,
-				min_radius=1e-06,
-				freq_init="geometric",
-				ffn=True # Enable feedforward network for final spatial embeddings
-			)
-		if pos_enc == "early":
-			self.new_input_size += self.num_params  # Add the spatial embeddings
-
-		# MLP backbone
-		if lipschitz:
-			self.mlp = lipmlp((self.new_input_size, 256, 256, self.num_params),
-							   use_bn=use_bn, dropout_prob=dropout_prob)  # TODO different initialization methods, leaky relu, dropout, etc. not supported
-		else:
-			self.mlp = mlp((self.new_input_size, 256, 256, self.num_params),
-							use_bn=use_bn, dropout_prob=dropout_prob, leaky_relu=leaky_relu, init=init)
-		self.final_layer = nn.Linear(self.num_params, self.output_dim)
-		# nn.init.xavier_uniform_(self.final_layer.weight)
-		# nn.init.zeros_(self.final_layer.bias)
-
-		# sigmoid parameter
-		self.sigmoid = nn.Sigmoid()
-
-
-	def forward(self, input_var, wosis_depth, coords, whether_predict,
-				return_spatial_embedding=False, **kwargs):
-		predictor = input_var[:, :, 0, 0]
-		forcing = input_var[:, :, :, :]
-		obs_depth = wosis_depth
-
-		# For some reason spatial encoder requires coords to have shape [batch, 1, 2] 
-		coords = coords.unsqueeze(1).detach()
-
-		# Compute embeddings for all categorical variables
-		embs = []
-		for idx, embedding_layer in self.var_idx_to_emb.items():
-			idx = int(idx)
-			if self.one_hot:
-				emb = 0.1*F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
-			else:
-				emb = embedding_layer(predictor[:, idx].int())
-				emb = F.normalize(emb, p=2, dim=1)  # New @joshuafan: normalize embeddings
-			embs.append(emb)
-		all_embs = torch.concatenate(embs, dim=1)
-
-		# Preprocess numeric (non-categorical) features
-		features = predictor[:, self.non_categorical_indices]  # [batch, n_features]
-		if self.input_mean is not None and self.input_std is not None:
-			features = (features - self.input_mean) / self.input_std
-
-		# Combine numeric features and categorical embeddings
-		new_input = torch.concatenate([features, all_embs], dim=1)
-
-		# Spatial Encoding
-		if self.pos_enc == "early":
-			spatial_embeddings = self.spatial_encoder(coords).squeeze(1) # Remove the channel dimension. [batch, params]
-			# print("Spatial emb", spatial_embeddings.shape, "new input", new_input.shape, "coords", coords.shape)
-			new_input = torch.concatenate([spatial_embeddings, new_input], dim=1)
-		elif self.pos_enc == "late":
-			raise ValueError("Late pos_enc not supported for nn_only")
-
-		# check if new_input is nan
-		if torch.isnan(new_input).any() or torch.isinf(new_input).any():
-			print("new_input was nan", new_input)
-			exit(1)
-
-		# Pass through MLP to get fake pred_para
-		self.new_input = new_input
-		pred_para = self.mlp(new_input)
-		pred_output = self.final_layer(F.relu(pred_para))
-		if self.output_mean is not None and self.output_std is not None:
-			pred_output = pred_output * self.output_std + self.output_mean
-
-		# Convert 140 pools to 20 layers
-		pred_output = pred_output.reshape((pred_output.shape[0], 20, 7)).mean(dim=2)
-
-		if whether_predict == 1:
-			return pred_output, self.sigmoid(pred_para)
-		else:
-			simu_soc = select_depth(pred_output, forcing, obs_depth)
-			return simu_soc, self.sigmoid(pred_para)
-
-
 #---------------------------------------------------
 # EXPERIMENTAL: Use PEGCN as encoder for BINN model
 #---------------------------------------------------
 class GNN_BINN(nn.Module):
 	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, pos_enc,
 				 k=20, one_hot=False, use_bn=False, dropout_prob=0.0,
-				 leaky_relu=False, rep_grad=False, graph_conv='gcn',
+				 activation='relu', param_constraint='sigmoid', rep_grad=False, graph_conv='gcn',
 				 gnn_input_dim=256, emb_hidden_dim=128,
 				 losses=["l1", "param_reg"], device="cpu"):
 		"""
@@ -803,7 +923,7 @@ class GNN_BINN(nn.Module):
 			)
 
 		# GNN
-		self.initial_fc = mlp((self.new_input_size, 256, 32), use_bn=use_bn, dropout_prob=dropout_prob, leaky_relu=leaky_relu)
+		self.initial_fc = mlp((self.new_input_size, 256, 32), use_bn=use_bn, dropout_prob=dropout_prob, activation=activation)
 		#nn.Linear(self.new_input_size, gnn_input_dim)
 		self.graph_conv = graph_conv
 		if graph_conv == 'gcn':
@@ -825,14 +945,11 @@ class GNN_BINN(nn.Module):
 
 		# Dropout/activation
 		self.dropout = nn.Dropout(dropout_prob)
-		if leaky_relu:
-			self.relu = nn.LeakyReLU(negative_slope=0.3)
-		else:
-			self.relu = torch.nn.ReLU()
+		self.act = get_activation(activation)
 
 		# sigmoid parameter
 		self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)
-		self.sigmoid = nn.Sigmoid()
+		self.sigmoid = get_param_constraint(param_constraint)
 
 		# LibMTL specific
 		self.rep_grad = rep_grad  # Whether to compute gradients w.r.t. parameters as well
@@ -874,7 +991,7 @@ class GNN_BINN(nn.Module):
 		embs = []
 		for idx, embedding_layer in self.var_idx_to_emb.items():
 			if self.one_hot:
-				emb = 0.1*F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
+				emb = F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
 			else:
 				emb = embedding_layer(predictor[:, idx].int())
 				emb = F.normalize(emb, p=2, dim=1)  # New @joshuafan: normalize embeddings
@@ -887,16 +1004,16 @@ class GNN_BINN(nn.Module):
 			x = torch.concatenate([x, spatial_emb], dim=1)
 
 		# Pass through GNN
-		x = self.relu(self.initial_fc(x))
-		h1 = self.relu(self.conv1(x, edge_index, edge_weight))
+		x = self.act(self.initial_fc(x))
+		h1 = self.act(self.conv1(x, edge_index, edge_weight))
 		h1 = self.dropout(h1)
 		if self.conv2 is not None:
-			h1 = self.relu(self.conv2(h1, edge_index, edge_weight))
+			h1 = self.act(self.conv2(h1, edge_index, edge_weight))
 			h1 = self.dropout(h1)
 		gnn_output = self.fc(h1)
 
 		# Clamp temp_sigmoid to be between 10 and 200
-		clamped_temp_sigmoid = 10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range
+		clamped_temp_sigmoid = 10 + 99 * F.sigmoid(self.temp_sigmoid) # try with a smaller range
 
 		# Pass parameters through sigmoid to constrain their range
 		if self.pos_enc == "late":
@@ -958,7 +1075,8 @@ class GNN_BINN(nn.Module):
 class Spatial_BINN(nn.Module):
 	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, pos_enc,
 				 k=20, one_hot=False, rep_grad=False,
-				 use_bn=False, dropout_prob=0.0, leaky_relu=False, emb_hidden_dim=128,
+				 use_bn=False, dropout_prob=0.0, 
+				 activation='relu', param_constraint='sigmoid', emb_hidden_dim=128,
 				 losses=["l1", "param_reg"], device="cpu"):
 		"""
 		var_idx_to_emb is a dictionary mapping from categorical variable index to either
@@ -997,7 +1115,7 @@ class Spatial_BINN(nn.Module):
 
 		# Fully-connected
 		self.mlp = mlp((self.new_input_size, 256, 256, self.num_params),
-						use_bn=use_bn, dropout_prob=dropout_prob, leaky_relu=leaky_relu)
+						use_bn=use_bn, dropout_prob=dropout_prob, activation=activation)
 
 		# Spatial smoother
 		self.smoother = SpatialSmoother(self.num_params, k=k)
@@ -1016,7 +1134,7 @@ class Spatial_BINN(nn.Module):
 
 		# sigmoid parameter
 		self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)
-		self.sigmoid = nn.Sigmoid()
+		self.sigmoid = get_param_constraint(param_constraint)
 
 		# LibMTL specific
 		self.rep_grad = rep_grad  # Whether to compute gradients w.r.t. parameters as well
@@ -1051,7 +1169,7 @@ class Spatial_BINN(nn.Module):
 		embs = []
 		for idx, embedding_layer in self.var_idx_to_emb.items():
 			if self.one_hot:
-				emb = 0.1*F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
+				emb = F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
 			else:
 				emb = embedding_layer(predictor[:, idx].int())
 				emb = F.normalize(emb, p=2, dim=1)  # New @joshuafan: normalize embeddings
@@ -1063,7 +1181,7 @@ class Spatial_BINN(nn.Module):
 		mlp_output = self.mlp(new_input)
 
 		# Clamp temp_sigmoid to be between 10 and 200
-		clamped_temp_sigmoid = 10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range
+		clamped_temp_sigmoid = 10 + 99 * F.sigmoid(self.temp_sigmoid) # try with a smaller range
 
 		# Positional encoder correction
 		if self.pos_enc == "late":
