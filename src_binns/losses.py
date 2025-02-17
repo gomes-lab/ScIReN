@@ -85,9 +85,10 @@ def binns_loss(y_pred, y_true, pred_para, plot_path=""):
 	param_reg_loss = torch.mean(torch.cosh(scale_factor*(pred_para - target_value)) - 1)
 
 	# Calculate the supervised losses
-	l1_loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean')
+	l1_loss = torch.nn.functional.l1_loss(soc_simu_vector, soc_true_vector, reduction='mean')
+	smooth_l1_loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean')
 	l2_loss = torch.nn.functional.mse_loss(soc_simu_vector, soc_true_vector, reduction='mean')
-	return l1_loss, l2_loss, param_reg_loss, modeling_inefficiency
+	return l1_loss, smooth_l1_loss, l2_loss, param_reg_loss, modeling_inefficiency
 # end binns loss
 
 
@@ -104,4 +105,11 @@ def binns_loss_simple(y_pred, y_true):
 
 
 def compute_param_violation_loss(unconstrained_params):
-	return torch.mean(torch.clamp(torch.abs(unconstrained_params) - 3.0, min=0))
+	return torch.sum(torch.clamp(torch.abs(unconstrained_params) - 3.0, min=0))
+
+
+def compute_param_matching_loss(pred_para, true_para):
+	"""
+	Simple L2 loss on the parameters. This is cheating but can be used for debugging.
+	"""
+	return torch.nn.functional.mse_loss(pred_para, true_para)

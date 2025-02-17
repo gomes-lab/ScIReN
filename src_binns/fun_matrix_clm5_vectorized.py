@@ -475,10 +475,12 @@ def fun_matrix_clm5(para, frocing_steady_state, vertical_mixing, vectorized='tru
 			# all entries outside the middle 3 diagonals are zero
 			assert torch.allclose(tri_ma_old, tri_ma)
 			tridiag_mask = torch.zeros((140, 140)).bool()
-			tridiag_mask[torch.arange(0,140), torch.arange(0,140)] = True
-			tridiag_mask[torch.arange(0,139), torch.arange(1,140)] = True
-			tridiag_mask[torch.arange(1,140), torch.arange(0,139)] = True
+			for p in range(20, 140, 20):  # pool start
+				tridiag_mask[torch.arange(p, p+20), torch.arange(p, p+20)] = True
+				tridiag_mask[torch.arange(p, p+19), torch.arange(p+1, p+20)] = True
+				tridiag_mask[torch.arange(p+1, p+20), torch.arange(p, p+19)] = True
 			assert torch.all(tri_ma[~tridiag_mask] == 0.0)
+			assert torch.all(tri_ma[tridiag_mask] != 0.0)
 		tri_ma_middle[:, :, itimestep] = tri_ma
 
 	# end for itimestep
@@ -953,8 +955,8 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 
 
 	# Peclet numbers
-	pe_m1 = torch.where(d_m1_zm1 == 0, torch.zeros_like(f_m1), f_m1 / (d_m1_zm1))  # TODO + epsilon))
-	pe_p1 = torch.where(d_p1_zp1 == 0, torch.zeros_like(f_p1), f_p1 / (d_p1_zp1))  # TODO + epsilon))
+	pe_m1 = torch.where(d_m1_zm1 == 0, torch.zeros_like(f_m1), f_m1 / (d_m1_zm1))  # NOTE + epsilon))
+	pe_p1 = torch.where(d_p1_zp1 == 0, torch.zeros_like(f_p1), f_p1 / (d_p1_zp1))  # NOTE + epsilon))
 
 	# Pre-compute the 'aaa' values for Patankar functions
 	aaa_m = torch.maximum(torch.zeros_like(pe_m1), (1. - 0.1 * pe_m1.abs())**5)
@@ -1237,7 +1239,7 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 			if diffus[j+1] > 0. and diffus[j] > 0.:
 				d_p1_zp1[j] = 1. / ((1. - w_p1[j].clone()) / diffus[j].clone() + w_p1[j].clone() / diffus[j+1].clone()) # Harmonic mean of diffus
 			else:
-				d_p1_zp1[j] = (1. - w_m1[j].clone()) * diffus[j].clone() + w_p1[j].clone() * diffus[j+1].clone() # Arithmetic mean of diffus.  NOTE: Replaced 1-w_m1 with 1-w_p1, I believe this was a typo in the original Fortran code.
+				d_p1_zp1[j] = (1. - w_p1[j].clone()) * diffus[j].clone() + w_p1[j].clone() * diffus[j+1].clone() # Arithmetic mean of diffus.  NOTE: Replaced 1-w_m1 with 1-w_p1, I believe this was a typo in the original Fortran code.
 
 			# end if diffus[j+1] > 0. and diffus[j] > 0.:
 			
@@ -1313,7 +1315,7 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 
 		# Upper boundary condition adjustment
 		if nlevdecomp > 1:
-			tri_ma[start_idx, start_idx] = -c_tri_dz[1]   # NOTE used to be -c_tri_dz[1]
+			tri_ma[start_idx, start_idx] = -c_tri_dz[0]   # NOTE used to be -c_tri_dz[1]
 
 
 		# Bottom boundary condition adjustment

@@ -19,7 +19,7 @@ from torch.optim.swa_utils import AveragedModel, SWALR
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from pe_gcn_model import GridCellSpatialRelationEncoder
 from spatial_utils import *
-from losses import binns_loss, binns_loss_simple, compute_param_violation_loss
+from losses import binns_loss, binns_loss_simple, compute_param_matching_loss, compute_param_violation_loss
 
 # sys.path.append('C:/Users/hx293/Research_Data/BINN/')
 # sys.path.append('/glade/u/home/haodixu/BINN')
@@ -152,7 +152,7 @@ parser.add_argument("--use_swa", action='store_true', help="Whether to use Stoch
 parser.add_argument("--clip_value", type=float, default=-1, help="Clip value for gradient clipping. -1 for no clipping.")
 
 # Losses and loss weights
-parser.add_argument("--losses", nargs="+", choices=["l1", "l2", "param_reg", "param_violation", "jacobian", "jacobian_sparsity", "spectral", "lipmlp", "cure", "senn_robustness", "senn_l1", "senn_sparsity", 
+parser.add_argument("--losses", nargs="+", choices=["l1", "smooth_l1", "l2", "param_reg", "param_violation", "param_matching", "jacobian", "jacobian_sparsity", "spectral", "lipmlp", "cure", "senn_robustness", "senn_l1", "senn_sparsity", 
 													"spatial_error", "spatial_emb_smoothness", "param_smoothness", "residual"], default=["l1", "param_reg"],
 					help="Note jacobian_sparsity cannot be optimized (non-differentiable): it is just something we track.")
 parser.add_argument("--loss_weighting", default="manual", choices=["manual", "relobralo", "IMTL", "two_stage"])
@@ -301,8 +301,9 @@ for i in range(1,22):
 # end
 # Drop the original columns
 PRODA_para = PRODA_para.drop(PRODA_para.columns[1:21*9], axis = 1)
+
 # print the head of the dataframe
-print("PRODA parameters")
+print("PRODA parameters HEAD!!!!!!!!!!!!!!!!!")
 print(PRODA_para.head())
 
 #-------------------------------
@@ -865,6 +866,8 @@ print("Shape of env info", env_info.shape)
 PRODA_para = PRODA_para.loc[PRODA_para['profile_id'].isin(current_data_profile_id)]
 PRODA_para = PRODA_para.sort_values(by='profile_id')
 # Store the PRODA_para into numpy array (mean_1 to mean_21)
+print("PRODA para", PRODA_para.shape)
+print("PRofile ID", current_data_profile_id)
 current_PRODA_para = PRODA_para[['mean_1', 'mean_2', 'mean_3', 'mean_4', 'mean_5', 'mean_6', 'mean_7', 'mean_8', 'mean_9', 'mean_10', 'mean_11', \
 								 'mean_12', 'mean_13', 'mean_14', 'mean_15', 'mean_16', 'mean_17', 'mean_18', 'mean_19', 'mean_20', 'mean_21']].to_numpy()              
 print("Shape of PRODA para", current_PRODA_para.shape)
@@ -905,29 +908,38 @@ for i in range(len(current_data_profile_id)):
 	# If any simulation is over 1,000,000 gC/m2, set it to nan
 	if np.any(PRODA_soc_simu[i, :] > 1000000):
 		print("ATTN Extreme SOC", PRODA_soc_simu[i, :])
-		print("Depths", current_data_z_simu[i, :])
+		print("Depths", current_data_z[i, :])
 		PRODA_soc_simu[i, :] = np.nan
 	if args.synthetic_labels:
-		if np.any(PRODA_soc_simu[i, :] > 100000) or torch.any((current_PRODA_para_simu < 0) | (current_PRODA_para_simu > 1)):
-			print(">>>>>>>>>>>>>>>>>>>>>>>> Outlier. Coordinates", current_data_c[i, :])
+		# Delete any sites where the PRODA parameters were outside the valid range
+		if torch.any((current_PRODA_para_simu < 0) | (current_PRODA_para_simu > 1)):
+			print(f">>>>>>>>>>>>>>>>>>>>>>>> Invalid PRODA params, site {i}. Coordinates", current_data_c[i, :])
 			print("PRODA params", current_PRODA_para[i, :])
 			valid_loc = ~np.isnan(current_data_z[i, :])
 			print("Depths", current_data_z[i, valid_loc])
-			print("SOC simu (vec)", PRODA_soc_simu[i, valid_loc])
+			print("SOC simu", PRODA_soc_simu[i, valid_loc])
 			print("SOC obs", current_data_y[i, valid_loc])
-			# soc_simu_all_layers = fun_model_prediction(current_PRODA_para_simu, current_data_x_simu, args.vertical_mixing, args.vectorized)
-			# print("SOC all layers", soc_simu_all_layers[0, 0:20])
+			PRODA_soc_simu[i, :] = np.nan
+		if np.any(PRODA_soc_simu[i, :] > 100000):
+			print(">>>>>>>>>>>>>>>>>>>>>>>> High simulated SOC. Coordinates", current_data_c[i, :])
+			print("PRODA params", current_PRODA_para[i, :])
+			valid_loc = ~np.isnan(current_data_z[i, :])
+			print("Depths", current_data_z[i, valid_loc])
+			print("SOC simu", PRODA_soc_simu[i, valid_loc])
+			print("SOC obs", current_data_y[i, valid_loc])
 
-# # Drop the profiles with nan values
-# valid_profile_loc = np.where(np.isnan(np.sum(PRODA_soc_simu, axis=1)) == False)[0]	
-# current_data_y = current_data_y[valid_profile_loc, :]
-# current_data_z = current_data_z[valid_profile_loc, :]
-# current_data_x = current_data_x[valid_profile_loc, :, :, :]
-# current_data_profile_id = current_data_profile_id[valid_profile_loc]
-# current_PRODA_para = current_PRODA_para[valid_profile_loc, :]
-# PRODA_soc_simu = PRODA_soc_simu[valid_profile_loc, :]
-# obs_upper_depth_matrix = obs_upper_depth_matrix[valid_profile_loc, :]
-# obs_lower_depth_matrix = obs_lower_depth_matrix[valid_profile_loc, :]
+# # Drop the profiles with all nan values
+valid_profile_loc = np.where(np.all(np.isnan(PRODA_soc_simu), axis=1) == False)[0]
+print("Invalid profiles", np.setdiff1d(np.arange(PRODA_soc_simu.shape[0]), valid_profile_loc))
+current_data_y = current_data_y[valid_profile_loc, :]
+current_data_z = current_data_z[valid_profile_loc, :]
+current_data_c = current_data_c[valid_profile_loc, :]
+current_data_x = current_data_x[valid_profile_loc, :, :, :]
+current_data_profile_id = current_data_profile_id[valid_profile_loc]
+current_PRODA_para = current_PRODA_para[valid_profile_loc, :]
+PRODA_soc_simu = PRODA_soc_simu[valid_profile_loc, :]
+obs_upper_depth_matrix = obs_upper_depth_matrix[valid_profile_loc, :]
+obs_lower_depth_matrix = obs_lower_depth_matrix[valid_profile_loc, :]
 
 # If using synthetic labels, treat the simulated SOC as the true labels
 if args.synthetic_labels:
@@ -939,6 +951,23 @@ print("Shape of PRODA soc simu", PRODA_soc_simu.shape)
 print("Shape of current data x", current_data_x.shape)
 print("Time taken to run PRODA soc simu", time.time() - start_time)
 
+
+# PRODA PARAM maps. Each row is a covariate, each column represents a split
+lons_list = []
+lats_list = []
+values_list = []
+vars_list = []
+print("PRODA PARAM maps")
+for var_idx in range(0, current_PRODA_para.shape[1]):
+	var = para_names[var_idx]
+	lons_list.extend([current_data_c[:, 0]])
+	lats_list.extend([current_data_c[:, 1]])
+	values_list.extend([current_PRODA_para[:, var_idx]])
+	vars_list.extend([f'PRODA Para: {var}'])
+
+visualization_utils.plot_map_grid(os.path.join(data_dir_input, f"proda_para_maps.png"),
+		lons_list, lats_list, values_list, vars_list, us_only=True, cols=1)
+exit(1)
 
 ###############################################################
 # Load checkpoint if resuming a previous run.
@@ -1723,8 +1752,8 @@ def worker(rank, world_size, job_id):
 
 	# Filename to store loss records and visualizations
 	nn_training_name = job_id + '_' + model_name
-	avg_loss_filename = 'avg_loss_' + nn_training_name + '.csv'
-	avg_NSE_filename = 'avg_NSE_' + nn_training_name + '.csv'
+	avg_loss_filename = 'losses.csv'  # 'avg_loss_' + nn_training_name + '.csv'
+	avg_NSE_filename = 'performance_metrics.csv'  # 'avg_NSE_' + nn_training_name + '.csv'
 	PLOT_DIR = os.path.join(data_dir_output, 'neural_network', job_id, 'visualizations')
 	os.makedirs(PLOT_DIR, exist_ok=True)  # Note: this should already exist from create_output_folders
 	# writer = SummaryWriter(data_dir_output + 'tensorboard/' + nn_training_name)
@@ -1960,8 +1989,8 @@ def worker(rank, world_size, job_id):
 		# record the loss history
 		train_loss_history = np.ones((num_epoch, len(args.losses)))*np.nan
 		val_loss_history = np.ones((num_epoch, len(args.losses)))*np.nan
-		train_NSE_history = np.ones((num_epoch, 1))*np.nan
-		val_NSE_history = np.ones((num_epoch, 1))*np.nan
+		train_NSE_history = np.ones((num_epoch, 3))*np.nan  # Columns are [NSE, MSE, MAE]
+		val_NSE_history = np.ones((num_epoch, 3))*np.nan
 		lr_history = np.ones((num_epoch))*np.nan
 		best_model_epoch = torch.tensor(0) # epoch with the best model so far
 
@@ -2122,10 +2151,11 @@ def worker(rank, world_size, job_id):
 			# print(psutil.virtual_memory())
 
 			#------------ 2 compute the objective function
-			smooth_l1_loss, l2_loss, param_reg_loss, train_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
+			l1_loss, smooth_l1_loss, l2_loss, param_reg_loss, train_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
 
 			# Compute additional losses if using. If we are not using them, set them to nan
 			param_violation_loss = np.nan
+			param_matching_loss = np.nan
 			jacobian_loss = np.nan
 			jacobian_sparsity = np.nan
 			lipmlp_loss = np.nan
@@ -2154,8 +2184,11 @@ def worker(rank, world_size, job_id):
 				for i in range(model_without_ddp.num_params):
 					param_smoothness_loss += ((batch_pred_para[:, i] @ laplacian @ batch_pred_para[:, i]) / torch.sum(batch_pred_para[:, i]**2))
 
+			# Parameter losses
 			if "param_violation" in args.losses:
-				param_violation_loss += compute_param_violation_loss(model_without_ddp.unconstrained_params)
+				param_violation_loss = compute_param_violation_loss(model_without_ddp.unconstrained_params)
+			if "param_matching" in args.losses:
+				param_matching_loss = compute_param_matching_loss(batch_pred_para, batch_proda_para)
 
 			# If using BINN_Hybrid, also force the PBM output to be close to groundtruth
 			if args.model == "binn_hybrid":
@@ -2264,10 +2297,12 @@ def worker(rank, world_size, job_id):
 			optimizer.zero_grad()
 
 			#------------ 4 accumulate partical derivatives of objective respect to parameters
-			loss_dict = {"l1": smooth_l1_loss,
+			loss_dict = {"l1": l1_loss,
+						"smooth_l1": smooth_l1_loss,
 						"l2": l2_loss,
 						"param_reg": param_reg_loss,
 						"param_violation": param_violation_loss,
+						"param_matching": param_matching_loss,
 						"jacobian": jacobian_loss,
 						"jacobian_sparsity": jacobian_sparsity,
 						"lipmlp": lipmlp_loss,
@@ -2324,7 +2359,7 @@ def worker(rank, world_size, job_id):
 
 			# Record losses
 			loss_record_train.append(train_losses)
-			NSE_record_train.append(train_NSE.item())
+			NSE_record_train.append(torch.tensor([train_NSE.item(), l2_loss.item(), l1_loss.item()], device=device))
 
 			# Record predicted parameters, true/predicted SOC
 			all_train_pred_para.append(batch_pred_para)
@@ -2387,12 +2422,13 @@ def worker(rank, world_size, job_id):
 					batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0)
 
 				# 2 compute the objective function
-				smooth_l1_loss, l2_loss, param_reg_loss, val_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
+				l1_loss, smooth_l1_loss, l2_loss, param_reg_loss, val_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
 
 				# Compute additional losses if using. Not strictly necessary but this helps us see if there
 				# is a difference between the losses for train/validation sets
 				# If we are not using them, set them to nan
 				param_violation_loss = np.nan
+				param_matching_loss = np.nan
 				jacobian_loss = np.nan
 				lipmlp_loss = np.nan
 				spectral_loss = np.nan
@@ -2423,7 +2459,10 @@ def worker(rank, world_size, job_id):
 				if args.model == "binn_hybrid":
 					residual_loss = torch.mean(torch.abs(residual))
 				if "param_violation" in args.losses:
-					param_violation_loss += compute_param_violation_loss(model_without_ddp.unconstrained_params)
+					param_violation_loss = compute_param_violation_loss(model_without_ddp.unconstrained_params)
+				if "param_matching" in args.losses:
+					param_matching_loss = compute_param_matching_loss(batch_pred_para, batch_proda_para)
+
 				if args.model == "lipmlp" and "lipmlp" in args.losses:
 					lipmlp_loss, cs, scalings = model_without_ddp.mlp.get_lipschitz_loss()
 					if ibatch == 1:
@@ -2483,10 +2522,12 @@ def worker(rank, world_size, job_id):
 				if "senn_sparsity" in args.losses:
 					senn_sparsity = model_without_ddp.senn_sparsity()
 
-				loss_dict = {"l1": smooth_l1_loss,
+				loss_dict = {"l1": l1_loss,
+				 			"smooth_l1": smooth_l1_loss,
 							"l2": l2_loss,
 							"param_reg": param_reg_loss,
 							"param_violation": param_violation_loss,
+							"param_matching": param_matching_loss,
 							"jacobian": jacobian_loss,
 							"jacobian_sparsity": jacobian_sparsity,
 							"lipmlp": lipmlp_loss,
@@ -2505,7 +2546,7 @@ def worker(rank, world_size, job_id):
 				# Store losses in a tensor, in the order of args.losses
 				val_losses = torch.stack([loss_dict[loss] for loss in args.losses]).to(device)
 				loss_record_val.append(val_losses)
-				NSE_record_val.append(val_NSE.item())
+				NSE_record_val.append(torch.tensor([val_NSE.item(), l2_loss.item(), l1_loss.item()], device=device))
 
 				# Record predicted parameters, true/predicted SOC
 				all_val_pred_para.append(batch_pred_para)
@@ -2543,22 +2584,22 @@ def worker(rank, world_size, job_id):
 		all_train_losses = [torch.zeros((len(args.losses)), device=device) for _ in range(world_size)]
 		all_val_losses = [torch.zeros((len(args.losses)), device=device) for _ in range(world_size)]
 		all_train_times = [torch.tensor(0.0, device=device) for _ in range(world_size)]
-		all_train_NSE = [torch.tensor(0.0, device=device) for _ in range(world_size)]
-		all_val_NSE = [torch.tensor(0.0, device=device) for _ in range(world_size)]
+		all_train_NSE = [torch.zeros((len(NSE_record_train[0])), device=device) for _ in range(world_size)]
+		all_val_NSE = [torch.zeros((len(NSE_record_val[0])), device=device) for _ in range(world_size)]
 		all_hist_times = [torch.tensor(0.0, device=device) for _ in range(world_size)]
 
 		dist.all_gather(all_train_losses, torch.stack(loss_record_train, dim=0).mean(dim=0))
 		dist.all_gather(all_val_losses, torch.stack(loss_record_val, dim=0).mean(dim=0))
 		dist.all_gather(all_train_times, torch.tensor(train_time, device=device))
-		dist.all_gather(all_train_NSE, torch.tensor(NSE_record_train, device=device).mean())
-		dist.all_gather(all_val_NSE, torch.tensor(NSE_record_val, device=device).mean())
+		dist.all_gather(all_train_NSE, torch.stack(NSE_record_train, dim=0).mean(dim=0))
+		dist.all_gather(all_val_NSE, torch.stack(NSE_record_val, dim=0).mean(dim=0))
 		dist.all_gather(all_hist_times, torch.tensor(hist_time, device=device))
 
 		# record the loss history
 		train_loss_history[iepoch, :] = torch.stack(all_train_losses, dim=0).mean(dim=0).detach().cpu().numpy()
 		val_loss_history[iepoch, :] = torch.stack(all_val_losses, dim=0).mean(dim=0).detach().cpu().numpy()
-		train_NSE_history[iepoch, :] = torch.stack(all_train_NSE).mean().detach().cpu().numpy()
-		val_NSE_history[iepoch, :] = torch.stack(all_val_NSE).mean().detach().cpu().numpy()
+		train_NSE_history[iepoch, :] = torch.stack(all_train_NSE, dim=0).mean(dim=0).detach().cpu().numpy()
+		val_NSE_history[iepoch, :] = torch.stack(all_val_NSE, dim=0).mean(dim=0).detach().cpu().numpy()
 
 
 
@@ -2880,9 +2921,11 @@ def worker(rank, world_size, job_id):
 		if rank == 0: 
 			train_losses_epoch = {loss: round(train_loss_history[iepoch, loss_idx], 2) for loss_idx, loss in enumerate(args.losses)}
 			val_losses_epoch = {loss: round(val_loss_history[iepoch, loss_idx], 2) for loss_idx, loss in enumerate(args.losses)}
+			train_NSE = round(train_NSE_history[iepoch, 0], 2)
+			val_NSE = round(val_NSE_history[iepoch, 0], 2)
 			#print(f'Epoch {iepoch}, train losses: {train_losses_epoch}')
 			#print(f'Validation losses: {val_losses_epoch}')
-			print(f'Epoch {iepoch} Rank {rank} - Train NSE: {torch.tensor(NSE_record_train).mean():.2f}, validation NSE: {torch.tensor(NSE_record_val).mean():.2f}, time: {train_time:.2f}', flush=True)
+			print(f'Epoch {iepoch} Rank {rank} - Train NSE: {train_NSE}, validation NSE: {val_NSE}, time: {train_time:.2f}', flush=True)
 			print(f'Train losses ({all_train_pred_soc.shape[0]} examples): {train_losses_epoch}')
 			print(f'Validation losses ({all_val_pred_soc.shape[0]} examples): {val_losses_epoch}')
 
@@ -2904,7 +2947,7 @@ def worker(rank, world_size, job_id):
 					dist.broadcast(args.lambdas, src=0)
 
 			# If this model is the best so far, save the checkpoint into 'opt_nn_{job_id}.pt'
-			if val_NSE_history[iepoch, :] <= best_val_NSE:  # @joshuafan: removed the iepoch==0 condition
+			if val_NSE_history[iepoch, 0] <= best_val_NSE:  # @joshuafan: removed the iepoch==0 condition
 				print(f'Best model updated at epoch {iepoch}')
 				best_model_epoch = torch.tensor(iepoch, device=device)
 
@@ -2994,12 +3037,12 @@ def worker(rank, world_size, job_id):
 			if iepoch == 0:
 				with open(nse_file, mode='w') as f:
 					csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-					csv_writer.writerow(['epoch', 'train_NSE', 'val_NSE', 'epoch_time', 'cumulative_time', 'best_model_epoch'])
+					csv_writer.writerow(['epoch', 'train_NSE', 'train_MSE', 'train_MAE', 'val_NSE', 'val_MSE', 'val_MAE', 'epoch_time', 'cumulative_time', 'best_model_epoch'])
 			with open(nse_file, mode='a+') as f:
 				csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-				csv_writer.writerow([iepoch, round(torch.stack(all_train_NSE).mean().item(), 6),
-									 round(torch.stack(all_val_NSE).mean().item(), 6),
-									 round(train_time, 2), round(hist_time, 2), best_model_epoch.item()])
+				csv_writer.writerow([iepoch] + torch.stack(all_train_NSE, dim=0).mean(dim=0).tolist() +
+									 torch.stack(all_val_NSE, dim=0).mean(dim=0).tolist() +
+									 [round(train_time, 2) + round(hist_time, 2) + best_model_epoch.item()])
 
 		# Ensure all processes reach this point before proceeding
 		dist.barrier()
@@ -3019,8 +3062,8 @@ def worker(rank, world_size, job_id):
 			args.lambdas = args.second_lambdas
 
 		# Add a early stopping condition
-		if val_NSE_history[iepoch, :] < best_val_NSE:
-			best_val_NSE = val_NSE_history[iepoch, :]
+		if val_NSE_history[iepoch, 0] < best_val_NSE:
+			best_val_NSE = val_NSE_history[iepoch, 0]
 			best_val_loss = val_loss_history[iepoch, :]
 			epochs_without_improvement = 0
 			# Optionally save the model here if it's the best one so far
@@ -3170,10 +3213,10 @@ def worker(rank, world_size, job_id):
 		visualization_utils.plot_losses(os.path.join(PLOT_DIR, "losses.png"), losses, labels)
 
 		# Also plot NSE curves: first remove nans
-		train_NSE_history = train_NSE_history[~np.any(np.isnan(train_NSE_history), axis=1)].flatten().tolist()
-		val_NSE_history = val_NSE_history[~np.any(np.isnan(val_NSE_history), axis=1)].flatten().tolist()
+		train_NSE_list = train_NSE_history[~np.any(np.isnan(train_NSE_history), axis=1), 0].flatten().tolist()
+		val_NSE_list = val_NSE_history[~np.any(np.isnan(val_NSE_history), axis=1), 0].flatten().tolist()
 		visualization_utils.plot_losses(os.path.join(PLOT_DIR, "nses.png"),
-									    [train_NSE_history, val_NSE_history],
+									    [train_NSE_list, val_NSE_list],
 										["Train NSE", "Val NSE"],
 										min_val=0, max_val=1.2)
 
@@ -3195,19 +3238,19 @@ def worker(rank, world_size, job_id):
 		with torch.no_grad():
 			# Get predictions for train examples, compute loss & plot
 			best_guess_train_y_hat, best_guess_train_pred_para = best_guess_model(train_x.to(device), train_z.to(device), train_c.to(device), whether_predict=0)
-			train_l1_loss, _, _, train_NSE = fun_loss(best_guess_train_y_hat, train_y.to(device), best_guess_train_pred_para)
-			print(f'Train loss: {train_l1_loss.item():.2f}, Train NSE: {train_NSE.item():.2f}')
+			train_mae, train_smooth_l1_loss, train_mse, _, train_NSE = fun_loss(best_guess_train_y_hat, train_y.to(device), best_guess_train_pred_para)
+			print(f'Train - MSE: {train_mse.item():.2f}, MAE: {train_mae.item():.2f}, NSE: {train_NSE.item():.2f}')
 
 			# Get predictions for val examples, compute loss & plot
 			best_guess_val_y_hat, best_guess_val_pred_para = best_guess_model(val_x.to(device), val_z.to(device), val_c.to(device), whether_predict=0)
-			val_l1_loss, _, _, val_NSE = fun_loss(best_guess_val_y_hat, val_y.to(device), best_guess_val_pred_para)
-			print(f'Val loss: {val_l1_loss.item():.2f}, Val NSE: {val_NSE.item():.2f}')
+			val_mae, val_smooth_l1_loss, val_mse, _, val_NSE = fun_loss(best_guess_val_y_hat, val_y.to(device), best_guess_val_pred_para)
+			print(f'Val - MSE: {val_mse.item():.2f}, MAE: {val_mae.item():.2f}, NSE: {val_NSE.item():.2f}')
 
 			if test_split_ratio != 0:
 				# Get predictions for test examples, compute loss & plot
 				best_guess_test_y_hat, best_guess_test_pred_para = best_guess_model(test_x.to(device), test_z.to(device), test_c.to(device), whether_predict=0)
-				test_l1_loss, _, _, test_NSE = fun_loss(best_guess_test_y_hat, test_y.to(device), best_guess_test_pred_para)
-				print(f'Test loss: {test_l1_loss.item():.2f}, Test NSE: {test_NSE.item():.2f}')
+				test_mae, test_smooth_l1_loss, test_mse, _, test_NSE = fun_loss(best_guess_test_y_hat, test_y.to(device), best_guess_test_pred_para)
+				print(f'Test - MSE: {test_mse.item():.2f}, MAE: {test_mae.item():.2f}, NSE: {test_NSE.item():.2f}')
 
 			# Also generate PREDICTED SOC for EACH SOIL LAYER (20)
 			train_simu_all_layers, _ = best_guess_model(train_x.to(device), train_z.to(device), train_c.to(device), whether_predict=1)
@@ -3223,7 +3266,7 @@ def worker(rank, world_size, job_id):
 		if not os.path.isfile(results_summary_file):
 			with open(results_summary_file, mode='w') as f:
 				csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-				csv_writer.writerow(['job_id', 'command', 'data_string', 'lr', 'weight_decay', 'seed', 'model_path', 'best_val_NSE', 'best_val_loss', 'test_NSE', 'test_loss'])
+				csv_writer.writerow(['job_id', 'command', 'data_string', 'lr', 'weight_decay', 'seed', 'model_path', 'val_MSE', 'val_MAE', 'val_NSE', 'test_MSE', 'test_MAE', 'test_NSE'])
 		command_string = " ".join(sys.argv)
 		data_string = f"Fold {args.cross_val_idx} {args.split} (data_seed = {args.data_seed}, n_datapoints = {args.n_datapoints})"
 
@@ -3231,7 +3274,7 @@ def worker(rank, world_size, job_id):
 		with open(results_summary_file, mode='a+') as f:
 			csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
 			best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt'
-			csv_writer.writerow([job_id, command_string, data_string, args.lr, args.weight_decay, args.seed, best_model_path, val_NSE.item(), val_l1_loss.item(), test_NSE.item(), test_l1_loss.item()])
+			csv_writer.writerow([job_id, command_string, data_string, args.lr, args.weight_decay, args.seed, best_model_path, val_mse.item(), val_mae.item(), val_NSE.item(), test_mse.item(), test_mae.item(), test_NSE.item()])
 
 
 		# create folder for the results
