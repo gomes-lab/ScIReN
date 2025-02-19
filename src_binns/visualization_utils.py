@@ -222,7 +222,7 @@ def plot_map_grid(filename, lons_list, lats_list, values_list, vars_list, us_onl
     if cols is None:
         cols = min(4, n_plots)
     rows = math.ceil(n_plots / cols)
-    fig, axeslist = plt.subplots(rows, cols, figsize=(12*cols, 6*rows), squeeze=False)
+    fig, axeslist = plt.subplots(rows, cols, figsize=(24*cols, 12*rows), squeeze=False)
     for i in range(n_plots):
         ax = axeslist.ravel()[i]
         plot_observations_world_map(lons_list[i], lats_list[i], values_list[i], plot_dir=None, 

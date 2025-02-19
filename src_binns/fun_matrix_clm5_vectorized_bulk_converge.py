@@ -1023,7 +1023,7 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	# d_m1_zm1[1:] = torch.where(inner_layers, 1. / ((1. - w_m1[1:]) / diffus[1:] + w_m1[1:] / diffus[:-1]), 0.)
 	# d_p1_zp1[:-1] = torch.where(inner_layers, 1. / ((1. - w_p1[:-1]) / diffus[:-1] + w_p1[:-1] / diffus[1:]), (1. - w_m1[:-1]) * diffus[:-1] + w_p1[:-1] * diffus[1:])
 	d_m1_zm1 = torch.cat([d_m1_zm1[:1], torch.where(inner_layers, 1. / ((1. - w_m1[1:]) / diffus[1:] + w_m1[1:] / diffus[:-1]), torch.zeros_like(d_m1_zm1[1:]))])
-	d_p1_zp1_temp = torch.where(inner_layers, 1. / ((1. - w_p1[:-1]) / diffus[:-1] + w_p1[:-1] / diffus[1:]), (1. - w_m1[:-1]) * diffus[:-1] + w_p1[:-1] * diffus[1:])
+	d_p1_zp1_temp = torch.where(inner_layers, 1. / ((1. - w_p1[:-1]) / diffus[:-1] + w_p1[:-1] / diffus[1:]), (1. - w_p1[:-1]) * diffus[:-1] + w_p1[:-1] * diffus[1:])  # NOTE: Replaced 1-w_m1 with 1-w_p1, I believe this was a typo in the original Fortran code.
 	d_p1_zp1 = torch.cat([d_p1_zp1_temp, d_p1_zp1[-1:]])
 
 	# Adjust for dz_node scaling
@@ -1077,8 +1077,8 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 
 
 	# Peclet numbers
-	pe_m1 = torch.where(d_m1_zm1 == 0, torch.zeros_like(f_m1), f_m1 / (d_m1_zm1 + epsilon))
-	pe_p1 = torch.where(d_p1_zp1 == 0, torch.zeros_like(f_p1), f_p1 / (d_p1_zp1 + epsilon))
+	pe_m1 = torch.where(d_m1_zm1 == 0, torch.zeros_like(f_m1), f_m1 / (d_m1_zm1))  # NOTE + epsilon))
+	pe_p1 = torch.where(d_p1_zp1 == 0, torch.zeros_like(f_p1), f_p1 / (d_p1_zp1))  # NOTE + epsilon))
 
 	# Pre-compute the 'aaa' values for Patankar functions
 	aaa_m = torch.maximum(torch.zeros_like(pe_m1), (1. - 0.1 * pe_m1.abs())**5)
@@ -1162,13 +1162,14 @@ def tri_matrix_old_improved(nbedrock, altmax, altmax_lastyear, som_diffus, som_a
 	tri_ma[bottom_boundary_indices, bottom_boundary_indices] = -expanded_a[bottom_boundary_indices]
 
 	# Fill off-diagonals for c_tri_dz
-	off_diag_indices_right = torch.arange(19, 139)  # Right off-diagonal
-	tri_ma[torch.arange(19, 139), torch.arange(20, 140)] = expanded_c[off_diag_indices_right]
-	
+	# off_diag_indices_right = torch.arange(19, 139)  # Right off-diagonal
+	# tri_ma[torch.arange(19, 139), torch.arange(20, 140)] = expanded_c[off_diag_indices_right]
+	tri_ma[torch.arange(20, 139), torch.arange(21, 140)] = expanded_c[torch.arange(20, 139)]  # NOTE changed
 
 	# Fill off-diagonals for a_tri_dz
-	off_diag_indices_left = torch.arange(20, 140)  # Left off-diagonal
-	tri_ma[torch.arange(20, 140), torch.arange(19, 139)] = expanded_a[off_diag_indices_left]
+	# off_diag_indices_left = torch.arange(20, 140)  # Left off-diagonal
+	# tri_ma[torch.arange(20, 140), torch.arange(19, 139)] = expanded_a[off_diag_indices_left]
+	tri_ma[torch.arange(21, 140), torch.arange(20, 139)] = expanded_a[torch.arange(21, 140)]  # NOTE changed
 
 	# Adjust for upper boundary conditions across blocks
 	tri_ma[upper_boundary_indices, upper_boundary_indices-1] = 0
@@ -1327,7 +1328,7 @@ def tri_matrix_old(nbedrock, altmax, altmax_lastyear, som_diffus, som_adv_flux, 
 			f_p1[j] = adv_flux[j+1]
 			# pe_m1[j] = 0.
 			# pe_p1[j] = f_p1[j].clone() / d_p1_zp1[j] # Peclet #
-		elif j >= nbedrock-1:
+		elif j >= nbedrock:  # NOTE used to be nbedrock-1:
 			# At the bottom, assume no gradient in d_z (i.e., they're the same)
 			w_m1[j] = (zisoi[j-1] - zsoi[j-1]) / dz_node[j]
 			w_p1[j] = 0.

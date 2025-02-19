@@ -302,6 +302,9 @@ for i in range(1,22):
 # Drop the original columns
 PRODA_para = PRODA_para.drop(PRODA_para.columns[1:21*9], axis = 1)
 
+# Convert profile ID to zero-based, to match how WOSIS data is processed below
+PRODA_para['profile_id'] = PRODA_para['profile_id'] - 1
+
 # print the head of the dataframe
 print("PRODA parameters HEAD!!!!!!!!!!!!!!!!!")
 print(PRODA_para.head())
@@ -865,13 +868,11 @@ print("Shape of env info", env_info.shape)
 # Select PRODA parameters so that the Profile_IDs match the current data
 PRODA_para = PRODA_para.loc[PRODA_para['profile_id'].isin(current_data_profile_id)]
 PRODA_para = PRODA_para.sort_values(by='profile_id')
+
 # Store the PRODA_para into numpy array (mean_1 to mean_21)
-print("PRODA para", PRODA_para.shape)
-print("PRofile ID", current_data_profile_id)
 current_PRODA_para = PRODA_para[['mean_1', 'mean_2', 'mean_3', 'mean_4', 'mean_5', 'mean_6', 'mean_7', 'mean_8', 'mean_9', 'mean_10', 'mean_11', \
 								 'mean_12', 'mean_13', 'mean_14', 'mean_15', 'mean_16', 'mean_17', 'mean_18', 'mean_19', 'mean_20', 'mean_21']].to_numpy()              
 print("Shape of PRODA para", current_PRODA_para.shape)
-print("Negative rows", current_PRODA_para[((current_PRODA_para < 0) | (current_PRODA_para > 1)).any(axis=1)])
 
 #############################
 # PRODA soc simulation data #
@@ -881,45 +882,42 @@ print("Negative rows", current_PRODA_para[((current_PRODA_para < 0) | (current_P
 # Initialize numpy array for PRODA soc simulation data
 PRODA_soc_simu = np.ones((len(current_data_profile_id), 200))*np.nan
 
-start_time = time.time()
-for i in range(len(current_data_profile_id)):
-	# Get the current profile's data
-	current_data_x_simu = current_data_x[i, :, :, :]
-	current_data_z_simu = current_data_z[i, :]
-	current_PRODA_para_simu = current_PRODA_para[i, :]
+if args.synthetic_labels:
+	start_time = time.time()
+	for i in range(len(current_data_profile_id)):
+		# Get the current profile's data
+		current_data_x_simu = current_data_x[i, :, :, :]
+		current_data_z_simu = current_data_z[i, :]
+		current_PRODA_para_simu = current_PRODA_para[i, :]
 
-	# # If any parameters are outside the (0, 1) range, do not use this site
-	# if args.synthetic_labels and np.any((current_PRODA_para_simu < 0) | (current_PRODA_para_simu > 1)):
-	# 	print("Negative PRODA parameters", current_PRODA_para_simu)
-	# 	PRODA_soc_simu[i, :] = np.nan
-	# 	continue
+		# Convert the data to tensor, reshape to shape [1, 60, 12, 13] and [1, 21]
+		current_data_x_simu = torch.tensor(current_data_x_simu).unsqueeze(0)
+		current_data_z_simu = torch.tensor(current_data_z_simu).unsqueeze(0)
+		current_PRODA_para_simu = torch.tensor(current_PRODA_para_simu).unsqueeze(0)
 
-	# Convert the data to tensor, reshape to shape [1, 60, 12, 13] and [1, 21]
-	current_data_x_simu = torch.tensor(current_data_x_simu).unsqueeze(0)
-	current_data_z_simu = torch.tensor(current_data_z_simu).unsqueeze(0)
-	current_PRODA_para_simu = torch.tensor(current_PRODA_para_simu).unsqueeze(0)
+		# If PRODA parameters were outside [0, 1] range, clamp them to the range
+		current_PRODA_para_simu = torch.clamp(current_PRODA_para_simu, min=0, max=1)
 
-	# # Check the shape of the data
-	# print("Shape of current data x", current_data_x.shape)
-	# print("Shape of current PRODA para", current_PRODA_para.shape)
-	# Run the simulation
-	PRODA_soc_simu[i, :] = fun_model_simu(current_PRODA_para_simu, current_data_x_simu, current_data_z_simu, args.vertical_mixing, args.vectorized)
+		# # Check the shape of the data
+		# print("Shape of current data x", current_data_x.shape)
+		# print("Shape of current PRODA para", current_PRODA_para.shape)
+		# Run the simulation
+		PRODA_soc_simu[i, :] = fun_model_simu(current_PRODA_para_simu, current_data_x_simu, current_data_z_simu, args.vertical_mixing, args.vectorized)
 
-	# If any simulation is over 1,000,000 gC/m2, set it to nan
-	if np.any(PRODA_soc_simu[i, :] > 1000000):
-		print("ATTN Extreme SOC", PRODA_soc_simu[i, :])
-		print("Depths", current_data_z[i, :])
-		PRODA_soc_simu[i, :] = np.nan
-	if args.synthetic_labels:
-		# Delete any sites where the PRODA parameters were outside the valid range
-		if torch.any((current_PRODA_para_simu < 0) | (current_PRODA_para_simu > 1)):
-			print(f">>>>>>>>>>>>>>>>>>>>>>>> Invalid PRODA params, site {i}. Coordinates", current_data_c[i, :])
-			print("PRODA params", current_PRODA_para[i, :])
-			valid_loc = ~np.isnan(current_data_z[i, :])
-			print("Depths", current_data_z[i, valid_loc])
-			print("SOC simu", PRODA_soc_simu[i, valid_loc])
-			print("SOC obs", current_data_y[i, valid_loc])
+		# If any simulation is over 1,000,000 gC/m2, set it to nan
+		if np.any(PRODA_soc_simu[i, :] > 1000000):
+			print("ATTN Extreme SOC", PRODA_soc_simu[i, :])
+			print("Depths", current_data_z[i, :])
 			PRODA_soc_simu[i, :] = np.nan
+		# # Delete any sites where the PRODA parameters were outside the valid range
+		# if torch.any((current_PRODA_para_simu < 0) | (current_PRODA_para_simu > 1)):
+		# 	print(f">>>>>>>>>>>>>>>>>>>>>>>> Invalid PRODA params, site {i}. Coordinates", current_data_c[i, :])
+		# 	print("PRODA params", current_PRODA_para[i, :])
+		# 	valid_loc = ~np.isnan(current_data_z[i, :])
+		# 	print("Depths", current_data_z[i, valid_loc])
+		# 	print("SOC simu", PRODA_soc_simu[i, valid_loc])
+		# 	print("SOC obs", current_data_y[i, valid_loc])
+		# 	PRODA_soc_simu[i, :] = np.nan
 		if np.any(PRODA_soc_simu[i, :] > 100000):
 			print(">>>>>>>>>>>>>>>>>>>>>>>> High simulated SOC. Coordinates", current_data_c[i, :])
 			print("PRODA params", current_PRODA_para[i, :])
@@ -928,46 +926,40 @@ for i in range(len(current_data_profile_id)):
 			print("SOC simu", PRODA_soc_simu[i, valid_loc])
 			print("SOC obs", current_data_y[i, valid_loc])
 
-# # Drop the profiles with all nan values
-valid_profile_loc = np.where(np.all(np.isnan(PRODA_soc_simu), axis=1) == False)[0]
-print("Invalid profiles", np.setdiff1d(np.arange(PRODA_soc_simu.shape[0]), valid_profile_loc))
-current_data_y = current_data_y[valid_profile_loc, :]
-current_data_z = current_data_z[valid_profile_loc, :]
-current_data_c = current_data_c[valid_profile_loc, :]
-current_data_x = current_data_x[valid_profile_loc, :, :, :]
-current_data_profile_id = current_data_profile_id[valid_profile_loc]
-current_PRODA_para = current_PRODA_para[valid_profile_loc, :]
-PRODA_soc_simu = PRODA_soc_simu[valid_profile_loc, :]
-obs_upper_depth_matrix = obs_upper_depth_matrix[valid_profile_loc, :]
-obs_lower_depth_matrix = obs_lower_depth_matrix[valid_profile_loc, :]
+	# # Drop the profiles with all nan values
+	valid_profile_loc = np.where(np.all(np.isnan(PRODA_soc_simu), axis=1) == False)[0]
+	current_data_y = current_data_y[valid_profile_loc, :]
+	current_data_z = current_data_z[valid_profile_loc, :]
+	current_data_c = current_data_c[valid_profile_loc, :]
+	current_data_x = current_data_x[valid_profile_loc, :, :, :]
+	current_data_profile_id = current_data_profile_id[valid_profile_loc]
+	current_PRODA_para = current_PRODA_para[valid_profile_loc, :]
+	PRODA_soc_simu = PRODA_soc_simu[valid_profile_loc, :]
+	obs_upper_depth_matrix = obs_upper_depth_matrix[valid_profile_loc, :]
+	obs_lower_depth_matrix = obs_lower_depth_matrix[valid_profile_loc, :]
 
-# If using synthetic labels, treat the simulated SOC as the true labels
-if args.synthetic_labels:
+	print("Time taken to run PRODA soc simu", time.time() - start_time)
+	print("Shape of PRODA soc simu", PRODA_soc_simu.shape)
+	print("Shape of current data x", current_data_x.shape)
+
+	# If using synthetic labels, treat the simulated SOC as the true labels
 	current_data_y = PRODA_soc_simu
 
-# print("SOC SIMU", PRODA_soc_simu[0:5, 0:10])
-# print("Cur profile id", current_data_profile_id)
-print("Shape of PRODA soc simu", PRODA_soc_simu.shape)
-print("Shape of current data x", current_data_x.shape)
-print("Time taken to run PRODA soc simu", time.time() - start_time)
+	# PRODA PARAM maps. Each row is a covariate, each column represents a split
+	lons_list = []
+	lats_list = []
+	values_list = []
+	vars_list = []
+	print("PRODA PARAM maps")
+	for var_idx in range(0, current_PRODA_para.shape[1]):
+		var = para_names[var_idx]
+		lons_list.extend([current_data_c[:, 0]])
+		lats_list.extend([current_data_c[:, 1]])
+		values_list.extend([current_PRODA_para[:, var_idx]])
+		vars_list.extend([f'PRODA Para: {var}'])
 
-
-# PRODA PARAM maps. Each row is a covariate, each column represents a split
-lons_list = []
-lats_list = []
-values_list = []
-vars_list = []
-print("PRODA PARAM maps")
-for var_idx in range(0, current_PRODA_para.shape[1]):
-	var = para_names[var_idx]
-	lons_list.extend([current_data_c[:, 0]])
-	lats_list.extend([current_data_c[:, 1]])
-	values_list.extend([current_PRODA_para[:, var_idx]])
-	vars_list.extend([f'PRODA Para: {var}'])
-
-visualization_utils.plot_map_grid(os.path.join(data_dir_input, f"proda_para_maps.png"),
-		lons_list, lats_list, values_list, vars_list, us_only=True, cols=1)
-exit(1)
+	visualization_utils.plot_map_grid(os.path.join(data_dir_input, f"proda_para_maps.png"),
+			lons_list, lats_list, values_list, vars_list, us_only=True, cols=1)
 
 ###############################################################
 # Load checkpoint if resuming a previous run.
@@ -3830,18 +3822,50 @@ def worker(rank, world_size, job_id):
 
 		# Parameter maps. Each row is a parameter, each column represents a split (train/val/test/grid)
 		if args.model != "nn_only":
-			lons_list = []
-			lats_list = []
-			values_list = []
-			vars_list = []
-			for para_idx in range(model_without_ddp.num_params):
-				lons_list.extend([train_c[:, 0], val_c[:, 0], test_c[:, 0], predict_data_c[:, 0]])
-				lats_list.extend([train_c[:, 1], val_c[:, 1], test_c[:, 1], predict_data_c[:, 1]])
-				values_list.extend([best_guess_train_pred_para[:, para_idx], best_guess_val_pred_para[:, para_idx], best_guess_test_pred_para[:, para_idx], grid_pred_para[:, para_idx]])
-				vars_list.extend([f'Train: {para_names[para_idx]}', f'Val: {para_names[para_idx]}', f'Test: {para_names[para_idx]}', f'Grid: {para_names[para_idx]}'])
-			visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"FINAL_para_maps.png"),
-					lons_list, lats_list, values_list, vars_list, us_only=True, cols=4)
+			if args.synthetic_labels:
+				# If synthetic labels, we also have labels for parameters, so we can compare predicted vs true
+				# TODO Figure out how to obtain "true" (PRODA) params for GRID
+				lons_list = []
+				lats_list = []
+				values_list = []
+				vars_list = []
+				for para_idx in range(model_without_ddp.num_params):
+					lons_list.extend([train_c[:, 0], train_c[:, 0], val_c[:, 0], val_c[:, 0], test_c[:, 0], test_c[:, 0]])
+					lats_list.extend([train_c[:, 1], train_c[:, 1], val_c[:, 1], val_c[:, 1], test_c[:, 1], test_c[:, 1]])
+					values_list.extend([train_proda_para[:, para_idx], best_guess_train_pred_para[:, para_idx],
+						 				val_proda_para[:, para_idx], best_guess_val_pred_para[:, para_idx],
+										test_proda_para[:, para_idx], best_guess_test_pred_para[:, para_idx]])
+					para_name = para_names[para_idx]
+					vars_list.extend([f'True para {para_name} - Train', f'Predicted para {para_name} - Train',
+										f'True para {para_name} - Val', f'Predicted para {para_name} - Val',
+										f'True para {para_name} - Test', f'Predicted para {para_name} - Test'])
+				visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"FINAL_para_maps.png"),
+						lons_list, lats_list, values_list, vars_list, us_only=True, cols=4)
 
+				# Also plot scatters
+				y_hats = []
+				ys = []
+				titles = []
+				for para_idx in range(model_without_ddp.num_params):
+					y_hats.extend([best_guess_train_pred_para[:, para_idx], best_guess_val_pred_para[:, para_idx], best_guess_test_pred_para[:, para_idx]])
+					ys.extend([train_proda_para[:, para_idx], val_proda_para[:, para_idx], test_proda_para[:, para_idx]])
+					para_name = para_names[para_idx]
+					titles.extend([f'Train: {para_name}', f'Val: {para_name}', f'Test: {para_name}'])
+				visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, f"FINAL_para_scatters.png"), y_hats, ys, titles, cols=2)
+
+			else:
+				# If using real labels, we do not have labels for parameters, so only plot the predictions
+				lons_list = []
+				lats_list = []
+				values_list = []
+				vars_list = []
+				for para_idx in range(model_without_ddp.num_params):
+					lons_list.extend([train_c[:, 0], val_c[:, 0], test_c[:, 0], predict_data_c[:, 0]])
+					lats_list.extend([train_c[:, 1], val_c[:, 1], test_c[:, 1], predict_data_c[:, 1]])
+					values_list.extend([best_guess_train_pred_para[:, para_idx], best_guess_val_pred_para[:, para_idx], best_guess_test_pred_para[:, para_idx], grid_pred_para[:, para_idx]])
+					vars_list.extend([f'Train: {para_names[para_idx]}', f'Val: {para_names[para_idx]}', f'Test: {para_names[para_idx]}', f'Grid: {para_names[para_idx]}'])
+				visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"FINAL_para_maps.png"),
+						lons_list, lats_list, values_list, vars_list, us_only=True, cols=2)
 
 	# end if rank == 0:
 	else:
