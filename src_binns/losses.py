@@ -1,20 +1,39 @@
 import torch
 import visualization_utils
 
-#---------------------------------------------------
-# define the loss function                          
-#---------------------------------------------------
+
 def binns_loss(y_pred, y_true, pred_para, plot_path=""):
-	# process modeling
+	"""
+	Computes the main losses used in BINN.
+	 
+	y_pred: predicted SOC, shape [batch, observations_per_site]
+	y_true: true_SOC, shape [batch, observations_per_site]
+	Many entries can be nan (nan positions should be the same for y_pred and y_true).
+	pred_para: predicted parameters, shape [batch, num_params]
+
+	Returns
+	1) L1 loss
+	2) Smooth L1 loss
+	3) L2 loss
+	4) Parameter regularization loss (penalizes extreme param values)
+	5) Modeling inefficiency (1 - NSE, or 1 - R^2)
+
+	All of these (except parameter regularization loss) compare how close
+	predictions (y_pred) are with observations (y_true).
+	"""
+	# Predicted (simulated) SOC
 	soc_simu = y_pred
-	# observations
+
+	# Observed SOC
 	soc_true = y_true
-	# predicted parameters
+
+	# Predicted parameters
 	pred_para = pred_para
 
 	# flatten simulated and true SOC
 	soc_simu_vector = torch.reshape(soc_simu, [1, -1])
 	soc_true_vector = torch.reshape(soc_true, [1, -1])
+
 	# exclude nan
 	valid_loc = torch.where(torch.isnan(soc_simu_vector+soc_true_vector) == False)
 	soc_simu_vector = soc_simu_vector[valid_loc]
@@ -26,57 +45,6 @@ def binns_loss(y_pred, y_true, pred_para, plot_path=""):
 
 	# modeling inefficiency
 	modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/torch.sum((soc_true_vector - torch.mean(soc_true_vector))**2)
-
-	# NOT USED ANYMORE: Attempts to penalize extreme values of the beta parameter.
-	# # Gradient of beta w.r.t. batch_x
-	# grad_beta = torch.autograd.grad(outputs=beta, inputs=model_input, grad_outputs=torch.ones_like(beta), retain_graph=True)[0]
-	# # only consider the gradient that is not zero
-	# non_zero_idx = torch.nonzero(grad_beta)
-	# grad_beta = grad_beta[non_zero_idx[:, 0], non_zero_idx[:, 1], non_zero_idx[:, 2], non_zero_idx[:, 3]]
-	# # Use torch.autograd.grad for inputs for one profile
-	# for i in range(beta.shape[0]):
-	# 	grad_beta_temp = torch.autograd.grad(outputs=beta[i], inputs=model_input[i, :], grad_outputs=torch.ones_like(beta[i]), retain_graph=True)[0]
-	# 	if i == 0:
-	# 		grad_beta = grad_beta_temp
-	# 	else:
-	# 		grad_beta = torch.cat((grad_beta, grad_beta_temp), dim=0)
-	# grad_norm = torch.norm(grad_beta, p=2)
-
-	# print("Beta gradient norm", grad_norm)
-
-	# modeling_inefficiency = torch.sum((soc_simu_vector - soc_true_vector)**2)/len(soc_true_vector) 
-	# lambda_reg = 0.1
-
-	# # Calculate the penalty if beta is too large
-	# penalty_threshold = 0.8
-	# transformed_threshold = -0.8  # Transformed threshold for negative values
-	# penalty_weight = 20  # Adjust the weight as needed
-
-	# # Inverting beta values so that high values become negative
-	# inverted_beta = -beta
-
-	# # Applying threshold to inverted beta
-	# thresholded_beta = torch.nn.Threshold(transformed_threshold, 0)(inverted_beta)
-
-	# # Inverting back to positive values and applying penalty
-	# beta_penalty = penalty_weight * (-(thresholded_beta) - penalty_threshold)**2
-
-	
-	# # Sum the penalty across the batch
-	# total_beta_penalty = beta_penalty.sum()
-
-	# ## Variance term ##
-	# # Calculate variance of predicted parameters
-	# var_predicted_para = torch.var(pred_para[:, 20]) # calculate variance of the 21st parameter beta
-	# # var_predicted_para = torch.mean(var_predicted_para)
-	# # print("Variance of predicted parameters", var_predicted_para)
-
-	# # Normalize or scale the variance term
-	# scale_factor = 1e5
-	# scaled_variance = scale_factor * var_predicted_para
-
-	# # Weighting factor for variance term
-	# variance_weight = 0
 
 	# Regularization for predicted parameters using cosh
 	# Encourage parameters to be around 0.5
@@ -92,19 +60,11 @@ def binns_loss(y_pred, y_true, pred_para, plot_path=""):
 # end binns loss
 
 
-#---------------------------------------------------
-# simplified loss function that only takes in pred/true
-# and returns a single value (smooth l1). Used for CURE
-# curvature regularization.
-#---------------------------------------------------
-def binns_loss_simple(y_pred, y_true):
-	pred_para = torch.zeros_like(y_pred)  # Not used
-	l1_loss, _, _, _ = binns_loss(y_pred, y_true, pred_para)
-	return l1_loss
-
-
 
 def compute_param_violation_loss(unconstrained_params):
+	"""
+	If using hardsigmoid param_constraint, penalizes if unconstrained_params are outside the [-3, 3] range.
+	"""
 	return torch.sum(torch.clamp(torch.abs(unconstrained_params) - 3.0, min=0))
 
 

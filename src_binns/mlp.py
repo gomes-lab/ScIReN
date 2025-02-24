@@ -147,48 +147,6 @@ class mlp(torch.nn.Module):
 	# 	return loss
 
 
-class SENN(nn.Module):
-	def __init__(self,
-				 num_inputs: int,
-				 num_outputs: int,
-				 num_hidden: int,
-				 num_layers: int,
-				 use_bn: bool = False,
-				 dropout_prob: float = 0.0,
-				 activation: str = 'relu',
-				 init: str = 'xavier_uniform') -> None:
-		"""
-		Following the idea of 'Self-Explaining Neural Networks', learns a function
-
-			f(x) = \theta(x)^T x
-		
-			where x \in R^{num_inputs}, and theta(x): R^{num_inputs} -> R^{(num_inputs + 1) * num_outputs}
-			is parameterized by a neural network. The commandline arguments
-			all refer to the theta(x) neural network, except for num_outputs.
-		"""
-		super().__init__()
-		self.num_inputs = num_inputs
-		self.num_outputs = num_outputs
-		layer_sizes = [self.num_inputs] + ([num_hidden] * (num_layers-1)) + [(self.num_inputs + 1) * self.num_outputs]
-		self.theta = mlp(layer_sizes, use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init)
-
-	# x has shape [batch, num_inputs]
-	def forward(self, x):
-		coefs_and_biases = self.theta(x)
-		self.biases = coefs_and_biases[:, 0:self.num_outputs]
-		self.coefs = coefs_and_biases[:, self.num_outputs:].reshape((x.shape[0], self.num_outputs, self.num_inputs))
-
-		# print("X", x[0])
-		# print("Coefs", self.coefs[0])
-		# print("Biases", self.biases[0])
-		self.predictions = torch.bmm(self.coefs, x.unsqueeze(-1)).squeeze(-1) + self.biases  # [batch, num_outputs]
-		# print("Final preds", self.predictions)
-		return self.predictions
-	
-
-	
-	
-
 #---------------------------------------------------
 # Wrapper for MLP and LipMLP from this repo: https://github.com/whitneychiu/lipmlp_pytorch/blob/main/models/mlp.py
 #---------------------------------------------------
@@ -198,7 +156,8 @@ class mlp_wrapper(nn.Module):
 				 base_model="new_mlp", one_hot=False, use_bn=False, dropout_prob=0.0,
 				 activation='relu', param_constraint='sigmoid', rep_grad=False,
 				 losses=["l1", "param_reg"], device="cpu", train_x=None,
-				 min_temp=10, max_temp=109, init="xavier_uniform", width=128):
+				 min_temp=10, max_temp=109, init="xavier_uniform", width=128,
+				 para_index=None):
 		"""
 		var_idx_to_emb is a dictionary mapping from categorical variable index to either
 		(1) Embedding layer (if one_hot is False)
@@ -222,21 +181,26 @@ class mlp_wrapper(nn.Module):
 
 		# Setup categorical encoding
 		if self.one_hot:
-			# If one-hot, just calculate the input size
+			# If one-hot, just calculate the input size (after one-hot encoding)
 			for _, num_classes in self.var_idx_to_emb.items():
 				self.new_input_size += num_classes
 		else:
-			# Create ModuleDict so that all Embedding layers in var_idx_to_emb
-			# are registered as parameters
+			# If using Embedding layers, create ModuleDict so that all 
+			# Embedding layers in var_idx_to_emb are registered as parameters
 			self.var_idx_to_emb = nn.ModuleDict(self.var_idx_to_emb)
 			for _, emb in self.var_idx_to_emb.items():
 				self.new_input_size += emb.embedding_dim
 
-		# Number of parameters
-		if self.vertical_mixing == 'simple_two_intercepts':
-			self.num_params = 22
+		# Parameter indices that NN will predict (other parameters will be directly passed
+		# as "PRODA para")
+		if para_index is None:
+			if self.vertical_mixing == 'simple_two_intercepts':
+				self.para_index = list(range(22))
+			else:
+				self.para_index = list(range(21))
 		else:
-			self.num_params = 21
+			self.para_index = para_index
+		self.num_params = len(self.para_index)
 
 		# Standardize input to (mean 0, std 1) if desired
 		if train_x is not None:
@@ -256,7 +220,7 @@ class mlp_wrapper(nn.Module):
 				max_radius=360,
 				min_radius=1e-06,
 				freq_init="geometric",
-				ffn=True,  # TODO True # Enable feedforward network for final spatial embeddings
+				ffn=True,  # Enable feedforward network for final spatial embeddings
 			)
 			self.new_input_size += 128  # Add the spatial embeddings
 		elif pos_enc == "late":
@@ -267,31 +231,37 @@ class mlp_wrapper(nn.Module):
 				max_radius=360,
 				min_radius=1e-06,
 				freq_init="geometric",
-				ffn=True,  # TODO True # Enable feedforward network for final spatial embeddings
+				ffn=True,  # Enable feedforward network for final spatial embeddings
 			)
 		if pos_enc == "early":
 			self.new_input_size += self.num_params  # Add the spatial embeddings
 
-		# MLP backbone
+		# Neural network: mapping input features to biogeochemical parameters
 		if base_model == "lipmlp":
-			self.mlp = lipmlp((self.new_input_size, width, width, self.num_params),
+			# EXPERIMENTAL: LipMLP (Lipschitz-regularized neural network)
+			self.mlp = lipmlp((self.new_input_size, width, width, width, self.num_params),
 							   use_bn=use_bn, dropout_prob=dropout_prob)  # TODO different initialization methods, leaky relu, dropout, etc. not supported
 		elif base_model == "senn":
+			# EXPERIMENTAL: SENN (Self-Explaining Neural Network, like a
+			# linear model but coefficients also depend on the data)
 			assert self.one_hot, "SENN makes most sense with one-hot encodings"
 			self.mlp = SENN(num_inputs=self.new_input_size, num_outputs=self.num_params,
-							num_hidden=width, num_layers=3,
+							num_hidden=width, num_layers=4,
 				   			use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init)
 		elif base_model == "new_mlp":
-			self.mlp = mlp((self.new_input_size, width, width, self.num_params),  # TEMP TODO @joshuafan, 256, 256
+			# Standard MLP
+			self.mlp = mlp((self.new_input_size, width, width, width, self.num_params),
 							  use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init)
 		else:
 			raise ValueError("Unsupported base_model")
 
-		# sigmoid parameter
+		# Parameter constraint
+		self.sigmoid = get_param_constraint(param_constraint)
+
+		# If using sigmoid: the "temperature" we divide by before the sigmoid
 		self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)
 		self.min_temp = min_temp
 		self.max_temp = max_temp
-		self.sigmoid = get_param_constraint(param_constraint)
 
 		# LibMTL specific
 		self.rep_grad = rep_grad  # Whether to compute gradients w.r.t. parameters as well
@@ -301,7 +271,17 @@ class mlp_wrapper(nn.Module):
 
 
 	def forward(self, input_var, wosis_depth, coords, whether_predict,
-				return_spatial_embedding=False, one_param_only=False):
+			 	PRODA_para=None, return_spatial_embedding=False, one_param_only=False):
+
+		if PRODA_para is None:  # If PRODA parameters not provided, neural network must output all params
+			if self.vertical_mixing == 'simple_two_intercepts':
+				assert self.para_index == list(range(22))
+			else:
+				assert self.para_index == list(range(21))
+			predicted_para = torch.empty((input_var.shape[0], len(self.para_index)), device=input_var.device)
+		else:  # Initialize predicted parameters to PRODA parameters; then overwrite some with NN predictions
+			predicted_para = PRODA_para
+
 		predictor = input_var[:, :, 0, 0]
 		forcing = input_var[:, :, :, :]
 		obs_depth = wosis_depth
@@ -332,7 +312,6 @@ class mlp_wrapper(nn.Module):
 		# Spatial Encoding
 		if self.pos_enc == "early":
 			spatial_embeddings = self.spatial_encoder(coords).squeeze(1)  # Remove the channel dimension. [batch, params]
-			# print("Spatial embeds", spatial_embeddings)
 			new_input = torch.concatenate([spatial_embeddings, new_input], dim=1)
 
 		# check if new_input is nan
@@ -340,7 +319,7 @@ class mlp_wrapper(nn.Module):
 			print("new_input was nan", new_input)
 			exit(1)
 
-		# Pass through MLP
+		# Pass through MLP to obtain (unconstrained) biogeochemical parameters
 		self.new_input = new_input
 		mlp_output = self.mlp(new_input)
 
@@ -357,21 +336,14 @@ class mlp_wrapper(nn.Module):
 			spatial_embeddings = self.spatial_encoder(coords).squeeze(1)  # Remove the channel dimension. [batch, params]
 			mlp_output += spatial_embeddings
 
-		# Pass parameters through sigmoid to constrain their range
+		# Pass biogeochemical parameters through sigmoid, constraining them between [0, 1]
 		self.unconstrained_params = mlp_output / clamped_temp_sigmoid
-		predicted_para = self.sigmoid(self.unconstrained_params)
+		predicted_para[:, self.para_index] = self.sigmoid(self.unconstrained_params)
 		if predicted_para.requires_grad:
 			predicted_para.retain_grad()
 
-		# import misc_utils
-		# misc_utils.print_summary(self.mlp.layer_output.weight, "FINAL WEIGHT")
-		# misc_utils.print_summary(self.mlp.layer_output.bias, "FINAL BIAS")
-		# misc_utils.print_summary(mlp_output, "MLP OUTPUT")
-		# misc_utils.print_summary(h5, "PRED PARAMS", dim=0)
-		# print(self.mlp.layer_output.weight.requires_grad)
-
 		if one_param_only:
-			# Choose one parameter to update, stop gradient w.r.t. other params
+			# EXPERIENTAL: Choose one parameter to update, stop gradient w.r.t. other params
 			import random
 			param_idx = random.randint(0, predicted_para.shape[1])
 			prev = predicted_para[:, :param_idx].detach()
@@ -710,11 +682,51 @@ BELOW MODELS ARE EXPERIMENTAL. NOT ALL OPTIONS ARE IMPLEMENTED CURRENTLY.
 =====================================================================================
 """
 
-#---------------------------------------------------
-# EXPERIMENTAL: BINN Hybrid: process-based model predicts SOC, but NN can correct it
-#---------------------------------------------------
-# define model
+class SENN(nn.Module):
+	"""
+	EXPERIMENTAL. Following the idea of 'Self-Explaining Neural Networks', learns a function
+
+		f(x) = \theta(x)^T x
+	
+	where x \in R^{num_inputs}, and theta(x): R^{num_inputs} -> R^{(num_inputs + 1) * num_outputs}
+	is parameterized by a neural network. The commandline arguments
+	all refer to the theta(x) neural network, except for num_outputs.
+	"""
+	def __init__(self,
+				 num_inputs: int,
+				 num_outputs: int,
+				 num_hidden: int,
+				 num_layers: int,
+				 use_bn: bool = False,
+				 dropout_prob: float = 0.0,
+				 activation: str = 'relu',
+				 init: str = 'xavier_uniform') -> None:
+
+		super().__init__()
+		self.num_inputs = num_inputs
+		self.num_outputs = num_outputs
+		layer_sizes = [self.num_inputs] + ([num_hidden] * (num_layers-1)) + [(self.num_inputs + 1) * self.num_outputs]
+		self.theta = mlp(layer_sizes, use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init)
+
+
+	def forward(self, x):
+		"""
+		x should have shape [batch, num_inputs]
+		
+		Returns [batch, num_outputs]
+		"""
+		coefs_and_biases = self.theta(x)
+		self.biases = coefs_and_biases[:, 0:self.num_outputs]
+		self.coefs = coefs_and_biases[:, self.num_outputs:].reshape((x.shape[0], self.num_outputs, self.num_inputs))
+		self.predictions = torch.bmm(self.coefs, x.unsqueeze(-1)).squeeze(-1) + self.biases  # [batch, num_outputs]
+		return self.predictions
+	
+
 class BINN_Hybrid(nn.Module):
+	"""
+	EXPERIMENTAL: BINN Hybrid: process-based model predicts SOC, but NN can correct it.
+	Not using this currently.
+	"""
 	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, pos_enc,
 				 base_model="new_mlp", one_hot=False, use_bn=False, dropout_prob=0.0,
 				 activation='relu', param_constraint='sigmoid', rep_grad=False,
@@ -863,10 +875,10 @@ class BINN_Hybrid(nn.Module):
 			return simu_soc, pred_para
 
 
-#---------------------------------------------------
-# EXPERIMENTAL: Use PEGCN as encoder for BINN model
-#---------------------------------------------------
 class GNN_BINN(nn.Module):
+	"""
+	EXPERIMENTAL: Use PEGCN as encoder for BINN model
+	"""
 	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, pos_enc,
 				 k=20, one_hot=False, use_bn=False, dropout_prob=0.0,
 				 activation='relu', param_constraint='sigmoid', rep_grad=False, graph_conv='gcn',
@@ -1066,13 +1078,12 @@ class GNN_BINN(nn.Module):
 			return simu_soc, pred_para
 
 
-
-#---------------------------------------------------
-# EXPERIMENTAL: Simple spatial smoothing on predicted params.
-# Positional encoding outputs spatially-correlated errors,
-# use penalty to encourage spatial smoothness
-#---------------------------------------------------
 class Spatial_BINN(nn.Module):
+	"""
+	EXPERIMENTAL: Simple spatial smoothing on predicted params.
+	Positional encoding outputs spatially-correlated errors,
+	use penalty to encourage spatial smoothness
+	"""
 	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, pos_enc,
 				 k=20, one_hot=False, rep_grad=False,
 				 use_bn=False, dropout_prob=0.0, 

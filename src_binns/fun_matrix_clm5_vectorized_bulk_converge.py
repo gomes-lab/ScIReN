@@ -11,9 +11,7 @@ def fun_bulk_simu(tensor_para, tensor_frocing_steady_state, vertical_mixing, vec
 	variables describing the underlying processes, instead of just predicted SOC.
 	"""
 	device = tensor_para.device
-	# convert tensor to numpy
 	para = tensor_para
-	# para = (tensor_para - (-1)) /(1 - (-1)) # conversion from Hardttanh [-1, 1] to [0, 1]
 	frocing_steady_state = tensor_frocing_steady_state 
 
 	# depth of the node                                                   
@@ -30,10 +28,9 @@ def fun_bulk_simu(tensor_para, tensor_frocing_steady_state, vertical_mixing, vec
 
 	n_soil_layer = 20
 
-	# final ouputs of simulation
-	profile_num = para.shape[0]
 	# Initialize the final outputs to store the simulation results: carbon_input_sum, cpool_steady_state, cpools_layer, soc_layer, 
 	# residence_time, total_res_time_base, res_time_base_pools, t_scaaler, bulk_Aler, w_sc, bulk_K, bulk_V, bulk_xi, bulk_I, litter_fraction
+	profile_num = para.shape[0]
 	carbon_input = (torch.ones((profile_num, 1))*np.nan).to(device)
 	cpool_steady_state = (torch.ones((profile_num, 140))*np.nan).to(device)
 	cpools_layer = (torch.ones((profile_num, 20))*np.nan).to(device)
