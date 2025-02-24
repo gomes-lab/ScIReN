@@ -31,38 +31,26 @@ Install required packages
 pip install -r requirements.txt
 ```
 
-
-# Alternate commands to install
-
-```
-pip install numpy scipy pandas matplotlib scikit-learn geopandas mat73 netCDF4
-pip install torch==2.5.0 torchvision==0.20.0 torchaudio==2.5.0 --index-url https://download.pytorch.org/whl/cu124
-pip install torch_geometric
-```
-
 To use graph neural network, you may need to install these libraries as well. These are not needed for normal BINN.
 ```
 pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
 ```
 
-Note: it could be possible to install using conda, but the issue is that Pytorch does not release conda versions anymore.
-You can use the pip inside conda to install it like below, but I got an error.
+## Alternate commands to install
 
+If installing the `requirements.txt` file does not work directly, you can try manually installing packages.
 ```
-conda create --name binn_new
-conda activate binn_new
-conda install pip numpy scipy pandas matplotlib geopandas
-pip3 install mat73 netCDF4
-pip3 install torch torchvision torchaudio 
-pip3 install torch_geometric 
-pip3 install torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
+pip install numpy scipy pandas matplotlib scikit-learn geopandas mat73 netCDF4
+pip install torch torchvision torchaudio 
+pip install torch_geometric
 ```
 
 
 # Code summary
 
 * `src_binns/run_binn_interactive.sh`: contains command to run BINN training. Change `--num_CPU` to the number of GPUs, or CPUs if no GPUs are available.
-    - `--representative_sample` restricts the data to a “representative sample” of ~1000 sites. Useful for initial testing.
+    - `--representative_sample` restricts the data to a "representative sample" of ~1000 sites. Useful for initial testing.
+    - You can also choose a random subsample with `--n_datapoints 1000`
 * `src_binns/binns_DDP.py`: main train script
     - Set `data_dir_input`, `data_dir_output`
     - `current_data_x[:, :, 0, 0]`: input features, shape `[batch, num_features]`
@@ -88,9 +76,9 @@ pip3 install torch_scatter torch_sparse torch_cluster torch_spline_conv -f https
         - Directly maps input features → SOC predictions at 20 depths
 * `src_binns/fun_matrix_clm5_vectorized.py`: process-based model
     - Estimates amount of carbon in 140 pools (20 depths * 7 pools per layer)
-    - `a_matrix`: 140x140 matrix. `A[i, j]` is the flux from pool j to i. A contains horizontal transfers between pools of the same layer. A[i, i] is the total flux leaving pool i.
+    - `a_matrix`: 140x140 matrix, containing horizontal transfers between pools of the same layer. `A[i, j]` (if `i != j`) is the flux from pool j to i. `A[i, i]` is the total flux leaving pool i.
     - `kk_matrix`: 140x140 matrix. `KK[i, i]` is the decomposition rate for pool i. Nondiagonal entries are zero.
-    - `tri_matrix`: 140x140 matrix. `Tri[i, j]` is the flux from pool j to i. Only the three middle diagonals contain nonzero entries, meaning that there is only transfer between adjacent layers of the same pool type.
+    - `tri_matrix`: 140x140 matrix, containing vertical transfers. `Tri[i, j]` (if `i != j`) is the flux from pool j to i. `Tri[i, i]` is the total flux leaving pool i. Only the three middle diagonals contain nonzero entries, meaning that there is only transfer between adjacent layers of the same pool type.
     - Each of these has a vectorized and non-vectorized implementation. They should produce the same result, vectorized is faster.
 * `src_binns/fun_matrix_clm5_vectorized_bulk.py` is similar to above, but also outputs additional quantities (various combinations of parameters) that are used in final visualizations
 * `losses.py`: code for loss functions

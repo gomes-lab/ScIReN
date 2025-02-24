@@ -195,9 +195,9 @@ class mlp_wrapper(nn.Module):
 		# as "PRODA para")
 		if para_index is None:
 			if self.vertical_mixing == 'simple_two_intercepts':
-				self.para_index = list(range(22))
+				self.para_index = np.arange(22)  #list(range(22))
 			else:
-				self.para_index = list(range(21))
+				self.para_index = np.arange(21)  #list(range(21))
 		else:
 			self.para_index = para_index
 		self.num_params = len(self.para_index)
@@ -275,9 +275,9 @@ class mlp_wrapper(nn.Module):
 
 		if PRODA_para is None:  # If PRODA parameters not provided, neural network must output all params
 			if self.vertical_mixing == 'simple_two_intercepts':
-				assert self.para_index == list(range(22))
+				assert np.array_equal(self.para_index, np.arange(22))
 			else:
-				assert self.para_index == list(range(21))
+				assert np.array_equal(self.para_index, np.arange(21))
 			predicted_para = torch.empty((input_var.shape[0], len(self.para_index)), device=input_var.device)
 		else:  # Initialize predicted parameters to PRODA parameters; then overwrite some with NN predictions
 			predicted_para = PRODA_para

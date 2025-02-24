@@ -320,7 +320,7 @@ else:
 if args.para_to_predict == "all":
 	para_index = np.arange(0, 21)
 elif args.para_to_predict == "four":
-	para_index = [3, 9, 14, 19]
+	para_index = np.array([3, 9, 14, 19])
 
 # Soil depths info
 # width between two interfaces
@@ -888,7 +888,7 @@ if 'PREVIOUS_JOB_ID' in os.environ:
 # data splits, the actual weights will be loaded later.
 if args.whether_resume == 1:
 	checkpoint_path = data_dir_output + 'neural_network/' + args.previous_job_id + '/checkpoint_' + args.previous_job_id + '.pt'
-	checkpoint_main = torch.load(checkpoint_path)
+	checkpoint_main = torch.load(checkpoint_path, weights_only=False)
 
 	# Delete the job submit file if it exists
 	try:
@@ -1478,7 +1478,7 @@ def worker(rank, world_size, job_id):
 
 	if args.whether_resume == 1:
 		# Load the model from the checkpoint, and overwrite model_kwargs if saved
-		checkpoint_worker = torch.load(checkpoint_path, map_location=device)
+		checkpoint_worker = torch.load(checkpoint_path, map_location=device, weights_only=False)
 		model_kwargs = checkpoint_worker["model_kwargs"]
 
 	if args.loss_weighting not in ["manual", "two_stage", "relobralo"]:
@@ -2623,7 +2623,8 @@ def worker(rank, world_size, job_id):
 	##################################################
 	# Done training. Load best model for analysis
 	##################################################
-	new_checkpoint = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt', map_location=device)
+	# TODO: weights_only=False is not recommended. Should modify code to only save tensors.
+	new_checkpoint = torch.load(data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id + '.pt', map_location=device, weights_only=False)
 	if args.use_swa:
 		# Update batchnorm stats of averaged model (required when using SWA)
 		misc_utils.update_bn_custom(train_loader, swa_model, device)
