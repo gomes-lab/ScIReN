@@ -191,7 +191,7 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
 
     # Plot world map
     gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
-    world = gpd.read_file("../INPUT_DATA/maps/admin1/ne_110m_admin_1_states_provinces_lines.shp")  # geodatasets.get_path('naturalearth_lowres'))  # Formerly gpd.datasets.get_path
+    world = gpd.read_file("../INPUT_DATA/maps/admin1/ne_110m_admin_1_states_provinces_lines.shp")  # Formerly gpd.datasets.get_path('naturalearth_lowres'))
     world.plot(ax=ax, color='gray')  # world.boundary.plot(ax=ax, color='gray')
     if us_only:
         ax.set_xlim(-124.8, -66.9)
@@ -223,7 +223,7 @@ def plot_map_grid(filename, lons_list, lats_list, values_list, vars_list, us_onl
     if cols is None:
         cols = min(4, n_plots)
     rows = math.ceil(n_plots / cols)
-    fig, axeslist = plt.subplots(rows, cols, figsize=(24*cols, 12*rows), squeeze=False)
+    fig, axeslist = plt.subplots(rows, cols, figsize=(12*cols, 6*rows), squeeze=False)
     for i in range(n_plots):
         ax = axeslist.ravel()[i]
         plot_observations_world_map(lons_list[i], lats_list[i], values_list[i], plot_dir=None, 

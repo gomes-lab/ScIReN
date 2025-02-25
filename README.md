@@ -1,15 +1,9 @@
 # BINNS
-Biogeochemistry Informed Neural Networks
 
+This code implements the method proposed in "Biogeochemistry-Informed Neural Network (BINN) for Improving Accuracy of Model
+Prediction and Scientific Understanding of Soil Organic Carbon" (Xu et al. 2025). 
 
-# Instructions
-
-From the `src_binns` directory, run `./run_binn_interactive.sh` for an example of how to train on 4 GPUs from command-line (interactively).
-
-Run `run_binn_slurm.sh` for an example of how to train on 4 GPUs on a server with the Slurm scheduler.
-
-
-# Installation (virtualenv)
+## Installation Instructions
 
 You can follow these steps. The key packages to install are mat73, netCDF, PyTorch, PyTorch Geometric (including the optional dependencies).
 
@@ -36,7 +30,7 @@ To use graph neural network, you may need to install these libraries as well. Th
 pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
 ```
 
-## Alternate commands to install
+### Alternate commands to install
 
 If installing the `requirements.txt` file does not work directly, you can try manually installing packages.
 ```
@@ -45,8 +39,13 @@ pip install torch torchvision torchaudio
 pip install torch_geometric
 ```
 
+## Running Instructions
 
-# Code summary
+From the `src_binns` directory, run `./run_binn_interactive.sh` for an example of how to train on 4 GPUs from command-line (interactively).
+
+Run `./run_binn_slurm.sh` for an example of how to train on 4 GPUs on a server with the Slurm scheduler.
+
+## Code summary
 
 * `src_binns/run_binn_interactive.sh`: contains command to run BINN training. Change `--num_CPU` to the number of GPUs, or CPUs if no GPUs are available.
     - `--representative_sample` restricts the data to a "representative sample" of ~1000 sites. Useful for initial testing.
@@ -83,10 +82,10 @@ pip install torch_geometric
 * `src_binns/fun_matrix_clm5_vectorized_bulk.py` is similar to above, but also outputs additional quantities (various combinations of parameters) that are used in final visualizations
 * `losses.py`: code for loss functions
 
-# Data Notes
+## Data Notes
 
 The covariates and biogeochemical parameters are listed in [this document](https://docs.google.com/document/d/1dAlGbuwKkIg7-ai9ZPGSKIP7rKdKj8mUQi29TObQlUI/edit?usp=sharing).
 
-# Additional tips
+## Additional tips
 
 Do this to avoid commiting images in Jupyter Notebooks in git: https://stackoverflow.com/a/74753885

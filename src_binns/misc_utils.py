@@ -236,7 +236,7 @@ class Logger(object):
 		# this flush method is needed for python 3 compatibility.
 		# this handles the flush command by doing nothing.
 		# you might want to specify some extra behavior here.
-		pass    
+		pass
 
 
 def get_activation(activation):
@@ -249,6 +249,7 @@ def get_activation(activation):
 	else:
 		raise ValueError("Unsupported activation")
 	return act
+
 
 def get_param_constraint(param_constraint):
 	if param_constraint == "sigmoid":

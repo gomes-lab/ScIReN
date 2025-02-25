@@ -12,80 +12,59 @@
 # --note is a string that describes this run; it's used in the output directory name, and we append the final
 # metrics to a result excel file with that name.
 # See documentation in binns_DDP for info on other arguments.
-for LR in 1e-3
+# for LR in 1e-3
+# do
+#     for FOLD in 1
+#     do
+#         for SEED in 0
+#         do
+#             python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
+#                 --lr $LR --optimizer AdamW --weight_decay 0 \
+#                 --seed $SEED --init default --min_temp 1 --max_temp 1 --standardize_input \
+#                 --n_epochs 3 --patience 100 --model new_mlp --vertical_mixing original --vectorized yes \
+#                 --activation leaky_relu --use_bn --categorical embedding --embed_dim 5 --pos_enc none \
+#                 --losses smooth_l1 param_reg --loss_weighting manual --lambdas 1 100 \
+#                 --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_EXAMPLE"
+#         done
+#     done
+# done
+
+# Reproducing the BINN paper
+for LR in 1e-2
 do
     for FOLD in 1
     do
         for SEED in 0
         do
-            python3 binns_DDP.py --data_seed 12345 --n_datapoints 50 --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-                --lr $LR --optimizer AdamW --weight_decay 0 \
-                --seed $SEED --init default --min_temp 1 --max_temp 1 --standardize_input \
-                --n_epochs 200 --patience 100 --model new_mlp --vertical_mixing original --vectorized "true" \
-                --activation leaky_relu --use_bn --categorical one_hot --pos_enc none \
-                --losses smooth_l1 param_reg --loss_weighting manual --lambdas 1 100 \
-                --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_EXAMPLE"
+            python3 binns_DDP.py --data_seed 12345 --split random --cross_val_idx $FOLD --n_folds 10 \
+                --optimizer AdamW --lr $LR --weight_decay 0 \
+                --seed $SEED --init xavier_uniform --min_temp 10 --max_temp 109  \
+                --n_epochs 50 --patience 10 --model new_mlp --vertical_mixing original --vectorized yes \
+                --activation leaky_relu --use_bn --embed_dim 5 --pos_enc early \
+                --losses smooth_l1 param_reg --lambdas 1 100 \
+                --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "REPRO_BINN"
         done
     done
 done
+exit
 
-
-# # Loop over multiple learning rates, folds, seeds
-# for LR in 1e-4 1e-3 1e-2 1e-1
+# To resume from a previous partial run, run something like this.
+# Note that "--whether_resume" should be set to 1, and --previous_job_id" should be set to the output folder name we load from.
+# for LR in 1e-2
 # do
-#     for FOLD in 1 2 3 4 5
+#     for FOLD in 1
 #     do
-#         for SEED in 0 1 2
+#         for SEED in 0
 #         do
-#             python3 binns_DDP.py --data_seed 12345 --n_datapoints 400 --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-#                 --lr $LR --optimizer AdamW --weight_decay 0 \
-#                 --seed $SEED --init default --min_temp 1 --max_temp 1 --standardize_input \
-#                 --n_epochs 200 --patience 100 --model new_mlp --vertical_mixing original --vectorized "true" \
-#                 --activation leaky_relu --use_bn --categorical one_hot --pos_enc none \
-#                 --losses smooth_l1 param_reg --loss_weighting manual --lambdas 1 100 \
-#                 --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_GRID2"
+#             python3 binns_DDP.py --data_seed 12345 --split random --cross_val_idx $FOLD --n_folds 10 \
+#                 --optimizer AdamW --lr $LR --weight_decay 0 \
+#                 --seed $SEED --init xavier_uniform --min_temp 10 --max_temp 109  \
+#                 --n_epochs 200 --patience 100 --model new_mlp --vertical_mixing original \
+#                 --activation leaky_relu --use_bn --embed_dim 5 --pos_enc early \
+#                 --losses smooth_l1 param_reg --lambdas 1 100 \
+#                 --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "REPRO_BINN" \
+#                 --whether_resume 1 --previous_job_id "20250127-214804_BINN_REPRO_lr=1e-02_seed=0_fold=1"
 #         done
 #     done
 # done
-
-
-# # # TUNING: Default init
-# # for LR in 1e-4 1e-3 1e-2 1e-1 1
-# # do
-# #     for FOLD in 1
-# #     do
-# #         for SEED in 0 1 2
-# #         do
-# #             python3 binns_DDP.py --data_seed 12345 --n_datapoints 400 --split vertical --cross_val_idx $FOLD --n_folds 5 \
-# #                 --lr $LR --optimizer AdamW --weight_decay 0 \
-# #                 --seed $SEED --init default --min_temp 1 --max_temp 1 --standardize_input \
-# #                 --n_epochs 200 --patience 100 --model new_mlp --vertical_mixing original --vectorized "true" \
-# #                 --leaky_relu --use_bn --embed_dim 5 --pos_enc none \
-# #                 --losses l1 param_reg --loss_weighting manual --lambdas 1 100 \
-# #                 --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_VERTICAL400_TUNING"
-# #         done
-# #     done
-# # done
-
-
-# # TUNING: Original training
-# # Similar to the runs in our original BINN paper. Note the xavier_uniform initialization
-# # and the temp between 10 and 109.
-# # for LR in 1e-4 1e-3 1e-2 1e-1 1
-# # do
-# #     for FOLD in 1
-# #     do
-# #         for SEED in 0 1 2
-# #         do
-# #             python3 binns_DDP.py --data_seed 12345 --n_datapoints 200 --split horizontal --cross_val_idx $FOLD --n_folds 5 \
-# #                 --lr $LR --optimizer AdamW --weight_decay 0 \
-# #                 --seed $SEED --init xavier_uniform --min_temp 10 --max_temp 109  \
-# #                 --n_epochs 200 --patience 100 --model new_mlp --vertical_mixing original \
-# #                 --leaky_relu --use_bn --embed_dim 5 --pos_enc early \
-# #                 --losses l1 param_reg --loss_weighting manual --lambdas 1 100 \
-# #                 --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_ORIGINAL_TUNING"
-# #         done
-# #     done
-# # done
-
 

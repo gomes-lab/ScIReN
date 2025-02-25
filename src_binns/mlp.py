@@ -38,14 +38,7 @@ class mlp(torch.nn.Module):
 			if use_bn:
 				self.bns.append(torch.nn.BatchNorm1d(dims[ii+1]))
 		self.layer_output = torch.nn.Linear(dims[-2], dims[-1])
-		if activation == 'relu':
-			self.act = torch.nn.ReLU()
-		elif activation == 'leaky_relu':
-			self.act = nn.LeakyReLU(negative_slope=0.3)
-		elif activation == 'tanh':
-			self.act = torch.nn.Tanh()
-		else:
-			raise ValueError("Invalid activation")
+		self.act = get_activation(activation)
 
 		# Initialize linear layers
 		if init == "xavier_uniform":
@@ -152,7 +145,7 @@ class mlp(torch.nn.Module):
 #---------------------------------------------------
 # define model
 class mlp_wrapper(nn.Module):
-	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, vectorized='true', pos_enc='early',
+	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, vectorized='yes', pos_enc='early',
 				 base_model="new_mlp", one_hot=False, use_bn=False, dropout_prob=0.0,
 				 activation='relu', param_constraint='sigmoid', rep_grad=False,
 				 losses=["l1", "param_reg"], device="cpu", train_x=None,
@@ -165,6 +158,9 @@ class mlp_wrapper(nn.Module):
 
 		If train_x is provided, use this to rescale the input. Specifically, compute mean/std
 		for non-categorical variables as train_x[:, self.non_categorical_indices, 0, 0].mean(dim=0).
+
+		para_index is a list of parameter indices that should be predicted by neural network. If None,
+		neural network predicts all parameters (as usual).
 		"""
 		super().__init__()
 
@@ -195,9 +191,9 @@ class mlp_wrapper(nn.Module):
 		# as "PRODA para")
 		if para_index is None:
 			if self.vertical_mixing == 'simple_two_intercepts':
-				self.para_index = np.arange(22)  #list(range(22))
+				self.para_index = np.arange(22)
 			else:
-				self.para_index = np.arange(21)  #list(range(21))
+				self.para_index = np.arange(21)
 		else:
 			self.para_index = para_index
 		self.num_params = len(self.para_index)
@@ -233,7 +229,6 @@ class mlp_wrapper(nn.Module):
 				freq_init="geometric",
 				ffn=True,  # Enable feedforward network for final spatial embeddings
 			)
-		if pos_enc == "early":
 			self.new_input_size += self.num_params  # Add the spatial embeddings
 
 		# Neural network: mapping input features to biogeochemical parameters
@@ -270,17 +265,8 @@ class mlp_wrapper(nn.Module):
 		self.device = device
 
 
-	def forward(self, input_var, wosis_depth, coords, whether_predict,
-			 	PRODA_para=None, return_spatial_embedding=False, one_param_only=False):
-
-		if PRODA_para is None:  # If PRODA parameters not provided, neural network must output all params
-			if self.vertical_mixing == 'simple_two_intercepts':
-				assert np.array_equal(self.para_index, np.arange(22))
-			else:
-				assert np.array_equal(self.para_index, np.arange(21))
-			predicted_para = torch.empty((input_var.shape[0], len(self.para_index)), device=input_var.device)
-		else:  # Initialize predicted parameters to PRODA parameters; then overwrite some with NN predictions
-			predicted_para = PRODA_para
+	def forward(self, input_var, wosis_depth, coords, whether_predict, PRODA_para=None,
+			 	return_spatial_embedding=False, one_param_only=False):
 
 		predictor = input_var[:, :, 0, 0]
 		forcing = input_var[:, :, :, :]
@@ -338,7 +324,19 @@ class mlp_wrapper(nn.Module):
 
 		# Pass biogeochemical parameters through sigmoid, constraining them between [0, 1]
 		self.unconstrained_params = mlp_output / clamped_temp_sigmoid
-		predicted_para[:, self.para_index] = self.sigmoid(self.unconstrained_params)
+		constrained_params = self.sigmoid(self.unconstrained_params)
+		if PRODA_para is None:
+			 # If PRODA parameters not provided, neural network must output all params
+			if self.vertical_mixing == 'simple_two_intercepts':
+				assert np.array_equal(self.para_index, np.arange(22))
+			else:
+				assert np.array_equal(self.para_index, np.arange(21))
+			predicted_para = constrained_params
+		else:
+			# Initialize predicted parameters to PRODA parameters; then overwrite some with NN predictions
+			predicted_para = PRODA_para
+			predicted_para[:, self.para_index] = constrained_params
+
 		if predicted_para.requires_grad:
 			predicted_para.retain_grad()
 
@@ -595,20 +593,22 @@ class nn_only(nn.Module):
 
 		# MLP backbone
 		if base_model == "lipmlp":
-			self.mlp = lipmlp((self.new_input_size, width, width, self.num_params),
+			self.mlp = lipmlp((self.new_input_size, width, width, width, self.num_params),
 							   use_bn=use_bn, dropout_prob=dropout_prob)  # TODO different initialization methods, activations, dropout, etc. not supported
 		elif base_model == "new_mlp":
-			self.mlp = mlp((self.new_input_size, width, width, self.num_params),
+			self.mlp = mlp((self.new_input_size, width, width, width, self.num_params),
 							use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init)
 		else:
 			raise ValueError("Unsupported base_model")
 
 		self.act = get_activation(activation)
+
+		# Final layer: "params" -> SOC pools
 		self.final_layer = nn.Linear(self.num_params, self.output_dim)
-		if init == 'xavier_uniform':
+		if init == "xavier_uniform":
 			nn.init.xavier_uniform_(self.final_layer.weight)
 			nn.init.zeros_(self.final_layer.bias)
-		elif init == 'kaiming_uniform':
+		elif init == "kaiming_uniform":
 			nn.init.kaiming_uniform_(self.final_layer.weight)
 			nn.init.zeros_(self.final_layer.bias)
 
@@ -656,6 +656,12 @@ class nn_only(nn.Module):
 		# check if new_input is nan
 		if torch.isnan(new_input).any() or torch.isinf(new_input).any():
 			print("new_input was nan", new_input)
+			if torch.isnan(spatial_embeddings).any():
+				print("Nan in spatial emb")
+			if torch.isnan(all_embs).any():
+				print("Nan in categorical emb")
+			if torch.isnan(features):
+				print("Nan in features")
 			exit(1)
 
 		# Pass through MLP to get fake pred_para

@@ -1,3 +1,9 @@
+"""
+Spatial utils from Positional Encoder GNN paper (Klemmer et al. 2023)
+
+Source: https://github.com/konstantinklemmer/pe-gnn/blob/main/src/spatial_utils.py
+"""
+
 from scipy.stats import wasserstein_distance
 from math import radians, cos, sin, asin, sqrt
 import math

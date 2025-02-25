@@ -264,8 +264,8 @@ class GridCellSpatialRelationEncoder(nn.Module):
         self.input_embed_dim = self.cal_input_dim()
 
         if self.ffn is not None:
-            # @joshuafan: added hidden layer here
-          self.ffn = MultiLayerFeedForwardNN(2 * frequency_num * 2, spa_embed_dim, num_hidden_layers=1, hidden_dim=128)
+            # TODO: not sure if we should add hidden layer: num_hidden_layers=1, hidden_dim=128
+          self.ffn = MultiLayerFeedForwardNN(2 * frequency_num * 2, spa_embed_dim)
 
     def cal_elementwise_angle(self, coord, cur_freq):
         '''
@@ -342,7 +342,7 @@ class GridCellSpatialRelationEncoder(nn.Module):
         """
         device = coords.device
         spr_embeds = self.make_input_embeds(coords)
-        spr_embeds = torch.tensor(spr_embeds).to(device)  # torch.FloatTensor(spr_embeds).to(device)  @joshuafan modified
+        spr_embeds = torch.tensor(spr_embeds, dtype=torch.float32).to(device)  # torch.FloatTensor(spr_embeds).to(device)  @joshuafan modified
         if self.ffn is not None:
             return self.ffn(spr_embeds)
         else:
