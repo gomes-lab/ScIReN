@@ -99,8 +99,8 @@ parser.add_argument("--vertical_mixing", type=str, default='original', choices=[
 						 simple_one_intercept approximates with a log-log relationship with depth (upwards/downwards
 						 having the same intercept). simple_two_intercepts allows upwards/downwards transfers to
 						 have different intercepts.""")
-parser.add_argument("--vectorized", type=str, default='yes', choices=['yes', 'no', 'compare'], help="""true to use vectorized version of process-based model,
-						 false to use old for-loop version, compare to run both and assert they produce the same result""")
+parser.add_argument("--vectorized", type=str, default='yes', choices=['yes', 'no', 'compare'], help="""yes to use vectorized version of process-based model,
+						 no to use old for-loop version, compare to run both and assert they produce the same result""")
 parser.add_argument("--para_to_predict", type=str, default="all", choices=["all", "four", "fifteen"], help="Which parameters to predict using NN. If 'four', the NN only predicts the four most sensitive parameters, and other parameters are prescribed to PRODA-predicted values.")
 
 # Sigmoid temp and initialization
@@ -720,7 +720,7 @@ print("Var to indices", var_to_indices)
 current_data_x = np.ones((len(profile_collection), len(var4nn), 12, 13))*np.nan
 
 # Fill in input features
-# NOTE: env_info is indexed starting from 0, and profile_collection 
+# NOTE: env_info is indexed starting from 0, and profile_collection
 # is also using zero-based indices
 current_data_x[:, 0:len(var4nn), 0, 0] = np.array(env_info.loc[profile_collection[:, 0], var4nn])
 
@@ -792,7 +792,7 @@ PRODA_para = PRODA_para.sort_values(by='profile_id')
 
 # Store the PRODA_para into numpy array (mean_1 to mean_21)
 current_PRODA_para = PRODA_para[['mean_1', 'mean_2', 'mean_3', 'mean_4', 'mean_5', 'mean_6', 'mean_7', 'mean_8', 'mean_9', 'mean_10', 'mean_11', \
-								 'mean_12', 'mean_13', 'mean_14', 'mean_15', 'mean_16', 'mean_17', 'mean_18', 'mean_19', 'mean_20', 'mean_21']].to_numpy()              
+								 'mean_12', 'mean_13', 'mean_14', 'mean_15', 'mean_16', 'mean_17', 'mean_18', 'mean_19', 'mean_20', 'mean_21']].to_numpy()
 print("Shape of PRODA para", current_PRODA_para.shape)
 
 # Clamp to [0, 1]
@@ -917,7 +917,7 @@ if args.whether_resume == 0:
 
 	else:
 		# Split the data into k-folds, either randomly or by spatial block
-		# Recall cross_val_idx is one-based. Subtract one to make it zero-based. The test fold 
+		# Recall cross_val_idx is one-based. Subtract one to make it zero-based. The test fold
 		# is given by cross_val_idx-1, and validation fold is one larger (cross_val_idx % n_folds)
 		test_fold = args.cross_val_idx - 1
 		val_fold = args.cross_val_idx % args.n_folds
@@ -938,7 +938,7 @@ if args.whether_resume == 0:
 			lat_thresholds = [sorted_lats[int(i)] for i in indices]  # Lat boundaries between folds
 			lat_thresholds.append(sorted_lats[-1] + 1)  # Add final threshold above all datapoints
 
-			# Recall cross_val_idx is one-based. Subtract one to make it zero-based. The test fold 
+			# Recall cross_val_idx is one-based. Subtract one to make it zero-based. The test fold
 			# is given by cross_val_idx-1, and validation fold is one larger (cross_val_idx % n_folds)
 			test_loc = np.flatnonzero((current_data_c[:, 1] >= lat_thresholds[test_fold]) & (current_data_c[:, 1] < lat_thresholds[test_fold+1]))
 			val_loc = np.flatnonzero((current_data_c[:, 1] >= lat_thresholds[val_fold]) & (current_data_c[:, 1] < lat_thresholds[val_fold+1]))
@@ -953,7 +953,7 @@ if args.whether_resume == 0:
 			lon_thresholds = [sorted_lons[int(i)] for i in indices]  # Lon boundaries between folds
 			lon_thresholds.append(sorted_lons[-1] + 1)  # Add final threshold above all datapoints
 
-			# Recall cross_val_idx is one-based. Subtract one to make it zero-based. The test fold 
+			# Recall cross_val_idx is one-based. Subtract one to make it zero-based. The test fold
 			# is given by cross_val_idx-1, and validation fold is one larger (cross_val_idx % n_folds)
 			test_loc = np.flatnonzero((current_data_c[:, 0] >= lon_thresholds[test_fold]) & (current_data_c[:, 0] < lon_thresholds[test_fold+1]))
 			val_loc = np.flatnonzero((current_data_c[:, 0] >= lon_thresholds[val_fold]) & (current_data_c[:, 0] < lon_thresholds[val_fold+1]))
@@ -1104,12 +1104,12 @@ grid_env_info["original_lat"] = original_lats_grid
 grid_env_info = grid_env_info.dropna(axis=0, how='any')
 
 # Select the rows with lon and lat values within continental US
-grid_US_loc = (grid_env_info["original_lon"] >= -124.763068) \
+grid_US_mask = (grid_env_info["original_lon"] >= -124.763068) \
 			& (grid_env_info["original_lon"] <= -66.949895) \
 			& (grid_env_info["original_lat"] >= 24.521694) \
 			& (grid_env_info["original_lat"] <= 49.384358)  # True if grid cell is within US bounding box
-grid_US_profiles = np.where(grid_US_loc)[0]  # Indices (zero-based 'grid profile IDs') of grid cells in US, used later
-grid_env_info_US = grid_env_info[grid_US_loc]
+grid_US_profiles = np.where(grid_US_mask)[0]  # Indices (zero-based 'grid profile IDs') of grid cells in US, used later
+grid_env_info_US = grid_env_info[grid_US_mask]
 grid_env_info_num = grid_env_info_US.shape[0]
 print("Shape of grid env info (after dropping nans, selecting US):", grid_env_info_US.shape)
 
@@ -1249,7 +1249,7 @@ print("Grid PRODA para shape after filter to US", grid_PRODA_para.shape)
 grid_PRODA_para_aligned = pd.DataFrame({'profile_id': grid_US_profiles})
 grid_PRODA_para_aligned = grid_PRODA_para_aligned.merge(grid_PRODA_para, how='left', on='profile_id')
 grid_PRODA_para = grid_PRODA_para_aligned[['mean_1', 'mean_2', 'mean_3', 'mean_4', 'mean_5', 'mean_6', 'mean_7', 'mean_8', 'mean_9', 'mean_10', 'mean_11', \
-							                  'mean_12', 'mean_13', 'mean_14', 'mean_15', 'mean_16', 'mean_17', 'mean_18', 'mean_19', 'mean_20', 'mean_21']].to_numpy()              
+							                  'mean_12', 'mean_13', 'mean_14', 'mean_15', 'mean_16', 'mean_17', 'mean_18', 'mean_19', 'mean_20', 'mean_21']].to_numpy()
 grid_PRODA_para = np.clip(grid_PRODA_para, a_min=0, a_max=1)
 
 
@@ -1518,6 +1518,7 @@ def worker(rank, world_size, job_id):
 
 		# model = MTLmodel(**model_kwargs).to(device)
 	else:
+		# Create model
 		model = model_class(**model_kwargs).to(device)
 
 	# Create distributed version of the model
@@ -1654,6 +1655,8 @@ def worker(rank, world_size, job_id):
 
 	# record start time
 	start_time = time.time()
+	time_limit_exceeded = False
+	whether_break = torch.tensor(0).to(device)
 
 	for iepoch in range(start_epoch, num_epoch):
 		epoch_start = time.time()
@@ -2508,7 +2511,7 @@ def worker(rank, world_size, job_id):
 			if iepoch == 0:
 				with open(nse_file, mode='w') as f:
 					csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-					csv_writer.writerow(['epoch', 'train_NSE', 'train_MSE', 'train_MAE', 'val_NSE', 'val_MSE', 'val_MAE', 'epoch_time', 'cumulative_time', 'best_model_epoch'])
+					csv_writer.writerow(['epoch', 'train_MSE', 'train_MAE', 'train_NSE', 'val_MSE', 'val_MAE', 'val_NSE', 'epoch_time', 'cumulative_time', 'best_model_epoch'])
 			with open(nse_file, mode='a+') as f:
 				csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
 				csv_writer.writerow([iepoch] + torch.stack(all_train_metrics, dim=0).mean(dim=0).tolist() +
@@ -2707,7 +2710,7 @@ def worker(rank, world_size, job_id):
 			print(f'Train - MSE: {train_mse.item():.2f}, MAE: {train_mae.item():.2f}, NSE: {train_NSE.item():.2f}')
 
 			# Get predictions for val examples, compute loss & plot
-			best_guess_val_y_hat, best_guess_val_pred_para = best_guess_model(val_x.to(device), val_z.to(device), val_c.to(device), 
+			best_guess_val_y_hat, best_guess_val_pred_para = best_guess_model(val_x.to(device), val_z.to(device), val_c.to(device),
 																			  whether_predict=0, PRODA_para=val_proda_para.to(device))
 			val_mae, val_smooth_l1_loss, val_mse, _, val_NSE = fun_loss(best_guess_val_y_hat, val_y.to(device), best_guess_val_pred_para)
 			print(f'Val - MSE: {val_mse.item():.2f}, MAE: {val_mae.item():.2f}, NSE: {val_NSE.item():.2f}')
@@ -3203,8 +3206,10 @@ def worker(rank, world_size, job_id):
 
 		# Predict the SOC values based on Grid environmental information using the best model
 		grid_simu_soc, grid_pred_para = best_guess_model(torch.tensor(predict_data_x, device=device, dtype=torch.float32),
-														torch.tensor(predict_data_z, device=device, dtype=torch.float32),  # dtype = torch.float32, 
-														torch.tensor(predict_data_c, device=device, dtype=torch.float32), whether_predict = 1)  # TODO Put in grid_proda_para?
+														torch.tensor(predict_data_z, device=device, dtype=torch.float32),
+														torch.tensor(predict_data_c, device=device, dtype=torch.float32), whether_predict = 1,
+														PRODA_para=torch.tensor(grid_PRODA_para, device=device, dtype=torch.float32))  # TODO Put in grid_proda_para?
+
 		# Save the predicted SOC values, parameters and location data into csv files
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_simu_soc_' + job_id + '.csv', grid_simu_soc.detach().cpu().numpy(), delimiter = ',')
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_pred_para_' + job_id + '.csv', grid_pred_para.detach().cpu().numpy(), delimiter = ',')
@@ -3240,7 +3245,7 @@ def worker(rank, world_size, job_id):
 
 		print("-----------------Model Prediction Finished at " + str(datetime.now()) + "-----------------")
 
-		# NEW VERSION OF MAPS
+		# FINAL SUMMARY MAPS
 		# Scatters of true-vs-predicted SOC (grid).
 		# Each row represents a layer (or all layers), each column represents a split (train/val/test)
 		titles = ["Train: All Depths", "Val: All Depths", "Test: All Depths"]

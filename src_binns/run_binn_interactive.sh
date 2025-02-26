@@ -2,7 +2,7 @@
 # 1) Request job. On slurm, an example command to request 4 GPUs is:
 # srun -p full -n 1 -c 8 --time=72:00:00 --mem-per-cpu=10G --gpus 4 --pty /bin/bash -l
 # 2) Run the script. From src_binns directory:
-# ./run_interactive.sh
+# ./run_binn_interactive.sh
 
 
 # Single run. NOTES:
@@ -32,7 +32,7 @@
 # Reproducing the BINN paper
 for LR in 1e-2
 do
-    for FOLD in 1
+    for FOLD in 1 2 3 4 5 6 7 8 9 10
     do
         for SEED in 0
         do

@@ -30,6 +30,11 @@ To use graph neural network, you may need to install these libraries as well. Th
 pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
 ```
 
+You need to download the PRODA parameters from [this link](https://drive.google.com/file/d/1AHSgMRjxtrYRU0i1EarJC6QC_OUjzQIG/view?usp=drive_link). Place the zip file in the `INPUT_DATA` directory, and unzip:
+```
+unzip PRODA_Results.zip
+```
+
 ### Alternate commands to install
 
 If installing the `requirements.txt` file does not work directly, you can try manually installing packages.

@@ -1,3 +1,9 @@
+"""
+Code from Positional Encoder GNN paper (Klemmer et al. 2023), used for spatial positional encodings.
+
+Source: https://github.com/konstantinklemmer/pe-gnn/blob/main/src/model.py
+"""
+
 import numpy as np
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, GATConv, SimpleConv, knn_graph

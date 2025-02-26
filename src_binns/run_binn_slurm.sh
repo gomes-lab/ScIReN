@@ -18,8 +18,8 @@
 #SBATCH -N 1 -n 1
 # Request a total of 50GB RAM
 #SBATCH --mem=50GB
-# Request a walltime limit of 24 hours
-#SBATCH -t 24:00:00
+# Request a walltime limit of 72 hours
+#SBATCH -t 72:00:00
 
 # INFO: Print properties of job as submitted
 echo "SLURM_JOB_ID = $SLURM_JOB_ID"
@@ -57,18 +57,20 @@ source ~/.bashrc
 # Activate environment in conda
 conda activate binn
 
-# Start the Python Code
+# Basic BINN training: loop through learning rates, folds, seeds
 for LR in 1e-2
 do
-    for SEED in 0
+    for FOLD in 1 2 3 4 5 6 7 8 9 10
     do
-        # python3 binns_DDP.py --lr $LR --weight_decay 1e-3 --seed $SEED --n_datapoints 500 --n_epochs 50 --patience 20 \
-        #     --model old_mlp --use_bn --embed_dim 10 --num_CPU 4 --job_scheduler slurm --time_limit 23.5 --note OLDMLP
-
-        python3 binns_DDP.py --lr $LR --weight_decay 1e-3 --seed $SEED --n_datapoints 500 --n_epochs 50 --patience 20 \
-            --model new_mlp --use_bn --embed_dim 10 --num_CPU 4 --job_scheduler slurm --time_limit 23.5 --note NEWMLP
-
-        # python3 binns_DDP.py --lr $LR --weight_decay 1e-3 --seed $SEED --n_datapoints 500 --n_epochs 50 --patience 20 \
-        #     --model new_mlp --lambda_lipschitz 0.1 --use_bn --embed_dim 10 --num_CPU 4 --job_scheduler slurm --time_limit 23.5 --note NEWMLP_SPECTRALREG_0_1
+        for SEED in 0
+        do
+            python3 binns_DDP.py --data_seed 12345 --split random --cross_val_idx $FOLD --n_folds 10 \
+                --optimizer AdamW --lr $LR --weight_decay 0 \
+                --seed $SEED --init xavier_uniform --min_temp 10 --max_temp 109  \
+                --n_epochs 50 --patience 10 --model new_mlp --vertical_mixing original --vectorized yes \
+                --activation leaky_relu --use_bn --embed_dim 5 --pos_enc early \
+                --losses smooth_l1 param_reg --lambdas 1 100 \
+                --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 71.5 --note "REPRO_BINN"
+        done
     done
 done
