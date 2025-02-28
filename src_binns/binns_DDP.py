@@ -657,7 +657,7 @@ for group in categorical_vars:
 		idx = env_info_names.index(var)
 		col_max_min[idx, :] = np.nan
 
-# warnings.filterwarnings("error")
+warnings.filterwarnings("ignore")  # Ignore warnings about subtracting nan
 for ivar in np.arange(3, len(col_max_min[:, 0])):
 	if np.isnan(col_max_min[ivar, :]).any():
 		pass
@@ -665,9 +665,7 @@ for ivar in np.arange(3, len(col_max_min[:, 0])):
 		env_info[:, ivar] = (env_info[:, ivar] - col_max_min[ivar, 0])/(col_max_min[ivar, 1] - col_max_min[ivar, 0])
 		env_info[(env_info[:, ivar] > 1), ivar] = 1
 		env_info[(env_info[:, ivar] < 0), ivar] = 0
-	# except:
-	# 	print('error in variable: ', ivar)
-# warnings.resetwarnings()
+warnings.resetwarnings()
 
 
 env_info = df(env_info)

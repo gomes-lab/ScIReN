@@ -8,6 +8,8 @@
 
 # Request the full partition, which contains the GPU nodes.
 #SBATCH -p full
+#SBATCH --exclude=c0020
+
 # Name the job so it's meaningful in the job list
 #SBATCH -J binn_train
 # Request 4 GPUs 
@@ -54,8 +56,8 @@ source ~/.bashrc
 # module load cuda
 # module load mkl
 
-# Activate environment in conda
-conda activate binn
+# Activate environment
+source .venv/bin/activate
 
 # Basic BINN training: loop through learning rates, folds, seeds
 for LR in 1e-2
