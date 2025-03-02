@@ -29,7 +29,7 @@ To use graph neural network variant (work in progress), you may need to install 
 pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
 ```
 
-The input data can be download [here](https://drive.google.com/file/d/1fQYA2xxeSdu4MLOU25Ej-bQ6eUiFWvXK/view?usp=sharing). You can unzip the file in the `BINNS` root directory. One way to download the data from the commandline is using `gdown`:
+The input data can be downloaded [here](https://drive.google.com/file/d/1fQYA2xxeSdu4MLOU25Ej-bQ6eUiFWvXK/view?usp=sharing). You can unzip the file in the `BINNS` root directory. One way to download the data from the commandline is using `gdown`:
 
 ```
 pip install gdown
