@@ -1109,14 +1109,12 @@ grid_US_mask = (grid_env_info["original_lon"] >= -124.763068) \
 grid_US_profiles = np.where(grid_US_mask)[0]  # Indices (zero-based 'grid profile IDs') of grid cells in US, used later
 grid_env_info_US = grid_env_info[grid_US_mask]
 grid_env_info_num = grid_env_info_US.shape[0]
-print("Shape of grid env info (after dropping nans, selecting US):", grid_env_info_US.shape)
 
 # Check the max value of categorical variables, if it is larger than the number of categories, then remove the row
 for group in categorical_vars:
 	mask = grid_env_info_US[group].apply(lambda x: (x > np.max(env_info[group])).any(), axis=1)
 	indices_to_remove = grid_env_info_US[mask].index
 	grid_env_info_US = grid_env_info_US.drop(indices_to_remove)
-	print("Shape of grid env info after removing rows with categorical values larger than the number of categories in category {}: ".format(group), grid_env_info_US.shape)
 grid_env_info_num = grid_env_info_US.shape[0]
 
 # Include forcing data for the grid env info
@@ -1367,12 +1365,12 @@ def worker(rank, world_size, job_id):
 	os.makedirs(PLOT_DIR, exist_ok=True)  # Note: this should already exist from create_output_folders
 
 	# Save printed output to file
-	sys.stdout = misc_utils.Logger(os.path.join(data_dir_output, "neural_network", job_id, "output.txt"))
+	# sys.stdout = misc_utils.Logger(os.path.join(data_dir_output, "neural_network", job_id, "output.txt"))
 
 	# Set up distributed environment
 	device = ddp_setup(rank, world_size)
 	print(f"Finished DDP setup. Rank {rank} of {world_size}. Device {device}. JobID {job_id}.")
-	sys.stdout.flush()
+	# sys.stdout.flush()
 
 	# Create embeddings for categorical variables (each int maps to a different category)
 	# If using PyTorch DDP, I think this has to be done inside worker(). Each worker
@@ -1938,7 +1936,7 @@ def worker(rank, world_size, job_id):
 			all_train_true_soc.append(batch_y)
 
 			# flush all printed output
-			sys.stdout.flush()
+			# sys.stdout.flush()
 		# end for batch_info in train_loader:
 
 		# Ensure all processes reach this point to synchronize
@@ -2306,47 +2304,33 @@ def worker(rank, world_size, job_id):
 
 				# Parameter maps. Each row is a parameter, each column represents a split (train/val)
 				if args.model != "nn_only":
-					if args.synthetic_labels:
-						# If synthetic labels, we also have labels for parameters, so we can compare predicted vs true
-						lons_list = []
-						lats_list = []
-						values_list = []
-						vars_list = []
-						for para_idx in range(model_without_ddp.num_params):
-							lons_list.extend([allrank_train_coords[:, 0], allrank_train_coords[:, 0], allrank_val_coords[:, 0], allrank_val_coords[:, 0]])
-							lats_list.extend([allrank_train_coords[:, 1], allrank_train_coords[:, 1], allrank_val_coords[:, 1], allrank_val_coords[:, 1]])
-							values_list.extend([allrank_train_proda_para[:, para_idx], allrank_train_pred_para[:, para_idx],
-						   						allrank_val_proda_para[:, para_idx], allrank_val_pred_para[:, para_idx]])
-							para_name = para_names[para_idx]
-							vars_list.extend([f'True para {para_name} - Train', f'Predicted para {para_name} - Train',
-											  f'True para {para_name} - Val', f'Predicted para {para_name} - Val'])
-						visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"epoch{iepoch}_para_maps.png"),
-								lons_list, lats_list, values_list, vars_list, us_only=True, cols=4)
+					# Compare against PRODA parameters
+					lons_list = []
+					lats_list = []
+					values_list = []
+					vars_list = []
+					for para_idx in range(model_without_ddp.num_params):
+						lons_list.extend([allrank_train_coords[:, 0], allrank_train_coords[:, 0], allrank_val_coords[:, 0], allrank_val_coords[:, 0]])
+						lats_list.extend([allrank_train_coords[:, 1], allrank_train_coords[:, 1], allrank_val_coords[:, 1], allrank_val_coords[:, 1]])
+						values_list.extend([allrank_train_proda_para[:, para_idx], allrank_train_pred_para[:, para_idx],
+											allrank_val_proda_para[:, para_idx], allrank_val_pred_para[:, para_idx]])
+						para_name = para_names[para_idx]
+						vars_list.extend([f'PRODA para {para_name} - Train', f'Predicted para {para_name} - Train',
+											f'PRODA para {para_name} - Val', f'Predicted para {para_name} - Val'])
+					visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"epoch{iepoch}_para_maps.png"),
+							lons_list, lats_list, values_list, vars_list, us_only=True, cols=4)
 
-						# Also plot scatters
-						y_hats = []
-						ys = []
-						titles = []
-						for para_idx in range(model_without_ddp.num_params):
-							y_hats.extend([allrank_train_pred_para[:, para_idx], allrank_val_pred_para[:, para_idx]])
-							ys.extend([allrank_train_proda_para[:, para_idx], allrank_val_proda_para[:, para_idx]])
-							para_name = para_names[para_idx]
-							titles.extend([f'Train: {para_name}', f'Val: {para_name}'])
-						visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, f"epoch{iepoch}_para_scatters.png"), y_hats, ys, titles, cols=2)
+					# Also plot scatters (predicted vs PRODA parameters)
+					y_hats = []
+					ys = []
+					titles = []
+					for para_idx in range(model_without_ddp.num_params):
+						y_hats.extend([allrank_train_pred_para[:, para_idx], allrank_val_pred_para[:, para_idx]])
+						ys.extend([allrank_train_proda_para[:, para_idx], allrank_val_proda_para[:, para_idx]])
+						para_name = para_names[para_idx]
+						titles.extend([f'Train: {para_name}', f'Val: {para_name}'])
+					visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, f"epoch{iepoch}_para_scatters.png"), y_hats, ys, titles, cols=2)
 
-					else:
-						# If using real labels, we do not have labels for parameters, so only plot the predictions
-						lons_list = []
-						lats_list = []
-						values_list = []
-						vars_list = []
-						for para_idx in range(model_without_ddp.num_params):
-							lons_list.extend([allrank_train_coords[:, 0], allrank_val_coords[:, 0]])
-							lats_list.extend([allrank_train_coords[:, 1], allrank_val_coords[:, 1]])
-							values_list.extend([allrank_train_pred_para[:, para_idx], allrank_val_pred_para[:, para_idx]])
-							vars_list.extend([f'Train: {para_names[para_idx]}', f'Val: {para_names[para_idx]}'])
-						visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"epoch{iepoch}_para_maps.png"),
-								lons_list, lats_list, values_list, vars_list, us_only=True, cols=2)
 
 				# if iepoch == 0:
 				#   	# Covariate maps. Each row is a covariate, each column represents a split
@@ -2514,7 +2498,7 @@ def worker(rank, world_size, job_id):
 				csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
 				csv_writer.writerow([iepoch] + torch.stack(all_train_metrics, dim=0).mean(dim=0).tolist() +
 									 torch.stack(all_val_metrics, dim=0).mean(dim=0).tolist() +
-									 [round(train_time, 2) + round(hist_time, 2) + best_model_epoch.item()])
+									 [round(train_time, 2), round(hist_time, 2), best_model_epoch.item()])
 
 		# Ensure all processes reach this point before proceeding
 		dist.barrier()

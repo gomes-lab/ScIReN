@@ -12,8 +12,7 @@ do
                 --n_epochs 5 --patience 20 --model new_mlp --vertical_mixing original --vectorized yes \
                 --activation leaky_relu --use_bn --embed_dim 5 --pos_enc early \
                 --losses smooth_l1 param_reg --lambdas 1 100 \
-                --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "REPRO_BINN_RETRIEVAL" \
-                --whether_resume 1 --previous_job_id "20250225-114826_REPRO_BINN_RETRIEVAL_lr=1e-02_fold=1_seed=0"
+                --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "REPRO_BINN_RETRIEVAL"
         done
     done
 done
