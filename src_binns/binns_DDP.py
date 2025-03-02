@@ -227,9 +227,9 @@ job_begin_time = time.time()
 # job_submit_path = '/glade/u/home/haodixu/BINN/PBS_Submit/Bulk_Converge/'
 # data_dir_input = '/glade/u/home/haodixu/BINN/ENSEMBLE/INPUT_DATA/'
 # data_dir_output = '/glade/work/haodixu/BINN/BINNS/OUTPUT_DATA/'
-data_dir_input = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/INPUT_DATA/'
-data_dir_output = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/'
-job_submit_path = '/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/src_binns/resume_jobs/'
+data_dir_input = '../ENSEMBLE/INPUT_DATA/'
+data_dir_output = '../OUTPUT_DATA/'
+job_submit_path = './resume_jobs/'
 os.makedirs(job_submit_path, exist_ok=True)
 
 ################################################

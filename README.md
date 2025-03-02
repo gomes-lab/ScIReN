@@ -29,15 +29,15 @@ To use graph neural network variant (work in progress), you may need to install 
 pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
 ```
 
-You need to download the PRODA parameters from [this link](https://drive.google.com/file/d/1AGDlybz35n3gHqyNilVthVzOaBkNZAXr/view?usp=sharing), place in the `ENSEMBLE/INPUT_DATA` directory, and unzip. One way to download this is using `gdown`:
+The input data can be download [here](https://drive.google.com/file/d/1fQYA2xxeSdu4MLOU25Ej-bQ6eUiFWvXK/view?usp=sharing). You can unzip the file in the `BINNS` root directory. One way to download the data from the commandline is using `gdown`:
+
 ```
 pip install gdown
-cd ENSEMBLE/INPUT_DATA
-gdown 1AGDlybz35n3gHqyNilVthVzOaBkNZAXr
-unzip PRODA_Results_Subset.zip
+gdown 1fQYA2xxeSdu4MLOU25Ej-bQ6eUiFWvXK
+unzip BINN_input_data.zip
 ```
 
-### Alternate commands to install
+### (OLD STUFF, CAN PROBABLY IGNORE) Alternate commands to install
 
 If installing the `requirements.txt` file did not work, you can try manually installing packages.
 ```
@@ -46,11 +46,20 @@ pip install torch torchvision torchaudio
 pip install torch_geometric
 ```
 
+You need to download the PRODA parameters from [this link](https://drive.google.com/file/d/1AGDlybz35n3gHqyNilVthVzOaBkNZAXr/view?usp=sharing), place in the `ENSEMBLE/INPUT_DATA` directory, and unzip. One way to download this is using `gdown`:
+```
+pip install gdown
+cd ENSEMBLE/INPUT_DATA
+gdown 1AGDlybz35n3gHqyNilVthVzOaBkNZAXr
+unzip PRODA_Results_Subset.zip
+```
+
+
 ## Running Instructions
 
 The script `src_binns/run_binn.sh` contains an example of how to train on 4 GPUs from command-line (interactively). Run like this:
 ```
-cd BINN_clean/src_binns
+cd src_binns
 chmod +x run_binn.sh  # If execute permission not enabled
 ./run_binn.sh
 ```
