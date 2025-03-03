@@ -2488,7 +2488,7 @@ def worker(rank, world_size, job_id):
 									[val_loss_history[iepoch, loss_idx] for loss_idx, loss in enumerate(args.losses)] +
 									[round(train_time, 2), round(hist_time, 2), best_model_epoch.item()])
 
-			# NSE file. TODO Also make this into a CSV.
+			# Metrics file
 			nse_file = os.path.join(data_dir_output, "neural_network", job_id, METRICS_FILENAME)
 			if iepoch == 0:
 				with open(nse_file, mode='w') as f:
@@ -2625,9 +2625,11 @@ def worker(rank, world_size, job_id):
 
 	if time_limit_exceeded:
 		print(f"Rank {rank}: Exiting after saving checkpoint.")
+		dist.destroy_process_group()
 		return
 	if whether_break.item() == 1:
 		print(f"Rank {rank}: Exiting after training due to NaN encountered in any process.")
+		dist.destroy_process_group()
 		return
 
 	# Ensure all processes reach the end
@@ -3225,8 +3227,6 @@ def worker(rank, world_size, job_id):
 			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_pred.detach().cpu().numpy(), delimiter = ',')
 
 
-		print("-----------------Model Prediction Finished at " + str(datetime.now()) + "-----------------")
-
 		# FINAL SUMMARY MAPS
 		# Scatters of true-vs-predicted SOC (grid).
 		# Each row represents a layer (or all layers), each column represents a split (train/val/test)
@@ -3330,10 +3330,13 @@ def worker(rank, world_size, job_id):
 			# 	visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"FINAL_para_maps.png"),
 			# 			lons_list, lats_list, values_list, vars_list, us_only=True, cols=2)
 
+		print("-----------------Model Prediction Finished at " + str(datetime.now()) + "-----------------")
+
 	# end if rank == 0:
 	else:
 		if whether_break.item() == 1:
 			print("Rank {} finished".format(rank))
+			dist.destroy_process_group()
 			return
 		
 		
