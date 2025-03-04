@@ -3364,6 +3364,7 @@ if __name__ == '__main__':
 	# Create job ID
 	job_id = create_output_folders(args)
 	print("MAIN, JOB ID", job_id)
+	print("Command:", " ".join(sys.argv))
 
 	# Spawn method is required if using GPU
 	if torch.cuda.is_available():

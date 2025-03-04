@@ -12,22 +12,22 @@
 # --note is a string that describes this run; it's used in the output directory name, and we append the final
 # metrics to a result excel file with that name.
 # See documentation in binns_DDP for info on other arguments.
-# for LR in 1e-3
-# do
-#     for FOLD in 1
-#     do
-#         for SEED in 0
-#         do
-#             python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-#                 --lr $LR --optimizer AdamW --weight_decay 0 \
-#                 --seed $SEED --init default --min_temp 1 --max_temp 1 --standardize_input \
-#                 --n_epochs 3 --patience 100 --model new_mlp --vertical_mixing original --vectorized yes \
-#                 --activation leaky_relu --use_bn --categorical embedding --embed_dim 5 --pos_enc none \
-#                 --losses smooth_l1 param_reg --loss_weighting manual --lambdas 1 100 \
-#                 --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_EXAMPLE"
-#         done
-#     done
-# done
+for LR in 1e-3
+do
+    for FOLD in 1
+    do
+        for SEED in 0
+        do
+            python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
+                --lr $LR --optimizer AdamW --weight_decay 0 \
+                --seed $SEED --init default --min_temp 1 --max_temp 1 \
+                --n_epochs 1 --patience 100 --model new_mlp --vertical_mixing original --vectorized yes \
+                --activation leaky_relu --use_bn --categorical embedding --embed_dim 5 --pos_enc none \
+                --losses smooth_l1 param_reg --loss_weighting manual --lambdas 1 100 \
+                --num_CPU 5 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_EXAMPLE" --plot
+        done
+    done
+done
 
 # Reproducing the BINN paper
 for LR in 1e-2
@@ -46,7 +46,7 @@ do
         done
     done
 done
-exit
+
 
 # To resume from a previous partial run, run something like this.
 # Note that "--whether_resume" should be set to 1, and --previous_job_id" should be set to the output folder name we load from.
