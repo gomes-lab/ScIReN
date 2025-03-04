@@ -168,7 +168,7 @@ def plot_true_vs_predicted_multiple(filename, y_hats, ys, titles, cols=None):
     plt.close()
 
 
-def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=None, us_only=False, ax=None):
+def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=None, us_only=False, ax=None, min_val=None, max_val=None, world=None, states=None):
     if title is None:
         title = var_name
     if ax is None:
@@ -181,6 +181,14 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
         lats = lats.detach().cpu().numpy()
     if torch.is_tensor(values):
         values = values.detach().cpu().numpy()
+    if min_val is None:
+        min_val = values.min()
+    if max_val is None:
+        max_val = values.max()
+    if world is None:
+        world = gpd.read_file("../ENSEMBLE/INPUT_DATA/maps/ne_110m_admin_0_countries_lakes.shp")  # Formerly gpd.datasets.get_path('naturalearth_lowres'))
+    if states is None and us_only:
+        states = gpd.read_file("../ENSEMBLE/INPUT_DATA/maps/ne_110m_admin_1_states_provinces_lakes.shp")
 
     # Exclude NaNs and Infs
     df = pd.DataFrame({"lon": lons,
@@ -190,15 +198,16 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
     df = df[~np.isinf(df[var_name])]
 
     # Plot world map
-    gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
-    world = gpd.read_file("../ENSEMBLE/INPUT_DATA/maps/naturalearth/ne_50m_admin_0_countries.shp")  # Formerly gpd.datasets.get_path('naturalearth_lowres'))
-    world.boundary.plot(ax=ax, color='gray')  # world.boundary.plot(ax=ax, color='gray')
     if us_only:
-        states = gpd.read_file("../ENSEMBLE/INPUT_DATA/maps/naturalearth/ne_50m_admin_1_states_provinces_lines.shp")
-        states.plot(ax=ax, color='gray')
         ax.set_xlim(-124.8, -66.9)
         ax.set_ylim(24.5, 49.4)
-    gdf.plot(column=var_name, ax=ax, marker='o', markersize=8, legend=True, zorder=10)  # legend_kwds={'shrink': 0.7},
+    world.boundary.plot(ax=ax, color='gray')
+    if us_only:
+        states.boundary.plot(ax=ax, color='gray')
+
+    # Plot points
+    gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
+    gdf.plot(column=var_name, ax=ax, marker='o', markersize=8, legend=True, zorder=10, vmin=min_val, vmax=max_val)  # legend_kwds={'shrink': 0.7},
     ax.set_title(title)
 
     if plot_dir is not None:
@@ -221,15 +230,27 @@ def plot_map_grid(filename, lons_list, lats_list, values_list, vars_list, us_onl
     assert len(lons_list) == len(lats_list)
     assert len(lons_list) == len(values_list)
     assert len(lons_list) == len(vars_list)
+    world = gpd.read_file("../ENSEMBLE/INPUT_DATA/maps/ne_110m_admin_0_countries_lakes.shp")  # Formerly gpd.datasets.get_path('naturalearth_lowres'))
+    states = gpd.read_file("../ENSEMBLE/INPUT_DATA/maps/ne_110m_admin_1_states_provinces_lakes.shp")
 
     if cols is None:
         cols = min(4, n_plots)
     rows = math.ceil(n_plots / cols)
     fig, axeslist = plt.subplots(rows, cols, figsize=(12*cols, 6*rows), squeeze=False)
-    for i in range(n_plots):
-        ax = axeslist.ravel()[i]
-        plot_observations_world_map(lons_list[i], lats_list[i], values_list[i], plot_dir=None, 
-                                    var_name=vars_list[i], title=None, us_only=us_only, ax=ax)
+
+    for row_idx in range(rows):
+        # For each row, ensure consistent colorbar range
+        all_vals = torch.cat(values_list[cols*row_idx:cols*(row_idx+1)])
+        all_vals = all_vals[~torch.isnan(all_vals)]
+        min_val, max_val = all_vals.min().item(), all_vals.max().item()
+        for col_idx in range(cols):
+            i = cols*row_idx + col_idx
+            if i < n_plots:
+                ax = axeslist.ravel()[i]
+                plot_observations_world_map(lons_list[i], lats_list[i], values_list[i], plot_dir=None, 
+                                            var_name=vars_list[i], title=None, us_only=us_only, ax=ax,
+                                            min_val=min_val, max_val=max_val, world=world, states=states)
+
     plt.tight_layout()
     fig.subplots_adjust(top=0.90)
     plt.savefig(filename)

@@ -177,6 +177,7 @@ parser.add_argument("--job_scheduler", type=str, default="pbs", choices=["pbs", 
 parser.add_argument("--whether_resume", type=int, default=0, help="Whether to resume training from a previous model")
 parser.add_argument("--previous_job_id", type=str, default="", help="Previous job id to resume from (otherwise, resumes using envir variable PREVIOUS_JOB_ID)")
 parser.add_argument("--time_limit", type=float, default=11.5, help="Time limit for this job in HOURS. If trainng is not finished yet, start another job to continue.")
+parser.add_argument("--plot", action='store_true', help="Whether to produce plots.")
 
 args = parser.parse_args()
 
@@ -1248,6 +1249,11 @@ grid_PRODA_para = grid_PRODA_para_aligned[['mean_1', 'mean_2', 'mean_3', 'mean_4
 							                  'mean_12', 'mean_13', 'mean_14', 'mean_15', 'mean_16', 'mean_17', 'mean_18', 'mean_19', 'mean_20', 'mean_21']].to_numpy()
 grid_PRODA_para = np.clip(grid_PRODA_para, a_min=0, a_max=1)
 
+# Convert predict data to tensors
+predict_data_x = torch.tensor(predict_data_x, dtype=torch.float32)
+predict_data_z = torch.tensor(predict_data_z, dtype=torch.float32)
+predict_data_c = torch.tensor(predict_data_c, dtype=torch.float32)
+grid_PRODA_para = torch.tensor(grid_PRODA_para, dtype=torch.float32)
 
 # Helper function to combine the training data into a single tensor
 class MergeDataset(Dataset):
@@ -1343,13 +1349,13 @@ def ddp_setup(rank, world_size):
 		device = torch.device(f"cuda:{gpu}")
 
 		# Initialize process group (for GPU, use nccl backend)
-		dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, timeout=timedelta(hours=1))
+		dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, timeout=timedelta(hours=2))
 	else:
 		# Set device to CPU
 		device = torch.device("cpu")
 
 		# Initialize process group (for CPU, use gloo backend)
-		dist.init_process_group(backend="gloo", rank=rank, world_size=world_size, timeout=timedelta(hours=1))
+		dist.init_process_group(backend="gloo", rank=rank, world_size=world_size, timeout=timedelta(hours=2))
 
 	return device
 
@@ -1371,6 +1377,8 @@ def worker(rank, world_size, job_id):
 	device = ddp_setup(rank, world_size)
 	print(f"Finished DDP setup. Rank {rank} of {world_size}. Device {device}. JobID {job_id}.")
 	# sys.stdout.flush()
+	print("Worker", rank, train_x.shape)
+	print(train_y.shape)
 
 	# Create embeddings for categorical variables (each int maps to a different category)
 	# If using PyTorch DDP, I think this has to be done inside worker(). Each worker
@@ -2186,8 +2194,8 @@ def worker(rank, world_size, job_id):
 		all_val_pred_soc = torch.cat(all_val_pred_soc, dim=0)
 		all_val_true_soc = torch.cat(all_val_true_soc, dim=0)
 
-		if iepoch % 50 == 0:
-			print("Syncing all preds")
+		if args.plot and (iepoch % 50 == 0):
+			print("Creating plots", datetime.now())
 
 			# Estimate max examples per rank. Ok for some to be nan
 			train_examples_per_rank = len(train_sampler)  # math.ceil(len(train_sampler) / world_size)
@@ -2271,54 +2279,57 @@ def worker(rank, world_size, job_id):
 					titles.extend([f'Train: {layer_str}', f'Val: {layer_str}'])
 				visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, f"epoch{iepoch}_scatters.png"), y_hats, ys, titles, cols=2)
 
-				# Maps of true-vs-predicted SOC (grid)
-				# Each row represents a layer, each column represents a split (train/val) and {true or predicted}
-				lons_list = []
-				lats_list = []
-				values_list = []
-				vars_list = []
-				for i in range(len(LAYER_BOUNDARIES) - 1):
-					# For each site: compute average SOC over observations in this layer
-					layer_loc_train = (allrank_train_z >= LAYER_BOUNDARIES[i]) & (allrank_train_z < LAYER_BOUNDARIES[i+1])  # nan considered false, which is good
-					train_true_soc = torch.where(layer_loc_train, allrank_train_true_soc, torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
-					train_true_soc = torch.nanmean(train_true_soc, dim=1)  # For each site, average over observations in this layer. If none, return nan.
-					train_pred_soc = torch.where(layer_loc_train, allrank_train_pred_soc, torch.nan)  # Same for predictions
-					train_pred_soc = torch.nanmean(train_pred_soc, dim=1)
+				# # Maps of true-vs-predicted SOC
+				# # Each row represents a layer, each column represents a split (train/val) and {true or predicted}
+				# NOTE: Not plotting maps as they are expensive.
+				# lons_list = []
+				# lats_list = []
+				# values_list = []
+				# vars_list = []
+				# for i in range(len(LAYER_BOUNDARIES) - 1):
+				# 	# For each site: compute average SOC over observations in this layer
+				# 	layer_loc_train = (allrank_train_z >= LAYER_BOUNDARIES[i]) & (allrank_train_z < LAYER_BOUNDARIES[i+1])  # nan considered false, which is good
+				# 	train_true_soc = torch.where(layer_loc_train, allrank_train_true_soc, torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
+				# 	train_true_soc = torch.nanmean(train_true_soc, dim=1)  # For each site, average over observations in this layer. If none, return nan.
+				# 	train_pred_soc = torch.where(layer_loc_train, allrank_train_pred_soc, torch.nan)  # Same for predictions
+				# 	train_pred_soc = torch.nanmean(train_pred_soc, dim=1)
 
-					# Repeat above for val data
-					layer_loc_val = (allrank_val_z >= LAYER_BOUNDARIES[i]) & (allrank_val_z < LAYER_BOUNDARIES[i+1])  # nan considered false, which is good
-					val_true_soc = torch.where(layer_loc_val, allrank_val_true_soc, torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
-					val_true_soc = torch.nanmean(val_true_soc, dim=1)  # For each site, average over observations in this layer. If none, return nan.
-					val_pred_soc = torch.where(layer_loc_val, allrank_val_pred_soc, torch.nan)  # Same for predictions
-					val_pred_soc = torch.nanmean(val_pred_soc, dim=1)
+				# 	# Repeat above for val data
+				# 	layer_loc_val = (allrank_val_z >= LAYER_BOUNDARIES[i]) & (allrank_val_z < LAYER_BOUNDARIES[i+1])  # nan considered false, which is good
+				# 	val_true_soc = torch.where(layer_loc_val, allrank_val_true_soc, torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
+				# 	val_true_soc = torch.nanmean(val_true_soc, dim=1)  # For each site, average over observations in this layer. If none, return nan.
+				# 	val_pred_soc = torch.where(layer_loc_val, allrank_val_pred_soc, torch.nan)  # Same for predictions
+				# 	val_pred_soc = torch.nanmean(val_pred_soc, dim=1)
 
-					# Collect results
-					lons_list.extend([allrank_train_coords[:, 0], allrank_train_coords[:, 0], allrank_val_coords[:, 0], allrank_val_coords[:, 0]])
-					lats_list.extend([allrank_train_coords[:, 1], allrank_train_coords[:, 1], allrank_val_coords[:, 1], allrank_val_coords[:, 1]])
-					values_list.extend([train_true_soc, train_pred_soc, val_true_soc, val_pred_soc])
-					layer_str = f'{LAYER_BOUNDARIES[i]}-{LAYER_BOUNDARIES[i+1]}m'
-					vars_list.extend([f'True SOC - Train: {layer_str}', f'Predicted SOC - Train: {layer_str}',
-					   				  f'True SOC - Val: {layer_str}', f'Predicted SOC - Val: {layer_str}'])
-				visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"epoch{iepoch}_soc_maps.png"),
-						lons_list, lats_list, values_list, vars_list, us_only=True, cols=4)
+				# 	# Collect results
+				# 	lons_list.extend([allrank_train_coords[:, 0], allrank_train_coords[:, 0], allrank_val_coords[:, 0], allrank_val_coords[:, 0]])
+				# 	lats_list.extend([allrank_train_coords[:, 1], allrank_train_coords[:, 1], allrank_val_coords[:, 1], allrank_val_coords[:, 1]])
+				# 	values_list.extend([train_true_soc, train_pred_soc, val_true_soc, val_pred_soc])
+				# 	layer_str = f'{LAYER_BOUNDARIES[i]}-{LAYER_BOUNDARIES[i+1]}m'
+				# 	vars_list.extend([f'True SOC - Train: {layer_str}', f'Predicted SOC - Train: {layer_str}',
+				# 	   				  f'True SOC - Val: {layer_str}', f'Predicted SOC - Val: {layer_str}'])
+				# visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"epoch{iepoch}_soc_maps.png"),
+				# 		lons_list, lats_list, values_list, vars_list, us_only=True, cols=4)
 
 				# Parameter maps. Each row is a parameter, each column represents a split (train/val)
 				if args.model != "nn_only":
-					# Compare against PRODA parameters
-					lons_list = []
-					lats_list = []
-					values_list = []
-					vars_list = []
-					for para_idx in range(model_without_ddp.num_params):
-						lons_list.extend([allrank_train_coords[:, 0], allrank_train_coords[:, 0], allrank_val_coords[:, 0], allrank_val_coords[:, 0]])
-						lats_list.extend([allrank_train_coords[:, 1], allrank_train_coords[:, 1], allrank_val_coords[:, 1], allrank_val_coords[:, 1]])
-						values_list.extend([allrank_train_proda_para[:, para_idx], allrank_train_pred_para[:, para_idx],
-											allrank_val_proda_para[:, para_idx], allrank_val_pred_para[:, para_idx]])
-						para_name = para_names[para_idx]
-						vars_list.extend([f'PRODA para {para_name} - Train', f'Predicted para {para_name} - Train',
-											f'PRODA para {para_name} - Val', f'Predicted para {para_name} - Val'])
-					visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"epoch{iepoch}_para_maps.png"),
-							lons_list, lats_list, values_list, vars_list, us_only=True, cols=4)
+					# # Compare against PRODA parameters
+					# lons_list = []
+					# lats_list = []
+					# values_list = []
+					# vars_list = []
+					# for para_idx in range(model_without_ddp.num_params):
+					# 	lons_list.extend([allrank_train_coords[:, 0], allrank_train_coords[:, 0], allrank_val_coords[:, 0], allrank_val_coords[:, 0]])
+					# 	lats_list.extend([allrank_train_coords[:, 1], allrank_train_coords[:, 1], allrank_val_coords[:, 1], allrank_val_coords[:, 1]])
+					# 	values_list.extend([allrank_train_proda_para[:, para_idx], allrank_train_pred_para[:, para_idx],
+					# 						allrank_val_proda_para[:, para_idx], allrank_val_pred_para[:, para_idx]])
+					# 	para_name = para_names[para_idx]
+					# 	vars_list.extend([f'PRODA para {para_name} - Train', f'Predicted para {para_name} - Train',
+					# 						f'PRODA para {para_name} - Val', f'Predicted para {para_name} - Val'])
+					# print("prepared data for para maps", datetime.now())
+					# visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"epoch{iepoch}_para_maps.png"),
+					# 		lons_list, lats_list, values_list, vars_list, us_only=True, cols=4)
+					# print("plotted para maps", datetime.now())
 
 					# Also plot scatters (predicted vs PRODA parameters)
 					y_hats = []
@@ -2331,9 +2342,8 @@ def worker(rank, world_size, job_id):
 						titles.extend([f'Train: {para_name}', f'Val: {para_name}'])
 					visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, f"epoch{iepoch}_para_scatters.png"), y_hats, ys, titles, cols=2)
 
-
 				# if iepoch == 0:
-				#   	# Covariate maps. Each row is a covariate, each column represents a split
+				#   # Covariate maps. Each row is a covariate, each column represents a split
 				# 	lons_list = []
 				# 	lats_list = []
 				# 	values_list = []
@@ -2379,7 +2389,7 @@ def worker(rank, world_size, job_id):
 			val_losses_epoch = {loss: round(val_loss_history[iepoch, loss_idx], 2) for loss_idx, loss in enumerate(args.losses)}
 			train_NSE = round(train_metrics_history[iepoch, 2], 2)  # NSE is column 2
 			val_NSE = round(val_metrics_history[iepoch, 2], 2)
-			print(f'Epoch {iepoch} Rank {rank} - Train NSE: {train_NSE}, validation NSE: {val_NSE}, time: {train_time:.2f}', flush=True)
+			print(f'{datetime.now()} - Epoch {iepoch} Rank {rank} - Train NSE: {train_NSE}, validation NSE: {val_NSE}, time: {train_time:.2f}', flush=True)
 			print(f'Train losses ({all_train_pred_soc.shape[0]} examples): {train_losses_epoch}')
 			print(f'Validation losses ({all_val_pred_soc.shape[0]} examples): {val_losses_epoch}')
 
@@ -2683,9 +2693,9 @@ def worker(rank, world_size, job_id):
 		#######################################################
 		# Get best model's predictions on train/val/test sets
 		#######################################################
+		# TODO: This takes a long time and should be distributed.
 		print("Rank 0 beginning prediction at time {}".format(datetime.now()))
 		best_guess_model.eval()
-		print("Rank 0 model set to eval at time {}".format(datetime.now()))
 		with torch.no_grad():
 			# Get predictions for train examples, compute loss & plot
 			best_guess_train_y_hat, best_guess_train_pred_para = best_guess_model(train_x.to(device), train_z.to(device), train_c.to(device),
@@ -2731,468 +2741,468 @@ def worker(rank, world_size, job_id):
 			csv_writer.writerow([job_id, command_string, data_string, args.lr, args.weight_decay, args.seed, best_model_path, val_mse.item(), val_mae.item(), val_NSE.item(), test_mse.item(), test_mae.item(), test_NSE.item()])
 
 
+
 		# create folder for the results
 		os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Validation', exist_ok=True)
 		os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Train', exist_ok=True)
 		if test_split_ratio != 0:
 			os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Test', exist_ok=True)
+		print("----------------- Finished train/val/test prediction " + str(datetime.now()) + "-----------------")
 
-		#############
-		# Test Data #
-		#############
+	if rank == 0 and args.plot:
+		# #############
+		# # Test Data #
+		# #############
 
-		## predictions and parameters for the test profiles ##
+		# ## predictions and parameters for the test profiles ##
 
-		best_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, device=device, dtype = torch.float32)  # dtype = torch.float32, 
-		best_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, device=device, dtype = torch.float32)  # dtype = torch.float32, 
-		upper_depth_all = np.ones((wosis_profile_info.shape[0], 200))*np.nan
-		lower_depth_all = np.ones((wosis_profile_info.shape[0], 200))*np.nan
-
-		
-		upper_depth_all[current_data_profile_id, :] = obs_upper_depth_matrix
-		lower_depth_all[current_data_profile_id, :] = obs_lower_depth_matrix
-
-		best_simu_soc[test_profile_id, :] = best_guess_test_y_hat
-		best_pred_para[test_profile_id, :] = best_guess_test_pred_para
-
-
-		# save data
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_best_simu_soc_' + job_id + '.csv', best_simu_soc.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_best_pred_para_' + job_id + '.csv', best_pred_para.detach().cpu().numpy(), delimiter = ',')
-
-		## bulk convergence ##
-		# initializz a seperate array to store the prediction results for the test profiles
-		# with return of the function: carbon_input, cpool_steady_state, cpools_layer, soc_layer, total_res_time, total_res_time_base, res_time_base_pools, t_scaler, bulk_A, w_scaler, bulk_K, bulk_V, bulk_xi, bulk_I, litter_fraction
-		if args.model != 'nn_only': 
-			carbon_input_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			cpool_steady_state_test = np.ones((wosis_profile_info.shape[0], 140))*np.nan
-			cpools_layer_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			soc_layer_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			total_res_time_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			total_res_time_base_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			res_time_base_pools_test = np.ones((wosis_profile_info.shape[0], 140))*np.nan
-			t_scaler_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			bulk_A_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			w_scaler_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			bulk_K_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			bulk_V_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			bulk_xi_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			bulk_I_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			litter_fraction_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-
-			carbon_input_test_profile, cpool_steady_state_test_profile, cpools_layer_test_profile, \
-				soc_layer_test_profile, total_res_time_test_profile, total_res_time_base_test_profile, res_time_base_pools_test_profile, \
-					t_scaler_test_profile, bulk_A_test_profile, w_scaler_test_profile, bulk_K_test_profile, bulk_V_test_profile, bulk_xi_test_profile, \
-						bulk_I_test_profile, litter_fraction_test_profile = fun_bulk_simu(best_guess_test_pred_para.to(device), test_x.to(device), args.vertical_mixing, args.vectorized)
-			
-			# store the results
-			carbon_input_test[test_profile_id, :] = carbon_input_test_profile.detach().cpu().numpy()
-			cpool_steady_state_test[test_profile_id, :] = cpool_steady_state_test_profile.detach().cpu().numpy()
-			cpools_layer_test[test_profile_id, :] = cpools_layer_test_profile.detach().cpu().numpy()
-			soc_layer_test[test_profile_id, :] = soc_layer_test_profile.detach().cpu().numpy()
-			total_res_time_test[test_profile_id, :] = total_res_time_test_profile.detach().cpu().numpy()
-			total_res_time_base_test[test_profile_id, :] = total_res_time_base_test_profile.detach().cpu().numpy()
-			res_time_base_pools_test[test_profile_id, :] = res_time_base_pools_test_profile.detach().cpu().numpy()
-			t_scaler_test[test_profile_id, :] = t_scaler_test_profile.detach().cpu().numpy()
-			bulk_A_test[test_profile_id, :] = bulk_A_test_profile.detach().cpu().numpy()
-			w_scaler_test[test_profile_id, :] = w_scaler_test_profile.detach().cpu().numpy()
-			bulk_K_test[test_profile_id, :] = bulk_K_test_profile.detach().cpu().numpy()
-			bulk_V_test[test_profile_id, :] = bulk_V_test_profile.detach().cpu().numpy()
-			bulk_xi_test[test_profile_id, :] = bulk_xi_test_profile.detach().cpu().numpy()
-			bulk_I_test[test_profile_id, :] = bulk_I_test_profile.detach().cpu().numpy()
-			litter_fraction_test[test_profile_id, :] = litter_fraction_test_profile.detach().cpu().numpy()
-
-			# save data
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_carbon_input_' + job_id + '.csv', carbon_input_test, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_test, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_test, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_soc_layer_' + job_id + '.csv', soc_layer_test, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_total_res_time_' + job_id + '.csv', total_res_time_test, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_test, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_test, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_t_scaler_' + job_id + '.csv', t_scaler_test, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_A_' + job_id + '.csv', bulk_A_test, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_w_scaler_' + job_id + '.csv', w_scaler_test, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_K_' + job_id + '.csv', bulk_K_test, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_V_' + job_id + '.csv', bulk_V_test, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_test, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_I_' + job_id + '.csv', bulk_I_test, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_test, delimiter = ',')
-
-
-
-		############
-		# Val Data #
-		############
-
-		## predictions and parameters for the validation profiles ##
-
-		# initializz a seperate array to store the prediction results for the validation profiles
-		val_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, device=device, dtype = torch.float32)  # dtype = torch.float32,
-		val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, device=device, dtype = torch.float32)  # dtype = torch.float32,
-
-		val_simu_soc[val_profile_id, :] = best_guess_val_y_hat
-		val_pred_para[val_profile_id, :] = best_guess_val_pred_para
-
-		# save data
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_best_simu_soc_' + job_id + '.csv', val_simu_soc.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_best_pred_para_' + job_id + '.csv', val_pred_para.detach().cpu().numpy(), delimiter = ',')
-
-		## bulk convergence ##
-		if args.model != 'nn_only': 
-			carbon_input_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			cpool_steady_state_val = np.ones((wosis_profile_info.shape[0], 140))*np.nan
-			cpools_layer_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			soc_layer_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			total_res_time_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			total_res_time_base_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			res_time_base_pools_val = np.ones((wosis_profile_info.shape[0], 140))*np.nan
-			t_scaler_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			bulk_A_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			w_scaler_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			bulk_K_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			bulk_V_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			bulk_xi_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			bulk_I_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			litter_fraction_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-
-			carbon_input_val_profile, cpool_steady_state_val_profile, cpools_layer_val_profile, \
-				soc_layer_val_profile, total_res_time_val_profile, total_res_time_base_val_profile, res_time_base_pools_val_profile, \
-					t_scaler_val_profile, bulk_A_val_profile, w_scaler_val_profile, bulk_K_val_profile, bulk_V_val_profile, bulk_xi_val_profile, \
-						bulk_I_val_profile, litter_fraction_val_profile = fun_bulk_simu(best_guess_val_pred_para.to(device), val_x.to(device), args.vertical_mixing, args.vectorized)
-			
-			# store the results
-			carbon_input_val[val_profile_id, :] = carbon_input_val_profile.detach().cpu().numpy()
-			cpool_steady_state_val[val_profile_id, :] = cpool_steady_state_val_profile.detach().cpu().numpy()
-			cpools_layer_val[val_profile_id, :] = cpools_layer_val_profile.detach().cpu().numpy()
-			soc_layer_val[val_profile_id, :] = soc_layer_val_profile.detach().cpu().numpy()
-			total_res_time_val[val_profile_id, :] = total_res_time_val_profile.detach().cpu().numpy()
-			total_res_time_base_val[val_profile_id, :] = total_res_time_base_val_profile.detach().cpu().numpy()
-			res_time_base_pools_val[val_profile_id, :] = res_time_base_pools_val_profile.detach().cpu().numpy()
-			t_scaler_val[val_profile_id, :] = t_scaler_val_profile.detach().cpu().numpy()
-			bulk_A_val[val_profile_id, :] = bulk_A_val_profile.detach().cpu().numpy()
-			w_scaler_val[val_profile_id, :] = w_scaler_val_profile.detach().cpu().numpy()
-			bulk_K_val[val_profile_id, :] = bulk_K_val_profile.detach().cpu().numpy()
-			bulk_V_val[val_profile_id, :] = bulk_V_val_profile.detach().cpu().numpy()
-			bulk_xi_val[val_profile_id, :] = bulk_xi_val_profile.detach().cpu().numpy()
-			bulk_I_val[val_profile_id, :] = bulk_I_val_profile.detach().cpu().numpy()
-			litter_fraction_val[val_profile_id, :] = litter_fraction_val_profile.detach().cpu().numpy()
-
-			# save data
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_carbon_input_' + job_id + '.csv', carbon_input_val, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_val, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_val, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_soc_layer_' + job_id + '.csv', soc_layer_val, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_total_res_time_' + job_id + '.csv', total_res_time_val, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_val, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_val, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_t_scaler_' + job_id + '.csv', t_scaler_val, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_A_' + job_id + '.csv', bulk_A_val, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_w_scaler_' + job_id + '.csv', w_scaler_val, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_K_' + job_id + '.csv', bulk_K_val, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_V_' + job_id + '.csv', bulk_V_val, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_val, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_I_' + job_id + '.csv', bulk_I_val, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_val, delimiter = ',')
-
-		##############
-		# Train Data #
-		##############
-
-		## predictions and parameters for the training profiles ##
-
-		# initializz a seperate array to store the prediction results for the training profiles
-		train_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, device=device, dtype = torch.float32)  # dtype = torch.float32, 
-		train_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, device=device, dtype = torch.float32)  # dtype = torch.float32, 
-
-		train_simu_soc[train_profile_id, :] = best_guess_train_y_hat
-		train_pred_para[train_profile_id, :] = best_guess_train_pred_para
-
-		# save data
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_best_simu_soc_' + job_id + '.csv', train_simu_soc.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_best_pred_para_' + job_id + '.csv', train_pred_para.detach().cpu().numpy(), delimiter = ',')
-
-		## bulk convergence ##
-		if args.model != 'nn_only': 
-			carbon_input_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			cpool_steady_state_train = np.ones((wosis_profile_info.shape[0], 140))*np.nan
-			cpools_layer_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			soc_layer_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			total_res_time_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			total_res_time_base_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			res_time_base_pools_train = np.ones((wosis_profile_info.shape[0], 140))*np.nan
-			t_scaler_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			bulk_A_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			w_scaler_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
-			bulk_K_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			bulk_V_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			bulk_xi_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			bulk_I_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-			litter_fraction_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
-
-			carbon_input_train_profile, cpool_steady_state_train_profile, cpools_layer_train_profile, \
-				soc_layer_train_profile, total_res_time_train_profile, total_res_time_base_train_profile, res_time_base_pools_train_profile, \
-					t_scaler_train_profile, bulk_A_train_profile, w_scaler_train_profile, bulk_K_train_profile, bulk_V_train_profile, bulk_xi_train_profile, \
-						bulk_I_train_profile, litter_fraction_train_profile = fun_bulk_simu(best_guess_train_pred_para.to(device), train_x.to(device), args.vertical_mixing, args.vectorized)
-			
-			# store the results
-			carbon_input_train[train_profile_id, :] = carbon_input_train_profile.detach().cpu().numpy()
-			cpool_steady_state_train[train_profile_id, :] = cpool_steady_state_train_profile.detach().cpu().numpy()
-			cpools_layer_train[train_profile_id, :] = cpools_layer_train_profile.detach().cpu().numpy()
-			soc_layer_train[train_profile_id, :] = soc_layer_train_profile.detach().cpu().numpy()
-			total_res_time_train[train_profile_id, :] = total_res_time_train_profile.detach().cpu().numpy()
-			total_res_time_base_train[train_profile_id, :] = total_res_time_base_train_profile.detach().cpu().numpy()
-			res_time_base_pools_train[train_profile_id, :] = res_time_base_pools_train_profile.detach().cpu().numpy()
-			t_scaler_train[train_profile_id, :] = t_scaler_train_profile.detach().cpu().numpy()
-			bulk_A_train[train_profile_id, :] = bulk_A_train_profile.detach().cpu().numpy()
-			w_scaler_train[train_profile_id, :] = w_scaler_train_profile.detach().cpu().numpy()
-			bulk_K_train[train_profile_id, :] = bulk_K_train_profile.detach().cpu().numpy()
-			bulk_V_train[train_profile_id, :] = bulk_V_train_profile.detach().cpu().numpy()
-			bulk_xi_train[train_profile_id, :] = bulk_xi_train_profile.detach().cpu().numpy()
-			bulk_I_train[train_profile_id, :] = bulk_I_train_profile.detach().cpu().numpy()
-			litter_fraction_train[train_profile_id, :] = litter_fraction_train_profile.detach().cpu().numpy()
-
-			# save data
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_carbon_input_' + job_id + '.csv', carbon_input_train, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_train, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_train, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_soc_layer_' + job_id + '.csv', soc_layer_train, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_total_res_time_' + job_id + '.csv', total_res_time_train, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_train, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_train, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_t_scaler_' + job_id + '.csv', t_scaler_train, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_A_' + job_id + '.csv', bulk_A_train, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_w_scaler_' + job_id + '.csv', w_scaler_train, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_K_' + job_id + '.csv', bulk_K_train, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_V_' + job_id + '.csv', bulk_V_train, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_train, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_I_' + job_id + '.csv', bulk_I_train, delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_train, delimiter = ',')
-
-
-		#############
-		# Test Maps #
-		#############
-
-		# get the latitudes and longitudes of the test profiles by matching ProfileID in env_info with the test_profile_id
-		test_lons = np.ones((wosis_profile_info.shape[0]))*np.nan
-		test_lats = np.ones((wosis_profile_info.shape[0]))*np.nan
-		test_profile_id_all = np.ones((wosis_profile_info.shape[0]))*np.nan
-		test_profile_id_all[test_profile_id] = test_profile_id
-		test_profile_id_num = test_profile_id.numpy().astype(int)
-		# check shape
-		print("test_profile_id_num.shape: ", test_profile_id_num.shape)
-		# print the range of test_profile_id_num
-		print("test_profile_id_num.min(): ", test_profile_id_num.min())
-		print("test_profile_id_num.max(): ", test_profile_id_num.max())
-		print("env_info.shape: ", env_info.shape)
-		test_lons[test_profile_id_num] = np.array(env_info.loc[test_profile_id_num, "original_lon"])
-		test_lats[test_profile_id_num] = np.array(env_info.loc[test_profile_id_num, "original_lat"])
-		print("Finished getting lat/lon data")
-		# print the range of test_lons and test_lats
-		print("test_lons.min(): ", test_lons.min())
-		print("test_lons.max(): ", test_lons.max())
-		print("test_lats.min(): ", test_lats.min())
-		print("test_lats.max(): ", test_lats.max())
-
-		# get the upper and lower depth of the test profiles
-		test_upper_depth = np.ones((wosis_profile_info.shape[0], 200))*np.nan
-		test_lower_depth = np.ones((wosis_profile_info.shape[0], 200))*np.nan
-		# check shape
-		print("test_upper_depth.shape: ", test_upper_depth.shape)
-		print("obs_upper_depth_matrix.shape: ", upper_depth_all.shape)
-		test_upper_depth[test_profile_id_num, :] = np.array(upper_depth_all[test_profile_id_num])
-		test_lower_depth[test_profile_id_num, :] = np.array(lower_depth_all[test_profile_id_num])
-		print("Finished getting depth data")
-
-		# save location data for test profiles
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_profile_id_' + job_id + '.csv', test_profile_id_all, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_lons_' + job_id + '.csv', test_lons, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_lats_' + job_id + '.csv', test_lats, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_upper_depth_' + job_id + '.csv', test_upper_depth, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_lower_depth_' + job_id + '.csv', test_lower_depth, delimiter = ',')
-
-		# initialize the scaled difference
-		scaled_diff = np.ones((wosis_profile_info.shape[0]))*np.nan
-
-		# for each location, calculate the difference between the predicted and observed SOC values
-		for i in range(binn_obs_soc.shape[0]):
-			if np.isnan(binn_obs_soc[i, :]).all() or torch.isnan(best_simu_soc[i, :]).all():
-				continue
-			else: 
-				# Get the predicted and observed SOC values for this profile
-				obs_soc = binn_obs_soc[i, :]
-				simu_soc = best_simu_soc[i, :]
-				lower_depth = test_lower_depth[i]
-				upper_depth = test_upper_depth[i]
-				temp_simu_sum = 0
-				temp_obs_sum = 0
-				for j in range(len(simu_soc)):
-					if np.isnan(obs_soc[j]) or torch.isnan(simu_soc[j]):
-						continue
-					else:
-						if j >= 25:
-							# print('outlier: ', test_profile_id_all[i], j, obs_soc[j], simu_soc[j])
-							continue
-						# Calculate the scaled difference
-						temp_simu_sum += simu_soc[j] * (upper_depth[j] - lower_depth[j])
-						temp_obs_sum += obs_soc[j] * (upper_depth[j] - lower_depth[j])
-				scaled_diff[i] = temp_obs_sum/temp_simu_sum
-				# # print outlier
-				if scaled_diff[i] > 2:
-					print('outlier: ', test_profile_id_all[i], scaled_diff[i])
-
-		# Plot the scaled difference
-		visualization_utils.plot_observations_world_map(test_lons, test_lats, scaled_diff, PLOT_DIR, "test_scaled_diff_" + job_id, us_only=True)
-
-
-		############
-		# Val Maps #
-		############
+		# best_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, device=device, dtype = torch.float32)  # dtype = torch.float32, 
+		# best_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, device=device, dtype = torch.float32)  # dtype = torch.float32, 
+		# upper_depth_all = np.ones((wosis_profile_info.shape[0], 200))*np.nan
+		# lower_depth_all = np.ones((wosis_profile_info.shape[0], 200))*np.nan
 
 		
-		# get the latitudes and longitudes of the validation profiles by matching ProfileID in env_info with the val_profile_id
-		val_lons = np.ones((wosis_profile_info.shape[0]))*np.nan
-		val_lats = np.ones((wosis_profile_info.shape[0]))*np.nan
-		val_profile_id_all = np.ones((wosis_profile_info.shape[0]))*np.nan
-		val_profile_id_all[val_profile_id] = val_profile_id
-		val_profile_id_num = val_profile_id.numpy().astype(int)
-		val_lons[val_profile_id_num] = np.array(env_info.loc[val_profile_id_num, "original_lon"])
-		val_lats[val_profile_id_num] = np.array(env_info.loc[val_profile_id_num, "original_lat"])
-		# print the range of val_lons and val_lats
-		print("val_lons.min(): ", val_lons.min())
-		print("val_lons.max(): ", val_lons.max())
-		print("val_lats.min(): ", val_lats.min())
-		print("val_lats.max(): ", val_lats.max())
+		# upper_depth_all[current_data_profile_id, :] = obs_upper_depth_matrix
+		# lower_depth_all[current_data_profile_id, :] = obs_lower_depth_matrix
 
-		# get the upper and lower depth of the validation profiles
-		val_upper_depth = np.ones((wosis_profile_info.shape[0], 200))*np.nan
-		val_lower_depth = np.ones((wosis_profile_info.shape[0], 200))*np.nan
-		val_upper_depth[val_profile_id_num, :] = np.array(upper_depth_all[val_profile_id_num])
-		val_lower_depth[val_profile_id_num, :] = np.array(lower_depth_all[val_profile_id_num])
-
-		# save location data for validation profiles
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_profile_id_' + job_id + '.csv', val_profile_id_all, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_lons_' + job_id + '.csv', val_lons, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_lats_' + job_id + '.csv', val_lats, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_upper_depth_' + job_id + '.csv', val_upper_depth, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_lower_depth_' + job_id + '.csv', val_lower_depth, delimiter = ',')
-
-		# Plot maps to show the scaled difference between the predicted and observed SOC values for validation profiles
-		# convert nan to 0
-		# binn_obs_soc[np.isnan(binn_obs_soc)] = 0
-		# best_simu_soc[torch.isnan(best_simu_soc)] = 0
-		# initialize the scaled difference
-		scaled_diff = np.ones((wosis_profile_info.shape[0]))*np.nan
-
-		# for each location, calculate the difference between the predicted and observed SOC values
-		for i in range(val_simu_soc.shape[0]):
-			if np.isnan(binn_obs_soc[i, :]).all() or torch.isnan(val_simu_soc[i, :]).all():
-				continue
-			else: 
-				# Get the predicted and observed SOC values for this profile
-				obs_soc = binn_obs_soc[i, :]
-				# print(obs_soc)
-				# print(obs_soc.dtype)
-				simu_soc = val_simu_soc[i, :]
-				lower_depth = val_lower_depth[i]
-				upper_depth = val_upper_depth[i]
-				temp_simu = 0
-				temp_obs_sum = 0
-				for j in range(len(simu_soc)):
-					if np.isnan(obs_soc[j]) or torch.isnan(simu_soc[j]):
-						continue
-					else:
-						if j >= 25:
-							# print('outlier: ', val_profile_id_all[i], j, obs_soc[j], simu_soc[j])
-							continue
-						# Calculate the scaled difference
-						temp_simu += simu_soc[j] * (upper_depth[j] - lower_depth[j])
-						temp_obs_sum += obs_soc[j] * (upper_depth[j] - lower_depth[j])
-				scaled_diff[i] = temp_obs_sum/temp_simu
-				# print outlier
-				if scaled_diff[i] > 2:
-					print('outlier: ', val_profile_id_all[i], scaled_diff[i])
+		# best_simu_soc[test_profile_id, :] = best_guess_test_y_hat
+		# best_pred_para[test_profile_id, :] = best_guess_test_pred_para
 
 
-		# Plot the scaled difference
-		visualization_utils.plot_observations_world_map(val_lons, val_lats, scaled_diff, PLOT_DIR, "validation_scaled_diff_" + job_id, us_only=True)
+		# # save data
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_best_simu_soc_' + job_id + '.csv', best_simu_soc.detach().cpu().numpy(), delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_best_pred_para_' + job_id + '.csv', best_pred_para.detach().cpu().numpy(), delimiter = ',')
+
+		# ## bulk convergence ##
+		# # initializz a seperate array to store the prediction results for the test profiles
+		# # with return of the function: carbon_input, cpool_steady_state, cpools_layer, soc_layer, total_res_time, total_res_time_base, res_time_base_pools, t_scaler, bulk_A, w_scaler, bulk_K, bulk_V, bulk_xi, bulk_I, litter_fraction
+		# if args.model != 'nn_only': 
+		# 	carbon_input_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	cpool_steady_state_test = np.ones((wosis_profile_info.shape[0], 140))*np.nan
+		# 	cpools_layer_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	soc_layer_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	total_res_time_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	total_res_time_base_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	res_time_base_pools_test = np.ones((wosis_profile_info.shape[0], 140))*np.nan
+		# 	t_scaler_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	bulk_A_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	w_scaler_test = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	bulk_K_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	bulk_V_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	bulk_xi_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	bulk_I_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	litter_fraction_test = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+
+		# 	carbon_input_test_profile, cpool_steady_state_test_profile, cpools_layer_test_profile, \
+		# 		soc_layer_test_profile, total_res_time_test_profile, total_res_time_base_test_profile, res_time_base_pools_test_profile, \
+		# 			t_scaler_test_profile, bulk_A_test_profile, w_scaler_test_profile, bulk_K_test_profile, bulk_V_test_profile, bulk_xi_test_profile, \
+		# 				bulk_I_test_profile, litter_fraction_test_profile = fun_bulk_simu(best_guess_test_pred_para.to(device), test_x.to(device), args.vertical_mixing, args.vectorized)
+			
+		# 	# store the results
+		# 	carbon_input_test[test_profile_id, :] = carbon_input_test_profile.detach().cpu().numpy()
+		# 	cpool_steady_state_test[test_profile_id, :] = cpool_steady_state_test_profile.detach().cpu().numpy()
+		# 	cpools_layer_test[test_profile_id, :] = cpools_layer_test_profile.detach().cpu().numpy()
+		# 	soc_layer_test[test_profile_id, :] = soc_layer_test_profile.detach().cpu().numpy()
+		# 	total_res_time_test[test_profile_id, :] = total_res_time_test_profile.detach().cpu().numpy()
+		# 	total_res_time_base_test[test_profile_id, :] = total_res_time_base_test_profile.detach().cpu().numpy()
+		# 	res_time_base_pools_test[test_profile_id, :] = res_time_base_pools_test_profile.detach().cpu().numpy()
+		# 	t_scaler_test[test_profile_id, :] = t_scaler_test_profile.detach().cpu().numpy()
+		# 	bulk_A_test[test_profile_id, :] = bulk_A_test_profile.detach().cpu().numpy()
+		# 	w_scaler_test[test_profile_id, :] = w_scaler_test_profile.detach().cpu().numpy()
+		# 	bulk_K_test[test_profile_id, :] = bulk_K_test_profile.detach().cpu().numpy()
+		# 	bulk_V_test[test_profile_id, :] = bulk_V_test_profile.detach().cpu().numpy()
+		# 	bulk_xi_test[test_profile_id, :] = bulk_xi_test_profile.detach().cpu().numpy()
+		# 	bulk_I_test[test_profile_id, :] = bulk_I_test_profile.detach().cpu().numpy()
+		# 	litter_fraction_test[test_profile_id, :] = litter_fraction_test_profile.detach().cpu().numpy()
+
+		# 	# save data
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_carbon_input_' + job_id + '.csv', carbon_input_test, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_test, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_test, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_soc_layer_' + job_id + '.csv', soc_layer_test, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_total_res_time_' + job_id + '.csv', total_res_time_test, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_test, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_test, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_t_scaler_' + job_id + '.csv', t_scaler_test, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_A_' + job_id + '.csv', bulk_A_test, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_w_scaler_' + job_id + '.csv', w_scaler_test, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_K_' + job_id + '.csv', bulk_K_test, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_V_' + job_id + '.csv', bulk_V_test, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_test, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_bulk_I_' + job_id + '.csv', bulk_I_test, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_test, delimiter = ',')
 
 
-		##############
-		# Train Maps #
-		##############
 
-		# get the latitudes and longitudes of the training profiles by matching ProfileID in env_info with the train_profile_id
-		train_lons = np.ones((wosis_profile_info.shape[0]))*np.nan
-		train_lats = np.ones((wosis_profile_info.shape[0]))*np.nan
-		train_profile_id_all = np.ones((wosis_profile_info.shape[0]))*np.nan
-		train_profile_id_all[train_profile_id] = train_profile_id
-		train_profile_id_num = train_profile_id.numpy().astype(int)
-		train_lons[train_profile_id_num] = np.array(env_info.loc[train_profile_id_num, "original_lon"])
-		train_lats[train_profile_id_num] = np.array(env_info.loc[train_profile_id_num, "original_lat"])
-		# print the range of lon and lat in the env_info
-		print("env_info.lon.min(): ", env_info.loc[train_profile_id_num, "original_lon"].max())
-		print("env_info.lon.max(): ", env_info.loc[train_profile_id_num, "original_lon"].min())
-		print("env_info.lat.min(): ", env_info.loc[train_profile_id_num, "original_lat"].max())
-		print("env_info.lat.max(): ", env_info.loc[train_profile_id_num, "original_lat"].min())
+		# ############
+		# # Val Data #
+		# ############
+
+		# ## predictions and parameters for the validation profiles ##
+
+		# # initializz a seperate array to store the prediction results for the validation profiles
+		# val_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, device=device, dtype = torch.float32)  # dtype = torch.float32,
+		# val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, device=device, dtype = torch.float32)  # dtype = torch.float32,
+
+		# val_simu_soc[val_profile_id, :] = best_guess_val_y_hat
+		# val_pred_para[val_profile_id, :] = best_guess_val_pred_para
+
+		# # save data
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_best_simu_soc_' + job_id + '.csv', val_simu_soc.detach().cpu().numpy(), delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_best_pred_para_' + job_id + '.csv', val_pred_para.detach().cpu().numpy(), delimiter = ',')
+
+		# ## bulk convergence ##
+		# if args.model != 'nn_only': 
+		# 	carbon_input_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	cpool_steady_state_val = np.ones((wosis_profile_info.shape[0], 140))*np.nan
+		# 	cpools_layer_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	soc_layer_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	total_res_time_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	total_res_time_base_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	res_time_base_pools_val = np.ones((wosis_profile_info.shape[0], 140))*np.nan
+		# 	t_scaler_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	bulk_A_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	w_scaler_val = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	bulk_K_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	bulk_V_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	bulk_xi_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	bulk_I_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	litter_fraction_val = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+
+		# 	carbon_input_val_profile, cpool_steady_state_val_profile, cpools_layer_val_profile, \
+		# 		soc_layer_val_profile, total_res_time_val_profile, total_res_time_base_val_profile, res_time_base_pools_val_profile, \
+		# 			t_scaler_val_profile, bulk_A_val_profile, w_scaler_val_profile, bulk_K_val_profile, bulk_V_val_profile, bulk_xi_val_profile, \
+		# 				bulk_I_val_profile, litter_fraction_val_profile = fun_bulk_simu(best_guess_val_pred_para.to(device), val_x.to(device), args.vertical_mixing, args.vectorized)
+			
+		# 	# store the results
+		# 	carbon_input_val[val_profile_id, :] = carbon_input_val_profile.detach().cpu().numpy()
+		# 	cpool_steady_state_val[val_profile_id, :] = cpool_steady_state_val_profile.detach().cpu().numpy()
+		# 	cpools_layer_val[val_profile_id, :] = cpools_layer_val_profile.detach().cpu().numpy()
+		# 	soc_layer_val[val_profile_id, :] = soc_layer_val_profile.detach().cpu().numpy()
+		# 	total_res_time_val[val_profile_id, :] = total_res_time_val_profile.detach().cpu().numpy()
+		# 	total_res_time_base_val[val_profile_id, :] = total_res_time_base_val_profile.detach().cpu().numpy()
+		# 	res_time_base_pools_val[val_profile_id, :] = res_time_base_pools_val_profile.detach().cpu().numpy()
+		# 	t_scaler_val[val_profile_id, :] = t_scaler_val_profile.detach().cpu().numpy()
+		# 	bulk_A_val[val_profile_id, :] = bulk_A_val_profile.detach().cpu().numpy()
+		# 	w_scaler_val[val_profile_id, :] = w_scaler_val_profile.detach().cpu().numpy()
+		# 	bulk_K_val[val_profile_id, :] = bulk_K_val_profile.detach().cpu().numpy()
+		# 	bulk_V_val[val_profile_id, :] = bulk_V_val_profile.detach().cpu().numpy()
+		# 	bulk_xi_val[val_profile_id, :] = bulk_xi_val_profile.detach().cpu().numpy()
+		# 	bulk_I_val[val_profile_id, :] = bulk_I_val_profile.detach().cpu().numpy()
+		# 	litter_fraction_val[val_profile_id, :] = litter_fraction_val_profile.detach().cpu().numpy()
+
+		# 	# save data
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_carbon_input_' + job_id + '.csv', carbon_input_val, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_val, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_val, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_soc_layer_' + job_id + '.csv', soc_layer_val, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_total_res_time_' + job_id + '.csv', total_res_time_val, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_val, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_val, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_t_scaler_' + job_id + '.csv', t_scaler_val, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_A_' + job_id + '.csv', bulk_A_val, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_w_scaler_' + job_id + '.csv', w_scaler_val, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_K_' + job_id + '.csv', bulk_K_val, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_V_' + job_id + '.csv', bulk_V_val, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_val, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_bulk_I_' + job_id + '.csv', bulk_I_val, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_val, delimiter = ',')
+
+		# ##############
+		# # Train Data #
+		# ##############
+
+		# ## predictions and parameters for the training profiles ##
+
+		# # initializz a seperate array to store the prediction results for the training profiles
+		# train_simu_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, device=device, dtype = torch.float32)  # dtype = torch.float32, 
+		# train_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, device=device, dtype = torch.float32)  # dtype = torch.float32, 
+
+		# train_simu_soc[train_profile_id, :] = best_guess_train_y_hat
+		# train_pred_para[train_profile_id, :] = best_guess_train_pred_para
+
+		# # save data
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_best_simu_soc_' + job_id + '.csv', train_simu_soc.detach().cpu().numpy(), delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_best_pred_para_' + job_id + '.csv', train_pred_para.detach().cpu().numpy(), delimiter = ',')
+
+		# ## bulk convergence ##
+		# if args.model != 'nn_only': 
+		# 	carbon_input_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	cpool_steady_state_train = np.ones((wosis_profile_info.shape[0], 140))*np.nan
+		# 	cpools_layer_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	soc_layer_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	total_res_time_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	total_res_time_base_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	res_time_base_pools_train = np.ones((wosis_profile_info.shape[0], 140))*np.nan
+		# 	t_scaler_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	bulk_A_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	w_scaler_train = np.ones((wosis_profile_info.shape[0], 20))*np.nan
+		# 	bulk_K_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	bulk_V_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	bulk_xi_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	bulk_I_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+		# 	litter_fraction_train = np.ones((wosis_profile_info.shape[0], 1))*np.nan
+
+		# 	carbon_input_train_profile, cpool_steady_state_train_profile, cpools_layer_train_profile, \
+		# 		soc_layer_train_profile, total_res_time_train_profile, total_res_time_base_train_profile, res_time_base_pools_train_profile, \
+		# 			t_scaler_train_profile, bulk_A_train_profile, w_scaler_train_profile, bulk_K_train_profile, bulk_V_train_profile, bulk_xi_train_profile, \
+		# 				bulk_I_train_profile, litter_fraction_train_profile = fun_bulk_simu(best_guess_train_pred_para.to(device), train_x.to(device), args.vertical_mixing, args.vectorized)
+			
+		# 	# store the results
+		# 	carbon_input_train[train_profile_id, :] = carbon_input_train_profile.detach().cpu().numpy()
+		# 	cpool_steady_state_train[train_profile_id, :] = cpool_steady_state_train_profile.detach().cpu().numpy()
+		# 	cpools_layer_train[train_profile_id, :] = cpools_layer_train_profile.detach().cpu().numpy()
+		# 	soc_layer_train[train_profile_id, :] = soc_layer_train_profile.detach().cpu().numpy()
+		# 	total_res_time_train[train_profile_id, :] = total_res_time_train_profile.detach().cpu().numpy()
+		# 	total_res_time_base_train[train_profile_id, :] = total_res_time_base_train_profile.detach().cpu().numpy()
+		# 	res_time_base_pools_train[train_profile_id, :] = res_time_base_pools_train_profile.detach().cpu().numpy()
+		# 	t_scaler_train[train_profile_id, :] = t_scaler_train_profile.detach().cpu().numpy()
+		# 	bulk_A_train[train_profile_id, :] = bulk_A_train_profile.detach().cpu().numpy()
+		# 	w_scaler_train[train_profile_id, :] = w_scaler_train_profile.detach().cpu().numpy()
+		# 	bulk_K_train[train_profile_id, :] = bulk_K_train_profile.detach().cpu().numpy()
+		# 	bulk_V_train[train_profile_id, :] = bulk_V_train_profile.detach().cpu().numpy()
+		# 	bulk_xi_train[train_profile_id, :] = bulk_xi_train_profile.detach().cpu().numpy()
+		# 	bulk_I_train[train_profile_id, :] = bulk_I_train_profile.detach().cpu().numpy()
+		# 	litter_fraction_train[train_profile_id, :] = litter_fraction_train_profile.detach().cpu().numpy()
+
+		# 	# save data
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_carbon_input_' + job_id + '.csv', carbon_input_train, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_train, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_train, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_soc_layer_' + job_id + '.csv', soc_layer_train, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_total_res_time_' + job_id + '.csv', total_res_time_train, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_train, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_train, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_t_scaler_' + job_id + '.csv', t_scaler_train, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_A_' + job_id + '.csv', bulk_A_train, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_w_scaler_' + job_id + '.csv', w_scaler_train, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_K_' + job_id + '.csv', bulk_K_train, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_V_' + job_id + '.csv', bulk_V_train, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_train, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_bulk_I_' + job_id + '.csv', bulk_I_train, delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_train, delimiter = ',')
+
+
+		# #############
+		# # Test Maps #
+		# #############
+
+		# # get the latitudes and longitudes of the test profiles by matching ProfileID in env_info with the test_profile_id
+		# test_lons = np.ones((wosis_profile_info.shape[0]))*np.nan
+		# test_lats = np.ones((wosis_profile_info.shape[0]))*np.nan
+		# test_profile_id_all = np.ones((wosis_profile_info.shape[0]))*np.nan
+		# test_profile_id_all[test_profile_id] = test_profile_id
+		# test_profile_id_num = test_profile_id.numpy().astype(int)
+		# # check shape
+		# print("test_profile_id_num.shape: ", test_profile_id_num.shape)
+		# # print the range of test_profile_id_num
+		# print("test_profile_id_num.min(): ", test_profile_id_num.min())
+		# print("test_profile_id_num.max(): ", test_profile_id_num.max())
+		# print("env_info.shape: ", env_info.shape)
+		# test_lons[test_profile_id_num] = np.array(env_info.loc[test_profile_id_num, "original_lon"])
+		# test_lats[test_profile_id_num] = np.array(env_info.loc[test_profile_id_num, "original_lat"])
+		# print("Finished getting lat/lon data")
+		# # print the range of test_lons and test_lats
+		# print("test_lons.min(): ", test_lons.min())
+		# print("test_lons.max(): ", test_lons.max())
+		# print("test_lats.min(): ", test_lats.min())
+		# print("test_lats.max(): ", test_lats.max())
+
+		# # get the upper and lower depth of the test profiles
+		# test_upper_depth = np.ones((wosis_profile_info.shape[0], 200))*np.nan
+		# test_lower_depth = np.ones((wosis_profile_info.shape[0], 200))*np.nan
+		# # check shape
+		# print("test_upper_depth.shape: ", test_upper_depth.shape)
+		# print("obs_upper_depth_matrix.shape: ", upper_depth_all.shape)
+		# test_upper_depth[test_profile_id_num, :] = np.array(upper_depth_all[test_profile_id_num])
+		# test_lower_depth[test_profile_id_num, :] = np.array(lower_depth_all[test_profile_id_num])
+		# print("Finished getting depth data")
+
+		# # save location data for test profiles
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_profile_id_' + job_id + '.csv', test_profile_id_all, delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_lons_' + job_id + '.csv', test_lons, delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_lats_' + job_id + '.csv', test_lats, delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_upper_depth_' + job_id + '.csv', test_upper_depth, delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Test/nn_test_lower_depth_' + job_id + '.csv', test_lower_depth, delimiter = ',')
+
+		# # initialize the scaled difference
+		# scaled_diff = np.ones((wosis_profile_info.shape[0]))*np.nan
+
+		# # for each location, calculate the difference between the predicted and observed SOC values
+		# for i in range(binn_obs_soc.shape[0]):
+		# 	if np.isnan(binn_obs_soc[i, :]).all() or torch.isnan(best_simu_soc[i, :]).all():
+		# 		continue
+		# 	else: 
+		# 		# Get the predicted and observed SOC values for this profile
+		# 		obs_soc = binn_obs_soc[i, :]
+		# 		simu_soc = best_simu_soc[i, :]
+		# 		lower_depth = test_lower_depth[i]
+		# 		upper_depth = test_upper_depth[i]
+		# 		temp_simu_sum = 0
+		# 		temp_obs_sum = 0
+		# 		for j in range(len(simu_soc)):
+		# 			if np.isnan(obs_soc[j]) or torch.isnan(simu_soc[j]):
+		# 				continue
+		# 			else:
+		# 				if j >= 25:
+		# 					# print('outlier: ', test_profile_id_all[i], j, obs_soc[j], simu_soc[j])
+		# 					continue
+		# 				# Calculate the scaled difference
+		# 				temp_simu_sum += simu_soc[j] * (upper_depth[j] - lower_depth[j])
+		# 				temp_obs_sum += obs_soc[j] * (upper_depth[j] - lower_depth[j])
+		# 		scaled_diff[i] = temp_obs_sum/temp_simu_sum
+		# 		# # print outlier
+		# 		if scaled_diff[i] > 2:
+		# 			print('outlier: ', test_profile_id_all[i], scaled_diff[i])
+
+		# # Plot the scaled difference
+		# visualization_utils.plot_observations_world_map(test_lons, test_lats, scaled_diff, PLOT_DIR, "test_scaled_diff_" + job_id, us_only=True)
+
+
+		# ############
+		# # Val Maps #
+		# ############
+
+		
+		# # get the latitudes and longitudes of the validation profiles by matching ProfileID in env_info with the val_profile_id
+		# val_lons = np.ones((wosis_profile_info.shape[0]))*np.nan
+		# val_lats = np.ones((wosis_profile_info.shape[0]))*np.nan
+		# val_profile_id_all = np.ones((wosis_profile_info.shape[0]))*np.nan
+		# val_profile_id_all[val_profile_id] = val_profile_id
+		# val_profile_id_num = val_profile_id.numpy().astype(int)
+		# val_lons[val_profile_id_num] = np.array(env_info.loc[val_profile_id_num, "original_lon"])
+		# val_lats[val_profile_id_num] = np.array(env_info.loc[val_profile_id_num, "original_lat"])
+		# # print the range of val_lons and val_lats
+		# print("val_lons.min(): ", val_lons.min())
+		# print("val_lons.max(): ", val_lons.max())
+		# print("val_lats.min(): ", val_lats.min())
+		# print("val_lats.max(): ", val_lats.max())
+
+		# # get the upper and lower depth of the validation profiles
+		# val_upper_depth = np.ones((wosis_profile_info.shape[0], 200))*np.nan
+		# val_lower_depth = np.ones((wosis_profile_info.shape[0], 200))*np.nan
+		# val_upper_depth[val_profile_id_num, :] = np.array(upper_depth_all[val_profile_id_num])
+		# val_lower_depth[val_profile_id_num, :] = np.array(lower_depth_all[val_profile_id_num])
+
+		# # save location data for validation profiles
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_profile_id_' + job_id + '.csv', val_profile_id_all, delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_lons_' + job_id + '.csv', val_lons, delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_lats_' + job_id + '.csv', val_lats, delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_upper_depth_' + job_id + '.csv', val_upper_depth, delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Validation/nn_val_lower_depth_' + job_id + '.csv', val_lower_depth, delimiter = ',')
+
+		# # Plot maps to show the scaled difference between the predicted and observed SOC values for validation profiles
+		# # convert nan to 0
+		# # binn_obs_soc[np.isnan(binn_obs_soc)] = 0
+		# # best_simu_soc[torch.isnan(best_simu_soc)] = 0
+		# # initialize the scaled difference
+		# scaled_diff = np.ones((wosis_profile_info.shape[0]))*np.nan
+
+		# # for each location, calculate the difference between the predicted and observed SOC values
+		# for i in range(val_simu_soc.shape[0]):
+		# 	if np.isnan(binn_obs_soc[i, :]).all() or torch.isnan(val_simu_soc[i, :]).all():
+		# 		continue
+		# 	else: 
+		# 		# Get the predicted and observed SOC values for this profile
+		# 		obs_soc = binn_obs_soc[i, :]
+		# 		# print(obs_soc)
+		# 		# print(obs_soc.dtype)
+		# 		simu_soc = val_simu_soc[i, :]
+		# 		lower_depth = val_lower_depth[i]
+		# 		upper_depth = val_upper_depth[i]
+		# 		temp_simu = 0
+		# 		temp_obs_sum = 0
+		# 		for j in range(len(simu_soc)):
+		# 			if np.isnan(obs_soc[j]) or torch.isnan(simu_soc[j]):
+		# 				continue
+		# 			else:
+		# 				if j >= 25:
+		# 					# print('outlier: ', val_profile_id_all[i], j, obs_soc[j], simu_soc[j])
+		# 					continue
+		# 				# Calculate the scaled difference
+		# 				temp_simu += simu_soc[j] * (upper_depth[j] - lower_depth[j])
+		# 				temp_obs_sum += obs_soc[j] * (upper_depth[j] - lower_depth[j])
+		# 		scaled_diff[i] = temp_obs_sum/temp_simu
+		# 		# print outlier
+		# 		if scaled_diff[i] > 2:
+		# 			print('outlier: ', val_profile_id_all[i], scaled_diff[i])
+
+
+		# # Plot the scaled difference
+		# visualization_utils.plot_observations_world_map(val_lons, val_lats, scaled_diff, PLOT_DIR, "validation_scaled_diff_" + job_id, us_only=True)
+
+
+		# ##############
+		# # Train Maps #
+		# ##############
+
+		# # get the latitudes and longitudes of the training profiles by matching ProfileID in env_info with the train_profile_id
+		# train_lons = np.ones((wosis_profile_info.shape[0]))*np.nan
+		# train_lats = np.ones((wosis_profile_info.shape[0]))*np.nan
+		# train_profile_id_all = np.ones((wosis_profile_info.shape[0]))*np.nan
+		# train_profile_id_all[train_profile_id] = train_profile_id
+		# train_profile_id_num = train_profile_id.numpy().astype(int)
+		# train_lons[train_profile_id_num] = np.array(env_info.loc[train_profile_id_num, "original_lon"])
+		# train_lats[train_profile_id_num] = np.array(env_info.loc[train_profile_id_num, "original_lat"])
+		# # print the range of lon and lat in the env_info
+		# print("env_info.lon.min(): ", env_info.loc[train_profile_id_num, "original_lon"].max())
+		# print("env_info.lon.max(): ", env_info.loc[train_profile_id_num, "original_lon"].min())
+		# print("env_info.lat.min(): ", env_info.loc[train_profile_id_num, "original_lat"].max())
+		# print("env_info.lat.max(): ", env_info.loc[train_profile_id_num, "original_lat"].min())
 		
 
-		# get the upper and lower depth of the training profiles
-		train_upper_depth = np.ones((wosis_profile_info.shape[0], 200))*np.nan
-		train_lower_depth = np.ones((wosis_profile_info.shape[0], 200))*np.nan
-		train_upper_depth[train_profile_id_num, :] = np.array(upper_depth_all[train_profile_id_num])
-		train_lower_depth[train_profile_id_num, :] = np.array(lower_depth_all[train_profile_id_num])
+		# # get the upper and lower depth of the training profiles
+		# train_upper_depth = np.ones((wosis_profile_info.shape[0], 200))*np.nan
+		# train_lower_depth = np.ones((wosis_profile_info.shape[0], 200))*np.nan
+		# train_upper_depth[train_profile_id_num, :] = np.array(upper_depth_all[train_profile_id_num])
+		# train_lower_depth[train_profile_id_num, :] = np.array(lower_depth_all[train_profile_id_num])
 
-		# save location data for training profiles
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_profile_id_' + job_id + '.csv', train_profile_id_all, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_lons_' + job_id + '.csv', train_lons, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_lats_' + job_id + '.csv', train_lats, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_upper_depth_' + job_id + '.csv', train_upper_depth, delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_lower_depth_' + job_id + '.csv', train_lower_depth, delimiter = ',')
-
-
-		# Plot maps to show the scaled difference between the predicted and observed SOC values for training profiles
-		scaled_diff = np.ones((wosis_profile_info.shape[0]))*np.nan
-
-		# for each location, calculate the difference between the predicted and observed SOC values
-		for i in range(train_simu_soc.shape[0]):
-			if np.isnan(binn_obs_soc[i, :]).all() or torch.isnan(train_simu_soc[i, :]).all():
-				continue
-			else: 
-				# Get the predicted and observed SOC values for this profile
-				obs_soc = binn_obs_soc[i, :]
-				simu_soc = train_simu_soc[i, :]
-				lower_depth = train_lower_depth[i]
-				upper_depth = train_upper_depth[i]
-				temp_simu = 0
-				temp_obs_sum = 0
-				for j in range(len(simu_soc)):
-					if np.isnan(obs_soc[j]) or torch.isnan(simu_soc[j]):
-						continue
-					else:
-						if j >= 25:
-							# print('outlier: ', train_profile_id_all[i], j, obs_soc[j], simu_soc[j])
-							continue
-						# Calculate the scaled difference
-						temp_simu += simu_soc[j] * (upper_depth[j] - lower_depth[j])
-						temp_obs_sum += obs_soc[j] * (upper_depth[j] - lower_depth[j])
-				scaled_diff[i] = temp_obs_sum/temp_simu
-				# print outlier
-				if scaled_diff[i] > 2:
-					print('outlier: ', train_profile_id_all[i], scaled_diff[i])
-
-		# Plot the scaled difference
-		visualization_utils.plot_observations_world_map(train_lons, train_lats, scaled_diff, PLOT_DIR, "train_scaled_diff_" + job_id, us_only=True)
+		# # save location data for training profiles
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_profile_id_' + job_id + '.csv', train_profile_id_all, delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_lons_' + job_id + '.csv', train_lons, delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_lats_' + job_id + '.csv', train_lats, delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_upper_depth_' + job_id + '.csv', train_upper_depth, delimiter = ',')
+		# np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Train/nn_train_lower_depth_' + job_id + '.csv', train_lower_depth, delimiter = ',')
 
 
-		print("-----------------Model Test Finished at " + str(datetime.now()) + "-----------------")
+		# # Plot maps to show the scaled difference between the predicted and observed SOC values for training profiles
+		# scaled_diff = np.ones((wosis_profile_info.shape[0]))*np.nan
+
+		# # for each location, calculate the difference between the predicted and observed SOC values
+		# for i in range(train_simu_soc.shape[0]):
+		# 	if np.isnan(binn_obs_soc[i, :]).all() or torch.isnan(train_simu_soc[i, :]).all():
+		# 		continue
+		# 	else: 
+		# 		# Get the predicted and observed SOC values for this profile
+		# 		obs_soc = binn_obs_soc[i, :]
+		# 		simu_soc = train_simu_soc[i, :]
+		# 		lower_depth = train_lower_depth[i]
+		# 		upper_depth = train_upper_depth[i]
+		# 		temp_simu = 0
+		# 		temp_obs_sum = 0
+		# 		for j in range(len(simu_soc)):
+		# 			if np.isnan(obs_soc[j]) or torch.isnan(simu_soc[j]):
+		# 				continue
+		# 			else:
+		# 				if j >= 25:
+		# 					# print('outlier: ', train_profile_id_all[i], j, obs_soc[j], simu_soc[j])
+		# 					continue
+		# 				# Calculate the scaled difference
+		# 				temp_simu += simu_soc[j] * (upper_depth[j] - lower_depth[j])
+		# 				temp_obs_sum += obs_soc[j] * (upper_depth[j] - lower_depth[j])
+		# 		scaled_diff[i] = temp_obs_sum/temp_simu
+		# 		# print outlier
+		# 		if scaled_diff[i] > 2:
+		# 			print('outlier: ', train_profile_id_all[i], scaled_diff[i])
+
+		# # Plot the scaled difference
+		# visualization_utils.plot_observations_world_map(train_lons, train_lats, scaled_diff, PLOT_DIR, "train_scaled_diff_" + job_id, us_only=True)
+
+		# print("-----------------Model Test Finished at " + str(datetime.now()) + "-----------------")
 
 		# Predict the SOC values based on Grid environmental information using the best model
-		grid_simu_soc, grid_pred_para = best_guess_model(torch.tensor(predict_data_x, device=device, dtype=torch.float32),
-														torch.tensor(predict_data_z, device=device, dtype=torch.float32),
-														torch.tensor(predict_data_c, device=device, dtype=torch.float32), whether_predict = 1,
-														PRODA_para=torch.tensor(grid_PRODA_para, device=device, dtype=torch.float32))  # TODO Put in grid_proda_para?
+		grid_simu_soc, grid_pred_para = best_guess_model(predict_data_x.to(device), predict_data_z.to(device), predict_data_c.to(device),
+														 whether_predict = 1, PRODA_para=grid_PRODA_para.to(device))
 
 		# Save the predicted SOC values, parameters and location data into csv files
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_simu_soc_' + job_id + '.csv', grid_simu_soc.detach().cpu().numpy(), delimiter = ',')
@@ -3200,31 +3210,33 @@ def worker(rank, world_size, job_id):
 		# save grid_env_info_US['Original_Lat'] and grid_env_info_US['Original_Lon'] to csv files
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_lons_' + job_id + '.csv', grid_env_info_US['original_lon'], delimiter = ',')
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_lats_' + job_id + '.csv', grid_env_info_US['original_lat'], delimiter = ',')
+		print("----------------- Predictions for grid data " + str(datetime.now()) + "-----------------")
 
 
-		# Bulk simulation for the grid data
-		if args.model != 'nn_only':
-			carbon_input_pred, cpool_steady_state_pred, cpools_layer_pred, soc_layer_pred, total_res_time_pred, \
-				total_res_time_base_pred, res_time_base_pools_pred, t_scaler_pred, bulk_A_pred, \
-				w_scaler_pred, bulk_K_pred, bulk_V_pred, bulk_xi_pred, bulk_I_pred, litter_fraction_pred = fun_bulk_simu(grid_pred_para.to(device), \
-																												torch.tensor(predict_data_x, device=device, dtype=torch.float32), args.vertical_mixing, args.vectorized) 
+		# # Bulk simulation for the grid data
+		# if args.model != 'nn_only':
+		# 	carbon_input_pred, cpool_steady_state_pred, cpools_layer_pred, soc_layer_pred, total_res_time_pred, \
+		# 		total_res_time_base_pred, res_time_base_pools_pred, t_scaler_pred, bulk_A_pred, \
+		# 		w_scaler_pred, bulk_K_pred, bulk_V_pred, bulk_xi_pred, bulk_I_pred, litter_fraction_pred = fun_bulk_simu(grid_pred_para.to(device), \
+		# 																										torch.tensor(predict_data_x, device=device, dtype=torch.float32), args.vertical_mixing, args.vectorized) 
 
-			# Save the bulk simulation results into csv files
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_carbon_input_' + job_id + '.csv', carbon_input_pred.detach().cpu().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_pred.detach().cpu().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_pred.detach().cpu().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_soc_layer_' + job_id + '.csv', soc_layer_pred.detach().cpu().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_total_res_time_' + job_id + '.csv', total_res_time_pred.detach().cpu().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_pred.detach().cpu().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_pred.detach().cpu().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_t_scaler_' + job_id + '.csv', t_scaler_pred.detach().cpu().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_A_' + job_id + '.csv', bulk_A_pred.detach().cpu().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_w_scaler_' + job_id + '.csv', w_scaler_pred.detach().cpu().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_K_' + job_id + '.csv', bulk_K_pred.detach().cpu().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_V_' + job_id + '.csv', bulk_V_pred.detach().cpu().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_pred.detach().cpu().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_I_' + job_id + '.csv', bulk_I_pred.detach().cpu().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	# Save the bulk simulation results into csv files
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_carbon_input_' + job_id + '.csv', carbon_input_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_cpool_steady_state_' + job_id + '.csv', cpool_steady_state_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_cpools_layer_' + job_id + '.csv', cpools_layer_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_soc_layer_' + job_id + '.csv', soc_layer_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_total_res_time_' + job_id + '.csv', total_res_time_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_total_res_time_base_' + job_id + '.csv', total_res_time_base_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_res_time_base_pools_' + job_id + '.csv', res_time_base_pools_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_t_scaler_' + job_id + '.csv', t_scaler_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_A_' + job_id + '.csv', bulk_A_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_w_scaler_' + job_id + '.csv', w_scaler_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_K_' + job_id + '.csv', bulk_K_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_V_' + job_id + '.csv', bulk_V_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_xi_' + job_id + '.csv', bulk_xi_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_bulk_I_' + job_id + '.csv', bulk_I_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_bulk_litter_fraction_' + job_id + '.csv', litter_fraction_pred.detach().cpu().numpy(), delimiter = ',')
+		# 	print("----------------- Bulk simu for grid data " + str(datetime.now()) + "-----------------")
 
 
 		# FINAL SUMMARY MAPS
@@ -3232,17 +3244,18 @@ def worker(rank, world_size, job_id):
 		# Each row represents a layer (or all layers), each column represents a split (train/val/test)
 		titles = ["Train: All Depths", "Val: All Depths", "Test: All Depths"]
 		y_hats = [best_guess_train_y_hat.flatten(), best_guess_val_y_hat.flatten(), best_guess_test_y_hat.flatten()]  # predictions
-		ys = [train_y.flatten(), val_y.flatten(), test_y.flatten()]  # labels
+		ys = [train_y.flatten().to(device), val_y.flatten().to(device), test_y.flatten().to(device)]  # labels
 		LAYER_BOUNDARIES = [0, 0.1, 0.3, 1.0, 50.0]
 		for i in range(len(LAYER_BOUNDARIES) - 1):  # Loop through layers
 			layer_loc_train = (train_z >= LAYER_BOUNDARIES[i]) & (train_z < LAYER_BOUNDARIES[i+1])  # True for observations within this layer that are non-nan
 			layer_loc_val = (val_z >= LAYER_BOUNDARIES[i]) & (val_z < LAYER_BOUNDARIES[i+1]) 
 			layer_loc_test = (test_z >= LAYER_BOUNDARIES[i]) & (test_z < LAYER_BOUNDARIES[i+1]) 
 			y_hats.extend([best_guess_train_y_hat[layer_loc_train], best_guess_val_y_hat[layer_loc_val], best_guess_test_y_hat[layer_loc_test]])
-			ys.extend([train_y[layer_loc_train], val_y[layer_loc_val], test_y[layer_loc_test]])
+			ys.extend([train_y[layer_loc_train].to(device), val_y[layer_loc_val].to(device), test_y[layer_loc_test].to(device)])
 			layer_str = f'{LAYER_BOUNDARIES[i]}-{LAYER_BOUNDARIES[i+1]}m'
 			titles.extend([f'Train: {layer_str}', f'Val: {layer_str}', f'Test: {layer_str}'])
 		visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, f"FINAL_scatters.png"), y_hats, ys, titles, cols=3)
+		print("----------------- True vs predicted scatters " + str(datetime.now()) + "-----------------")
 
 		# Maps of true-vs-predicted SOC (grid)
 		# Each row represents a layer, each column represents a split (train/val/test) and {true or predicted}
@@ -3250,24 +3263,25 @@ def worker(rank, world_size, job_id):
 		lats_list = []
 		values_list = []
 		vars_list = []
+
 		for i in range(len(LAYER_BOUNDARIES) - 1):
 			# For each site: compute average SOC over observations in this layer
 			layer_loc_train = (train_z >= LAYER_BOUNDARIES[i]) & (train_z < LAYER_BOUNDARIES[i+1])  # True for observations within this layer that are non-nan
-			train_true_soc = torch.where(layer_loc_train, train_y, torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
+			train_true_soc = torch.where(layer_loc_train.to(device), train_y.to(device), torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
 			train_true_soc = torch.nanmean(train_true_soc, dim=1)  # For each site, average over observations in this layer. If none, return nan.
 			train_pred_soc = torch.where(layer_loc_train.to(device), best_guess_train_y_hat, torch.nan)  # Same for predictions
 			train_pred_soc = torch.nanmean(train_pred_soc, dim=1)
 
 			# Repeat above for val data
 			layer_loc_val = (val_z >= LAYER_BOUNDARIES[i]) & (val_z < LAYER_BOUNDARIES[i+1])  # True for observations within this layer that are non-nan
-			val_true_soc = torch.where(layer_loc_val, val_y, torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
+			val_true_soc = torch.where(layer_loc_val.to(device), val_y.to(device), torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
 			val_true_soc = torch.nanmean(val_true_soc, dim=1)  # For each site, average over observations in this layer. If none, return nan.
 			val_pred_soc = torch.where(layer_loc_val.to(device), best_guess_val_y_hat, torch.nan)  # Same for predictions
 			val_pred_soc = torch.nanmean(val_pred_soc, dim=1)
 
 			# Repeat above for test data
 			layer_loc_test = (test_z >= LAYER_BOUNDARIES[i]) & (test_z < LAYER_BOUNDARIES[i+1])  # True for observations within this layer that are non-nan
-			test_true_soc = torch.where(layer_loc_test, test_y, torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
+			test_true_soc = torch.where(layer_loc_test.to(device), test_y.to(device), torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
 			test_true_soc = torch.nanmean(test_true_soc, dim=1)  # For each site, average over observations in this layer. If none, return nan.
 			test_pred_soc = torch.where(layer_loc_test.to(device), best_guess_test_y_hat, torch.nan)  # Same for predictions
 			test_pred_soc = torch.nanmean(test_pred_soc, dim=1)
@@ -3282,28 +3296,36 @@ def worker(rank, world_size, job_id):
 								f'True SOC - Test: {layer_str}', f'Predicted SOC - Test: {layer_str}',])
 		visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"FINAL_soc_maps.png"),
 				lons_list, lats_list, values_list, vars_list, us_only=True, cols=6)
+		print("----------------- True vs predicted maps " + str(datetime.now()) + "-----------------")
 
-		# Parameter maps. Each row is a parameter, each column represents a split (train/val/test/grid)
 		if args.model != "nn_only":
+			# Parameter maps. Each row is a parameter, each column represents a split (train/val/test/grid).
 			# Use PRODA parameters as "labels" to compare with our predicted parameters
 			lons_list = []
 			lats_list = []
 			values_list = []
 			vars_list = []
 			for para_idx in range(model_without_ddp.num_params):
-				lons_list.extend([train_c[:, 0], train_c[:, 0], val_c[:, 0], val_c[:, 0], test_c[:, 0], test_c[:, 0], predict_data_c[:, 0], predict_data_c[:, 0]])
-				lats_list.extend([train_c[:, 1], train_c[:, 1], val_c[:, 1], val_c[:, 1], test_c[:, 1], test_c[:, 1], predict_data_c[:, 1], predict_data_c[:, 1]])
-				values_list.extend([train_proda_para[:, para_idx], best_guess_train_pred_para[:, para_idx],
-									val_proda_para[:, para_idx], best_guess_val_pred_para[:, para_idx],
-									test_proda_para[:, para_idx], best_guess_test_pred_para[:, para_idx],
-									grid_PRODA_para[:, para_idx], grid_pred_para[:, para_idx]])
+				# NOTE: Only plot the grid maps for now as this takes a long time.
+				lons_list.extend([predict_data_c[:, 0], predict_data_c[:, 0]])
+				lats_list.extend([predict_data_c[:, 1], predict_data_c[:, 1]])
+				values_list.extend([grid_PRODA_para[:, para_idx].to(device), grid_pred_para[:, para_idx]])
 				para_name = para_names[para_idx]
-				vars_list.extend([f'PRODA para {para_name} - Train', f'Predicted para {para_name} - Train',
-									f'PRODA para {para_name} - Val', f'Predicted para {para_name} - Val',
-									f'PRODA para {para_name} - Test', f'Predicted para {para_name} - Test',
-									f'PRODA para {para_name} - Grid', f'Predicted para {para_name} - Grid'])
+				vars_list.extend([f'PRODA para {para_name} - Grid', f'Predicted para {para_name} - Grid'])
+
+				# lons_list.extend([train_c[:, 0], train_c[:, 0], val_c[:, 0], val_c[:, 0], test_c[:, 0], test_c[:, 0], predict_data_c[:, 0], predict_data_c[:, 0]])
+				# lats_list.extend([train_c[:, 1], train_c[:, 1], val_c[:, 1], val_c[:, 1], test_c[:, 1], test_c[:, 1], predict_data_c[:, 1], predict_data_c[:, 1]])
+				# values_list.extend([train_proda_para[:, para_idx].to(device), best_guess_train_pred_para[:, para_idx],
+				# 					val_proda_para[:, para_idx].to(device), best_guess_val_pred_para[:, para_idx],
+				# 					test_proda_para[:, para_idx].to(device), best_guess_test_pred_para[:, para_idx],
+				# 					grid_PRODA_para[:, para_idx].to(device), grid_pred_para[:, para_idx]])
+				# para_name = para_names[para_idx]
+				# vars_list.extend([f'PRODA para {para_name} - Train', f'Predicted para {para_name} - Train',
+				# 					f'PRODA para {para_name} - Val', f'Predicted para {para_name} - Val',
+				# 					f'PRODA para {para_name} - Test', f'Predicted para {para_name} - Test',
+				# 					f'PRODA para {para_name} - Grid', f'Predicted para {para_name} - Grid'])
 			visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"FINAL_para_maps.png"),
-					lons_list, lats_list, values_list, vars_list, us_only=True, cols=4)
+					lons_list, lats_list, values_list, vars_list, us_only=True, cols=2)
 
 			# Also plot scatters
 			y_hats = []
@@ -3311,24 +3333,10 @@ def worker(rank, world_size, job_id):
 			titles = []
 			for para_idx in range(model_without_ddp.num_params):
 				y_hats.extend([best_guess_train_pred_para[:, para_idx], best_guess_val_pred_para[:, para_idx], best_guess_test_pred_para[:, para_idx], grid_pred_para[:, para_idx]])
-				ys.extend([train_proda_para[:, para_idx], val_proda_para[:, para_idx], test_proda_para[:, para_idx], grid_PRODA_para[:, para_idx]])
+				ys.extend([train_proda_para[:, para_idx], val_proda_para[:, para_idx], test_proda_para[:, para_idx], grid_PRODA_para[:, para_idx].to(device)])
 				para_name = para_names[para_idx]
 				titles.extend([f'Train: {para_name}', f'Val: {para_name}', f'Test: {para_name}', f'Grid: {para_name}'])
-			visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, f"FINAL_para_scatters.png"), y_hats, ys, titles, cols=2)
-
-			# else:
-			# 	# If using real labels, we do not have labels for parameters, so only plot the predictions
-			# 	lons_list = []
-			# 	lats_list = []
-			# 	values_list = []
-			# 	vars_list = []
-			# 	for para_idx in range(model_without_ddp.num_params):
-			# 		lons_list.extend([train_c[:, 0], val_c[:, 0], test_c[:, 0], predict_data_c[:, 0]])
-			# 		lats_list.extend([train_c[:, 1], val_c[:, 1], test_c[:, 1], predict_data_c[:, 1]])
-			# 		values_list.extend([best_guess_train_pred_para[:, para_idx], best_guess_val_pred_para[:, para_idx], best_guess_test_pred_para[:, para_idx], grid_pred_para[:, para_idx]])
-			# 		vars_list.extend([f'Train: {para_names[para_idx]}', f'Val: {para_names[para_idx]}', f'Test: {para_names[para_idx]}', f'Grid: {para_names[para_idx]}'])
-			# 	visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"FINAL_para_maps.png"),
-			# 			lons_list, lats_list, values_list, vars_list, us_only=True, cols=2)
+			visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, f"FINAL_para_scatters.png"), y_hats, ys, titles, cols=4)
 
 		print("-----------------Model Prediction Finished at " + str(datetime.now()) + "-----------------")
 
