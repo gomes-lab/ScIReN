@@ -3,9 +3,11 @@
 #PBS -N DDP_BINN_Resume
 #PBS -q main
 #PBS -l walltime=12:00:00
-#PBS -l select=1:ncpus=128
+#PBS -l select=1:ncpus=8
+
+# Usage: qsub run_binn_pbs.sh
 # Use scratch for temporary files to avoid space limits in /tmp
-export TMPDIR=/glade/scratch/$USER/temp
+export TMPDIR="/glade/scratch/$USER/temp"
 mkdir -p $TMPDIR
 # Load modules to match compile-time environment
 module purge
@@ -32,7 +34,7 @@ do
                 --n_epochs 200 --patience 100 --model new_mlp --vertical_mixing original --vectorized yes \
                 --activation leaky_relu --use_bn --categorical embedding --embed_dim 5 --pos_enc none \
                 --losses smooth_l1 param_reg --loss_weighting manual --lambdas 1 100 \
-                --num_CPU 128 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "BINN_EXAMPLE"
+                --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "BINN_EXAMPLE"
         done
     done
 done
