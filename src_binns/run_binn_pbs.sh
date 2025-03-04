@@ -12,11 +12,12 @@ module purge
 module load conda
 module load cuda
 
-# Activate environment in conda
+# Activate environment (virtualenv version)
 cd /glade/work/joshuaf/BINNS/src_binns
 source .venv/bin/activate
 
-conda activate BINN_310_CPU
+# (Conda version)
+# conda activate BINN_310_CPU
 
 # Start the Python Code
 for LR in 1e-3
@@ -27,11 +28,11 @@ do
         do
             python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
                 --lr $LR --optimizer AdamW --weight_decay 0 \
-                --seed $SEED --init default --min_temp 1 --max_temp 1 --standardize_input \
-                --n_epochs 5 --patience 100 --model new_mlp --vertical_mixing original --vectorized yes \
+                --seed $SEED --init default --min_temp 1 --max_temp 1 \
+                --n_epochs 200 --patience 100 --model new_mlp --vertical_mixing original --vectorized yes \
                 --activation leaky_relu --use_bn --categorical embedding --embed_dim 5 --pos_enc none \
                 --losses smooth_l1 param_reg --loss_weighting manual --lambdas 1 100 \
-                --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "BINN_EXAMPLE"
+                --num_CPU 128 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "BINN_EXAMPLE"
         done
     done
 done
