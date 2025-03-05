@@ -150,7 +150,7 @@ class mlp_wrapper(nn.Module):
 				 activation='relu', param_constraint='sigmoid', rep_grad=False,
 				 losses=["l1", "param_reg"], device="cpu", train_x=None,
 				 min_temp=10, max_temp=109, init="xavier_uniform", width=128,
-				 para_index=None):
+				 para_index=None, feature_dropout=0):
 		"""
 		var_idx_to_emb is a dictionary mapping from categorical variable index to either
 		(1) Embedding layer (if one_hot is False)
@@ -243,6 +243,35 @@ class mlp_wrapper(nn.Module):
 			self.mlp = SENN(num_inputs=self.new_input_size, num_outputs=self.num_params,
 							num_hidden=width, num_layers=4,
 				   			use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init)
+		elif base_model in ["nam", "nam_joint"]:
+			assert pos_enc in ["none", "late"], "With NAM, positional embedding size (if it exists) should equal the number of outputs"
+			assert not self.one_hot, "With NAM, you should use `--categorical embedding --embed_dim NUM_PARAMS`"
+			assert next(iter(self.var_idx_to_emb.values())).embedding_dim == self.num_params, "With NAM, categorical embedding dim should equal the number of outputs"			
+
+			# Process activation
+			from nam_models import ExULayer, ReLULayer, MultiOutputNAM, MultiOutputJointNAM
+			if activation == 'exu':
+				shallow_layer = ExULayer
+				shallow_units = width  # Section 3 of https://arxiv.org/pdf/2004.13912
+				hidden_units = ()
+			elif activation == 'relu':
+				shallow_layer = ReLULayer
+				shallow_units = width
+				hidden_units = (width, width)
+			else:
+				raise ValueError("For NAM, activation must be exu or relu")
+			
+			if base_model == "nam":
+				self.mlp = MultiOutputNAM(input_size=len(self.non_categorical_indices), shallow_units=shallow_units,
+								    	  hidden_units=hidden_units, shallow_layer=shallow_layer,
+										  feature_dropout=feature_dropout, hidden_dropout=dropout_prob, n_outputs=self.num_params)
+			elif base_model == "nam_joint":
+				self.mlp = MultiOutputJointNAM(input_size=len(self.non_categorical_indices), shallow_units=shallow_units,
+								    	       hidden_units=hidden_units, shallow_layer=shallow_layer,
+										       feature_dropout=feature_dropout, hidden_dropout=dropout_prob, n_outputs=self.num_params)
+
+		elif base_model == "nag":
+			raise NotImplementedError()
 		elif base_model == "new_mlp":
 			# Standard MLP
 			self.mlp = mlp((self.new_input_size, width, width, width, self.num_params),
@@ -349,21 +378,24 @@ class mlp_wrapper(nn.Module):
 			next = predicted_para[:, param_idx:].detach()
 			predicted_para = torch.cat([prev, param_vals, next], dim=1)
 
-		# check if h5 is nan
-		if torch.isnan(predicted_para).any() or torch.isinf(predicted_para).any():
-			print("predicted_para was nan", predicted_para)
-			exit(1)
+		# Ignore examples where predicted_para was nan. This should only happen when PRODA_para
+		# contains nan values.
+		valid_mask = ~torch.any((torch.isnan(predicted_para) | torch.isinf(predicted_para)), dim=1)
+		if torch.sum(valid_mask) > 0:
+			print("predicted_para had nan")
 
 		# CLM5 process-based model
 		if whether_predict == 1:
-			simu_soc = fun_model_prediction(predicted_para, forcing, self.vertical_mixing, self.vectorized)
+			simu_soc = fun_model_prediction(predicted_para[valid_mask], forcing, self.vertical_mixing, self.vectorized)
 		else:
-			simu_soc = fun_model_simu(predicted_para, forcing, obs_depth, self.vertical_mixing, self.vectorized)
+			simu_soc = fun_model_simu(predicted_para[valid_mask], forcing, obs_depth, self.vertical_mixing, self.vectorized)
+		simu_soc_with_nan = torch.full((predicted_para.shape[0], simu_soc.shape[1]), float('nan'), device=input_var.device)
+		simu_soc_with_nan[valid_mask] = simu_soc
 
 		if return_spatial_embedding:
-			return simu_soc, predicted_para, spatial_embeddings
+			return simu_soc_with_nan, predicted_para, spatial_embeddings
 		else:
-			return simu_soc, predicted_para
+			return simu_soc_with_nan, predicted_para
 
 
 	def forward_ignoring_input(self, input_var, wosis_depth):

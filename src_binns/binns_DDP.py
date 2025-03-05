@@ -85,12 +85,13 @@ parser = argparse.ArgumentParser()
 
 # Model architecture
 parser.add_argument("--note", type=str, default="", help="Optional name to give to the model")
-parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp', 'senn', 'gnn', 'spatial', 'nn_only', 'binn_hybrid'], help="Model type")
+parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp', 'senn', 'nam', 'nam_joint', 'nag', 'gnn', 'spatial', 'nn_only', 'binn_hybrid'], help="Model type")
 parser.add_argument("--width", type=int, default=128, help="Size of hidden layers (new_mlp or nn_only)")
 parser.add_argument("--categorical", type=str, default="embedding", choices=["embedding", "one_hot"], help="How to embed categorical variables")
 parser.add_argument("--embed_dim", type=int, default=5, help="Embedding dim for each categorical variable (if using embeddings)")
 parser.add_argument("--use_bn", action='store_true', help="Whether to use batchnorm")
 parser.add_argument("--dropout_prob", default=0., type=float, help="Dropout prob")
+parser.add_argument("--feature_dropout", default=0., type=float, help="Probability of dropping out entire feature. ONLY SUPPORTED FOR NAM MODELS.")
 parser.add_argument("--activation", type=str, choices=['relu', 'leaky_relu', 'tanh'], default='relu', help="Activation function inside neural network")
 parser.add_argument("--param_constraint", type=str, choices=['sigmoid', 'hardsigmoid', 'none'], default='sigmoid', help="Activation function used to constrain parameter predictions. If sigmoid, we suggest using param_reg loss. If hardsigmoid, use param_violation loss")
 
@@ -151,7 +152,7 @@ parser.add_argument("--clip_value", type=float, default=-1, help="Clip value for
 
 # Losses and loss weights
 parser.add_argument("--losses", nargs="+", choices=["l1", "smooth_l1", "l2", "param_reg", "param_violation", "param_matching", "jacobian", "jacobian_sparsity", "spectral", "lipmlp", "cure", "senn_robustness", "senn_l1", "senn_sparsity", 
-													"spatial_error", "spatial_emb_smoothness", "param_smoothness", "residual"], default=["smooth_l1", "param_reg"],
+													"nam_l2", "spatial_error", "spatial_emb_smoothness", "param_smoothness", "residual"], default=["smooth_l1", "param_reg"],
 					help="Losses to use (can list any number). Note jacobian_sparsity cannot be optimized (non-differentiable): it is just something we track.")
 parser.add_argument("--loss_weighting", default="manual", choices=["manual", "relobralo", "IMTL", "two_stage"])
 parser.add_argument("--lambdas", nargs="+", type=float, default=[1.0, 10.0], help="If loss_weighting is manual, provide weights in the same order as `args.losses`")
@@ -1401,7 +1402,7 @@ def worker(rank, world_size, job_id):
 
 	# TODO Not sure if "global model" is correct
 	# global model
-	if args.model == 'new_mlp' or args.model == "lipmlp" or args.model == "senn":
+	if args.model in ["new_mlp", "lipmlp", "senn", "nam", "nam_joint", "nag"]:
 		model_class = mlp_wrapper
 		model_kwargs = {"input_vars": len(var4nn),
 						"var_idx_to_emb": var_idx_to_emb,
@@ -1420,7 +1421,8 @@ def worker(rank, world_size, job_id):
 						"max_temp": args.max_temp,
 						"init": args.init,
 						"width": args.width,
-						"para_index": para_index}
+						"para_index": para_index,
+						"feature_dropout": args.feature_dropout}
 
 	elif args.model == 'binn_hybrid':
 		model_class = BINN_Hybrid
@@ -1759,6 +1761,7 @@ def worker(rank, world_size, job_id):
 			spectral_loss = np.nan
 			# c_reg_loss = np.nan
 			cure_loss = np.nan
+			nam_l2_loss = np.nan
 			senn_robustness_loss = np.nan
 			senn_l1_loss = np.nan
 			senn_sparsity = np.nan
@@ -1872,6 +1875,9 @@ def worker(rank, world_size, job_id):
 				# Curvature regularization. TODO Not tested yet
 				# cure_loss, grad_norm = misc_utils.regularizer(batch_x, batch_y, batch_z, model, binns_loss_simple)
 
+			if "nam_l2" in args.losses:
+				assert args.model in ["nam", "nam_joint", "nag"]
+				nam_l2_loss = (model_without_ddp.mlp.f_out ** 2).mean()
 			if "senn_robustness" in args.losses:
 				model.eval()
 				senn_robustness_loss = model_without_ddp.senn_robustness_loss()
@@ -1897,6 +1903,7 @@ def worker(rank, world_size, job_id):
 						# "c_reg": c_reg_loss,
 						"spectral": spectral_loss,
 						"cure": cure_loss,
+						"nam_l2": nam_l2_loss,
 						"senn_robustness": senn_robustness_loss,
 						"senn_l1": senn_l1_loss,
 						"senn_sparsity": senn_sparsity,
@@ -2002,6 +2009,7 @@ def worker(rank, world_size, job_id):
 				spectral_loss = np.nan
 				# c_reg_loss = np.nan
 				senn_robustness_loss = np.nan
+				nam_l2_loss = np.nan
 				senn_l1_loss = np.nan
 				senn_sparsity = np.nan
 				cure_loss = np.nan
@@ -2082,6 +2090,10 @@ def worker(rank, world_size, job_id):
 					z = z / torch.linalg.vector_norm(z, dim=1, keepdim=True)
 					jacobian_perturbed = model_without_ddp.get_jacobian(model_without_ddp.new_input + z * cure_h)  # [batch, n_params, n_inputs]
 					cure_loss = (jacobian_perturbed - jacobian).square().sum()			
+
+				if "nam_l2" in args.losses:
+					assert args.model in ["nam", "nam_joint", "nag"]
+					nam_l2_loss = (model_without_ddp.mlp.f_out ** 2).mean()
 				if "senn_robustness" in args.losses:
 					senn_robustness_loss = model_without_ddp.senn_robustness_loss()
 				if "senn_l1" in args.losses:
@@ -2101,6 +2113,7 @@ def worker(rank, world_size, job_id):
 							# "c_reg": c_reg_loss,
 							"spectral": spectral_loss,
 							"cure": cure_loss,
+							"nam_l2": nam_l2_loss,
 							"senn_robustness": senn_robustness_loss,
 							"senn_l1": senn_l1_loss,
 							"senn_sparsity": senn_sparsity,
