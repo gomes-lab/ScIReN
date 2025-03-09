@@ -14,7 +14,7 @@ class mlp(torch.nn.Module):
 	"""
 	New MLP from this repo: https://github.com/whitneychiu/lipmlp_pytorch/blob/main/models/mlp.py
 	"""
-	def __init__(self, dims, use_bn=False, dropout_prob=0.0, activation='relu', init='xavier_uniform'):
+	def __init__(self, dims, use_bn=False, dropout_prob=0.0, activation='relu', init='xavier_uniform', residual=False):
 		"""
 		dim[0]: input dim
 		dim[1:-1]: hidden dims
@@ -27,6 +27,7 @@ class mlp(torch.nn.Module):
 		self.layers = torch.nn.ModuleList()
 		self.use_bn = use_bn
 		self.dropout_prob = dropout_prob
+		self.residual = residual
 		if use_bn:
 			self.bns = torch.nn.ModuleList()
 		if dropout_prob > 0:
@@ -72,10 +73,17 @@ class mlp(torch.nn.Module):
 
 	def forward(self, x):
 		for ii in range(len(self.layers)):
+			old_x = x
+			x = x + self.layers[ii](x)
+			
 			x = self.layers[ii](x)
 			if self.use_bn:
 				x = self.bns[ii](x)
 			x = self.act(x)
+
+			if self.residual and old_x.shape == x.shape:  # Residual connection around linear, batchnorm, activation
+				x += old_x
+
 			if self.dropout_prob > 0:
 				x = self.dropout(x)
 
@@ -150,7 +158,7 @@ class mlp_wrapper(nn.Module):
 				 activation='relu', param_constraint='sigmoid', rep_grad=False,
 				 losses=["l1", "param_reg"], device="cpu", train_x=None,
 				 min_temp=10, max_temp=109, init="xavier_uniform", width=128,
-				 para_index=None, feature_dropout=0):
+				 para_index=None, feature_dropout=0, num_layers=4, residual=False):
 		"""
 		var_idx_to_emb is a dictionary mapping from categorical variable index to either
 		(1) Embedding layer (if one_hot is False)
@@ -171,7 +179,7 @@ class mlp_wrapper(nn.Module):
 		self.pos_enc = pos_enc
 		self.base_model = base_model
 
-		# List of non-categorical variable indices
+		# List of non-categorical variable indices.
 		self.non_categorical_indices = list(set(list(range(input_vars))).difference(var_idx_to_emb.keys()))
 		self.new_input_size = len(self.non_categorical_indices)
 
@@ -183,7 +191,8 @@ class mlp_wrapper(nn.Module):
 		else:
 			# If using Embedding layers, create ModuleDict so that all 
 			# Embedding layers in var_idx_to_emb are registered as parameters
-			self.var_idx_to_emb = nn.ModuleDict(self.var_idx_to_emb)
+			# Note: ModuleDict requires string keys, so convert index to string
+			self.var_idx_to_emb = nn.ModuleDict({str(idx): emb for idx, emb in self.var_idx_to_emb.items()})
 			for _, emb in self.var_idx_to_emb.items():
 				self.new_input_size += emb.embedding_dim
 
@@ -232,18 +241,20 @@ class mlp_wrapper(nn.Module):
 			self.new_input_size += self.num_params  # Add the spatial embeddings
 
 		# Neural network: mapping input features to biogeochemical parameters
+		layer_sizes =  [self.new_input_size] + [width] * (num_layers-1) + [self.num_params] 
 		if base_model == "lipmlp":
 			# EXPERIMENTAL: LipMLP (Lipschitz-regularized neural network)
-			self.mlp = lipmlp((self.new_input_size, width, width, width, self.num_params),
-							   use_bn=use_bn, dropout_prob=dropout_prob)  # TODO different initialization methods, leaky relu, dropout, etc. not supported
+			if residual: raise NotImplementedError("residual network not implemented for lipmlp")
+			self.mlp = lipmlp(layer_sizes, use_bn=use_bn, dropout_prob=dropout_prob)  # TODO different initialization methods, activations, dropout, etc. not supported
 		elif base_model == "senn":
 			# EXPERIMENTAL: SENN (Self-Explaining Neural Network, like a
 			# linear model but coefficients also depend on the data)
 			assert self.one_hot, "SENN makes most sense with one-hot encodings"
 			self.mlp = SENN(num_inputs=self.new_input_size, num_outputs=self.num_params,
-							num_hidden=width, num_layers=4,
-				   			use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init)
+							num_hidden=width, num_layers=num_layers,
+				   			use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init, residual=residual)
 		elif base_model in ["nam", "nam_joint"]:
+			# EXPERIMENTAL: Neural Additive Models
 			assert pos_enc in ["none", "late"], "With NAM, positional embedding size (if it exists) should equal the number of outputs"
 			assert not self.one_hot, "With NAM, you should use `--categorical embedding --embed_dim NUM_PARAMS`"
 			assert next(iter(self.var_idx_to_emb.values())).embedding_dim == self.num_params, "With NAM, categorical embedding dim should equal the number of outputs"			
@@ -269,13 +280,12 @@ class mlp_wrapper(nn.Module):
 				self.mlp = MultiOutputJointNAM(input_size=len(self.non_categorical_indices), shallow_units=shallow_units,
 								    	       hidden_units=hidden_units, shallow_layer=shallow_layer,
 										       feature_dropout=feature_dropout, hidden_dropout=dropout_prob, n_outputs=self.num_params)
-
 		elif base_model == "nag":
 			raise NotImplementedError()
 		elif base_model == "new_mlp":
-			# Standard MLP
-			self.mlp = mlp((self.new_input_size, width, width, width, self.num_params),
-							  use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init)
+			# Basic MLP
+			self.mlp = mlp(layer_sizes, use_bn=use_bn, dropout_prob=dropout_prob,
+				  		   activation=activation, init=init, residual=residual)
 		else:
 			raise ValueError("Unsupported base_model")
 
@@ -311,8 +321,8 @@ class mlp_wrapper(nn.Module):
 			if self.one_hot:
 				emb = F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
 			else:
+				# NOTE (2025-03-05): Not normalizing embeddings anymore.
 				emb = embedding_layer(predictor[:, idx].int())
-				emb = F.normalize(emb, p=2, dim=1)  # New @joshuafan: normalize embeddings. TODO Reconsider this
 			embs.append(emb)
 		all_embs = torch.concatenate(embs, dim=1)
 
@@ -381,7 +391,7 @@ class mlp_wrapper(nn.Module):
 		# Ignore examples where predicted_para was nan. This should only happen when PRODA_para
 		# contains nan values.
 		valid_mask = ~torch.any((torch.isnan(predicted_para) | torch.isinf(predicted_para)), dim=1)
-		if torch.sum(valid_mask) > 0:
+		if torch.sum(~valid_mask) > 0:
 			print("predicted_para had nan")
 
 		# CLM5 process-based model
@@ -551,7 +561,7 @@ class nn_only(nn.Module):
 				 base_model="new_mlp", one_hot=False, use_bn=False, dropout_prob=0.0,
 				 activation="relu", rep_grad=False,
 				 losses=["l1", "param_reg"], device="cpu", output_mean=None, output_std=None, train_x=None,
-				 min_temp=10, max_temp=109, init="xavier_uniform", width=128):
+				 min_temp=10, max_temp=109, init="xavier_uniform", width=128, num_layers=4, residual=False):
 		"""
 		var_idx_to_emb is a dictionary mapping from categorical variable index to either
 		(1) Embedding layer (if one_hot is False)
@@ -580,7 +590,7 @@ class nn_only(nn.Module):
 		else:
 			# Create ModuleDict so that all Embedding layers in var_idx_to_emb
 			# are registered as parameters
-			self.var_idx_to_emb = nn.ModuleDict(self.var_idx_to_emb)
+			self.var_idx_to_emb = nn.ModuleDict({str(idx): emb for idx, emb in self.var_idx_to_emb.items()})
 			for _, emb in self.var_idx_to_emb.items():
 				self.new_input_size += emb.embedding_dim
 
@@ -624,12 +634,13 @@ class nn_only(nn.Module):
 			)
 
 		# MLP backbone
+		layer_sizes =  [self.new_input_size] + [width] * (num_layers-1) + [self.num_param] 
 		if base_model == "lipmlp":
-			self.mlp = lipmlp((self.new_input_size, width, width, width, self.num_params),
-							   use_bn=use_bn, dropout_prob=dropout_prob)  # TODO different initialization methods, activations, dropout, etc. not supported
+			if residual: raise NotImplementedError("residual network not implemented for lipmlp")
+			self.mlp = lipmlp(layer_sizes, use_bn=use_bn, dropout_prob=dropout_prob)  # TODO different initialization methods, activations, dropout, etc. not supported
 		elif base_model == "new_mlp":
-			self.mlp = mlp((self.new_input_size, width, width, width, self.num_params),
-							use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init)
+			self.mlp = mlp(layer_sizes, use_bn=use_bn, dropout_prob=dropout_prob,
+				  		   activation=activation, init=init, residual=residual)
 		else:
 			raise ValueError("Unsupported base_model")
 
@@ -664,8 +675,8 @@ class nn_only(nn.Module):
 			if self.one_hot:
 				emb = F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
 			else:
+				# NOTE (2025-03-05): Not normalizing embeddings anymore.
 				emb = embedding_layer(predictor[:, idx].int())
-				emb = F.normalize(emb, p=2, dim=1)  # New @joshuafan: normalize embeddings
 			embs.append(emb)
 		all_embs = torch.concatenate(embs, dim=1)
 
@@ -738,13 +749,14 @@ class SENN(nn.Module):
 				 use_bn: bool = False,
 				 dropout_prob: float = 0.0,
 				 activation: str = 'relu',
-				 init: str = 'xavier_uniform') -> None:
+				 init: str = 'xavier_uniform',
+				 residual: bool = False) -> None:
 
 		super().__init__()
 		self.num_inputs = num_inputs
 		self.num_outputs = num_outputs
 		layer_sizes = [self.num_inputs] + ([num_hidden] * (num_layers-1)) + [(self.num_inputs + 1) * self.num_outputs]
-		self.theta = mlp(layer_sizes, use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init)
+		self.theta = mlp(layer_sizes, use_bn=use_bn, dropout_prob=dropout_prob, activation=activation, init=init, residual=residual)
 
 
 	def forward(self, x):
@@ -793,7 +805,7 @@ class BINN_Hybrid(nn.Module):
 		else:
 			# Create ModuleDict so that all Embedding layers in var_idx_to_emb
 			# are registered as parameters
-			self.var_idx_to_emb = nn.ModuleDict(self.var_idx_to_emb)
+			self.var_idx_to_emb = nn.ModuleDict({str(idx): emb for idx, emb in self.var_idx_to_emb.items()})
 			for _, emb in self.var_idx_to_emb.items():
 				self.new_input_size += emb.embedding_dim
 
@@ -947,7 +959,7 @@ class GNN_BINN(nn.Module):
 		else:
 			# Create ModuleDict so that all Embedding layers in var_idx_to_emb
 			# are registered as parameters
-			self.var_idx_to_emb = nn.ModuleDict(self.var_idx_to_emb)
+			self.var_idx_to_emb = nn.ModuleDict({str(idx): emb for idx, emb in self.var_idx_to_emb.items()})
 			for _, emb in self.var_idx_to_emb.items():
 				self.new_input_size += emb.embedding_dim
 
@@ -1152,7 +1164,7 @@ class Spatial_BINN(nn.Module):
 		else:
 			# Create ModuleDict so that all Embedding layers in var_idx_to_emb
 			# are registered as parameters
-			self.var_idx_to_emb = nn.ModuleDict(self.var_idx_to_emb)
+			self.var_idx_to_emb = nn.ModuleDict({str(idx): emb for idx, emb in self.var_idx_to_emb.items()})
 			for _, emb in self.var_idx_to_emb.items():
 				self.new_input_size += emb.embedding_dim
 

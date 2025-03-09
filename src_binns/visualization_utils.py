@@ -10,7 +10,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, euclidean_distances
 from scipy.interpolate import interpn
 import subprocess
-
+import matplotlib.patches as patches
 
 # Get the hash of the latest Git commit.
 # TODO - this is not a visualization method, but temporarily putting it here for convenience
@@ -255,4 +255,85 @@ def plot_map_grid(filename, lons_list, lats_list, values_list, vars_list, us_onl
     fig.subplots_adjust(top=0.90)
     plt.savefig(filename)
     plt.close()
+
+
+def plot_matrix(matrix, row_labels, col_labels, filename, title):
+    """
+    Source: https://matplotlib.org/stable/gallery/images_contours_and_fields/image_annotated_heatmap.html
+    """
+    assert len(row_labels) == matrix.shape[0]
+    assert len(col_labels) == matrix.shape[1]
+    if torch.is_tensor(matrix):
+        matrix = matrix.detach().cpu().numpy()
+    vmax = np.max(np.abs(matrix))
+    fig, ax = plt.subplots(figsize=(0.3*len(col_labels)+3, 0.3*len(row_labels)+3))
+    ax.imshow(matrix, cmap="RdBu", vmin=-vmax, vmax=vmax)
+
+    # Show all ticks and label them with the respective list entries
+    ax.tick_params(axis="x", labelsize=20)
+    ax.tick_params(axis="y", labelsize=20)
+    ax.set_xticks(range(len(col_labels)), labels=col_labels,
+                rotation=45, ha="right", rotation_mode="anchor")
+    ax.set_yticks(range(len(row_labels)), labels=row_labels)
+
+    # Loop over data dimensions and create text annotations.
+    for i in range(len(row_labels)):
+        for j in range(len(col_labels)):
+            text = ax.text(j, i, round(matrix[i, j], 2),
+                        ha="center", va="center", color="w")
+
+    ax.set_title(title)  # "Harvest of local farmers (in tons/year)")
+    fig.tight_layout()
+    plt.savefig(filename)
+    plt.close()
+
+
+def plot_shape_function(feat_nn, feat_vals, ax, title, xlabel, ylabel, divide_by=1.0):
+    """
+    divide_by is an optional factor to divide the y value by
+    """   
+    min_x = feat_vals.min().item() - 0.05
+    max_x = feat_vals.max().item() + 0.05
+    xs = torch.linspace(min_x, max_x, 100)
+    ys = feat_nn(xs).squeeze() / divide_by
+    min_y = ys.min().item() - 0.05
+    max_y = ys.max().item() + 0.05
+    ax.plot(xs, ys)
+    ax.set_xlim(min_x, max_x)
+    ax.set_ylim(min_y, max_y)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+
+    def shade_by_density_blocks(color: list = [0.9, 0.5, 0.5]):
+        """
+        Source: https://github.com/AmrMKayid/nam/blob/main/nam/utils/graphing.py
+        """
+        single_feature_data = feat_vals  # single_features[name]
+        x_n_blocks = 20  # min(n_blocks, len(unique_feat_data))
+
+        segments = (max_x - min_x) / x_n_blocks
+        density = np.histogram(single_feature_data, bins=x_n_blocks)
+        normed_density = density[0] / np.max(density[0])
+        rect_params = []
+
+        for p in range(x_n_blocks):
+            start_x = min_x + segments * p
+            end_x = min_x + segments * (p + 1)
+            d = min(1.0, 0.01 + normed_density[p])
+            rect_params.append((d, start_x, end_x))
+
+        for param in rect_params:
+            alpha, start_x, end_x = param
+            rect = patches.Rectangle(
+                (start_x, min_y - 1),
+                end_x - start_x,
+                max_y - min_y + 1,
+                linewidth=0.01,
+                edgecolor=color,
+                facecolor=color,
+                alpha=alpha,
+            )
+            ax.add_patch(rect)
+
+    shade_by_density_blocks()
 

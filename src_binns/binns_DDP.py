@@ -12,6 +12,7 @@ import random
 import warnings
 import subprocess
 import argparse
+from collections import OrderedDict
 import misc_utils
 from mlp import mlp_wrapper
 from sklearn.model_selection import KFold
@@ -87,6 +88,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--note", type=str, default="", help="Optional name to give to the model")
 parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp', 'senn', 'nam', 'nam_joint', 'nag', 'gnn', 'spatial', 'nn_only', 'binn_hybrid'], help="Model type")
 parser.add_argument("--width", type=int, default=128, help="Size of hidden layers (new_mlp or nn_only)")
+parser.add_argument("--num_layers", type=int, default=4, help="Size of hidden layers (new_mlp or nn_only)")
+parser.add_argument("--residual", action='store_true', help="Whether to add residual connections in neural network portion (MLP)")
 parser.add_argument("--categorical", type=str, default="embedding", choices=["embedding", "one_hot"], help="How to embed categorical variables")
 parser.add_argument("--embed_dim", type=int, default=5, help="Embedding dim for each categorical variable (if using embeddings)")
 parser.add_argument("--use_bn", action='store_true', help="Whether to use batchnorm")
@@ -1375,16 +1378,17 @@ def worker(rank, world_size, job_id):
 	# sys.stdout = misc_utils.Logger(os.path.join(data_dir_output, "neural_network", job_id, "output.txt"))
 
 	# Set up distributed environment
-	device = ddp_setup(rank, world_size)
+	if args.use_ddp == 1:
+		device = ddp_setup(rank, world_size)
+	else:
+		device = "cuda:" + str(os.environ["CUDA_VISIBLE_DEVICES"].split(',')[0]) if torch.cuda.is_available() else "cpu"
 	print(f"Finished DDP setup. Rank {rank} of {world_size}. Device {device}. JobID {job_id}.")
 	# sys.stdout.flush()
-	print("Worker", rank, train_x.shape)
-	print(train_y.shape)
 
 	# Create embeddings for categorical variables (each int maps to a different category)
 	# If using PyTorch DDP, I think this has to be done inside worker(). Each worker
 	# maintains its own copy of the Embedding weights, but they are initialized the same way.
-	var_idx_to_emb = dict()  # Column index (before expanding categorical vars) to embedding layer to use
+	var_idx_to_emb = OrderedDict()  # Column index (before expanding categorical vars) to embedding layer to use
 	for group in categorical_vars:
 		# Note that within a 'group', variables share embeddings. For example,
 		# for 'Texture_USDA_0cm' and 'Texture_USDA_30cm', the embedding of each
@@ -1398,7 +1402,7 @@ def worker(rank, world_size, job_id):
 			raise ValueError("Invalid value for args.categorical")
 		for var in group:
 			idx = var4nn.index(var)
-			var_idx_to_emb[str(idx)] = emb
+			var_idx_to_emb[idx] = emb
 
 	# TODO Not sure if "global model" is correct
 	# global model
@@ -1421,6 +1425,8 @@ def worker(rank, world_size, job_id):
 						"max_temp": args.max_temp,
 						"init": args.init,
 						"width": args.width,
+						"num_layers": args.num_layers,
+						"residual": args.residual,
 						"para_index": para_index,
 						"feature_dropout": args.feature_dropout}
 
@@ -1465,7 +1471,9 @@ def worker(rank, world_size, job_id):
 						"output_mean": output_mean,
 						"output_std": output_std,
 						"init": args.init,
-						"width": args.width}
+						"width": args.width,
+						"num_layers": args.num_layers,
+						"residual": args.residual}
 
 	elif args.model == 'gnn':
 		model_class = GNN_BINN
@@ -1783,11 +1791,11 @@ def worker(rank, world_size, job_id):
 			if "spatial_emb_smoothness" in args.losses:
 				assert args.pos_enc != "none"
 				spatial_smoothness_loss = 0
-				for i in range(model_without_ddp.num_params):
+				for i in para_index:
 					spatial_smoothness_loss += ((spatial_emb[:, i] @ laplacian @ spatial_emb[:, i]) / torch.sum(spatial_emb[:, i]**2))
 			if "param_smoothness" in args.losses:
 				param_smoothness_loss = 0
-				for i in range(model_without_ddp.num_params):
+				for i in para_index:
 					param_smoothness_loss += ((batch_pred_para[:, i] @ laplacian @ batch_pred_para[:, i]) / torch.sum(batch_pred_para[:, i]**2))
 
 			# EXPERIMENTAL: If using BINN_Hybrid, also force the PBM output to be close to groundtruth
@@ -1877,7 +1885,8 @@ def worker(rank, world_size, job_id):
 
 			if "nam_l2" in args.losses:
 				assert args.model in ["nam", "nam_joint", "nag"]
-				nam_l2_loss = (model_without_ddp.mlp.f_out ** 2).mean()
+				f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
+				nam_l2_loss = (f_out ** 2).sum() / (f_out.shape[1] * f_out.shape[2])
 			if "senn_robustness" in args.losses:
 				model.eval()
 				senn_robustness_loss = model_without_ddp.senn_robustness_loss()
@@ -2025,11 +2034,11 @@ def worker(rank, world_size, job_id):
 				if "spatial_emb_smoothness" in args.losses:
 					assert args.pos_enc != "none"
 					spatial_smoothness_loss = 0
-					for i in range(model.num_params):
+					for i in para_index:
 						spatial_smoothness_loss += ((spatial_emb[:, i] @ laplacian @ spatial_emb[:, i]) / torch.sum(spatial_emb[:, i]**2))
 				if "param_smoothness" in args.losses:
 					param_smoothness_loss = 0
-					for i in range(model.num_params):
+					for i in para_index:
 						param_smoothness_loss += ((batch_pred_para[:, i] @ laplacian @ batch_pred_para[:, i]) / torch.sum(batch_pred_para[:, i]**2))
 				if args.model == "binn_hybrid":
 					residual_loss = torch.mean(torch.abs(residual))
@@ -2093,7 +2102,8 @@ def worker(rank, world_size, job_id):
 
 				if "nam_l2" in args.losses:
 					assert args.model in ["nam", "nam_joint", "nag"]
-					nam_l2_loss = (model_without_ddp.mlp.f_out ** 2).mean()
+					f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
+					nam_l2_loss = (f_out ** 2).sum() / (f_out.shape[1] * f_out.shape[2])
 				if "senn_robustness" in args.losses:
 					senn_robustness_loss = model_without_ddp.senn_robustness_loss()
 				if "senn_l1" in args.losses:
@@ -2238,14 +2248,14 @@ def worker(rank, world_size, job_id):
 			all_val_true_soc = pad_tensor(all_val_true_soc, val_examples_per_rank, device)
 
 			# Gather SOC/para/coords/depths from all processes
-			train_pred_para_list = [torch.full([train_examples_per_rank, model_without_ddp.num_params], torch.nan, device=device) for _ in range(world_size)]  # Empty list of per-rank pred paras
-			train_proda_para_list = [torch.full([train_examples_per_rank, model_without_ddp.num_params], torch.nan, device=device) for _ in range(world_size)]  # Empty list of per-rank PRODA paras
+			train_pred_para_list = [torch.full([train_examples_per_rank, len(para_names)], torch.nan, device=device) for _ in range(world_size)]  # Empty list of per-rank pred paras
+			train_proda_para_list = [torch.full([train_examples_per_rank, len(para_names)], torch.nan, device=device) for _ in range(world_size)]  # Empty list of per-rank PRODA paras
 			train_coords_list = [torch.full([train_examples_per_rank, 2], torch.nan, device=device) for _ in range(world_size)]
 			train_z_list = [torch.full([train_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]
 			train_pred_soc_list = [torch.full([train_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]  # Empty list of per-rank pred SOCs
 			train_true_soc_list = [torch.full([train_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]
-			val_pred_para_list = [torch.full([val_examples_per_rank, model_without_ddp.num_params], torch.nan, device=device) for _ in range(world_size)]
-			val_proda_para_list = [torch.full([val_examples_per_rank, model_without_ddp.num_params], torch.nan, device=device) for _ in range(world_size)]
+			val_pred_para_list = [torch.full([val_examples_per_rank, len(para_names)], torch.nan, device=device) for _ in range(world_size)]
+			val_proda_para_list = [torch.full([val_examples_per_rank, len(para_names)], torch.nan, device=device) for _ in range(world_size)]
 			val_coords_list = [torch.full([val_examples_per_rank, 2], torch.nan, device=device) for _ in range(world_size)]
 			val_z_list = [torch.full([val_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]
 			val_pred_soc_list = [torch.full([val_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]
@@ -2331,7 +2341,7 @@ def worker(rank, world_size, job_id):
 					# lats_list = []
 					# values_list = []
 					# vars_list = []
-					# for para_idx in range(model_without_ddp.num_params):
+					# for para_idx in para_index:  # Only plot parameters that were predicted by model
 					# 	lons_list.extend([allrank_train_coords[:, 0], allrank_train_coords[:, 0], allrank_val_coords[:, 0], allrank_val_coords[:, 0]])
 					# 	lats_list.extend([allrank_train_coords[:, 1], allrank_train_coords[:, 1], allrank_val_coords[:, 1], allrank_val_coords[:, 1]])
 					# 	values_list.extend([allrank_train_proda_para[:, para_idx], allrank_train_pred_para[:, para_idx],
@@ -2348,7 +2358,7 @@ def worker(rank, world_size, job_id):
 					y_hats = []
 					ys = []
 					titles = []
-					for para_idx in range(model_without_ddp.num_params):
+					for para_idx in para_index:  # Only plot parameters that were predicted by model
 						y_hats.extend([allrank_train_pred_para[:, para_idx], allrank_val_pred_para[:, para_idx]])
 						ys.extend([allrank_train_proda_para[:, para_idx], allrank_val_proda_para[:, para_idx]])
 						para_name = para_names[para_idx]
@@ -2445,6 +2455,7 @@ def worker(rank, world_size, job_id):
 					'val_indices': val_loc,
 					'test_indices': test_loc,
 					'epochs_without_improvement': epochs_without_improvement,
+					'args': args,  # Commandline args
 				}
 				
 				best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt'
@@ -2575,6 +2586,7 @@ def worker(rank, world_size, job_id):
 					'val_indices': val_loc,
 					'test_indices': test_loc,
 					'epochs_without_improvement': epochs_without_improvement,
+					'args': args,  # Commandline args
 				}
 				if args.use_swa:
 					checkpoint['swa_model_state_dict'] = swa_model.state_dict()
@@ -3318,7 +3330,7 @@ def worker(rank, world_size, job_id):
 			lats_list = []
 			values_list = []
 			vars_list = []
-			for para_idx in range(model_without_ddp.num_params):
+			for para_idx in para_index:  # Only plot parameters that were predicted by NN
 				# NOTE: Only plot the grid maps for now as this takes a long time.
 				lons_list.extend([predict_data_c[:, 0], predict_data_c[:, 0]])
 				lats_list.extend([predict_data_c[:, 1], predict_data_c[:, 1]])
@@ -3344,7 +3356,7 @@ def worker(rank, world_size, job_id):
 			y_hats = []
 			ys = []
 			titles = []
-			for para_idx in range(model_without_ddp.num_params):
+			for para_idx in para_index:  # Only plot parameters that were predicted by NN
 				y_hats.extend([best_guess_train_pred_para[:, para_idx], best_guess_val_pred_para[:, para_idx], best_guess_test_pred_para[:, para_idx], grid_pred_para[:, para_idx]])
 				ys.extend([train_proda_para[:, para_idx], val_proda_para[:, para_idx], test_proda_para[:, para_idx], grid_PRODA_para[:, para_idx].to(device)])
 				para_name = para_names[para_idx]
@@ -3359,7 +3371,7 @@ def worker(rank, world_size, job_id):
 			print("Rank {} finished".format(rank))
 			dist.destroy_process_group()
 			return
-		
+
 		
 	# Pause to allow rank 0 to finish writing the summary file
 	dist.barrier()
@@ -3378,6 +3390,11 @@ if __name__ == '__main__':
 	job_id = create_output_folders(args)
 	print("MAIN, JOB ID", job_id)
 	print("Command:", " ".join(sys.argv))
+
+	# If not using DDP, just call the worker directly
+	if args.use_ddp == 0:
+		worker(rank=0, world_size=1, job_id=job_id)
+		exit(0)
 
 	# Spawn method is required if using GPU
 	if torch.cuda.is_available():
