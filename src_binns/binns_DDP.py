@@ -154,8 +154,9 @@ parser.add_argument("--use_swa", action='store_true', help="Whether to use Stoch
 parser.add_argument("--clip_value", type=float, default=-1, help="Clip value for gradient clipping. -1 for no clipping.")
 
 # Losses and loss weights
-parser.add_argument("--losses", nargs="+", choices=["l1", "smooth_l1", "l2", "param_reg", "param_violation", "param_matching", "jacobian", "jacobian_sparsity", "spectral", "lipmlp", "cure", "senn_robustness", "senn_l1", "senn_sparsity", 
-													"nam_l2", "spatial_error", "spatial_emb_smoothness", "param_smoothness", "residual"], default=["smooth_l1", "param_reg"],
+parser.add_argument("--losses", nargs="+", choices=["l1", "smooth_l1", "l2", "param_reg", "param_violation", "param_matching", "jacobian",
+													"jacobian_sparsity", "spectral", "lipmlp", "cure", "senn_robustness", "senn_l1", "senn_sparsity", 
+													"nam_l2", "nam_entropy", "spatial_error", "spatial_emb_smoothness", "param_smoothness", "residual"], default=["smooth_l1", "param_reg"],
 					help="Losses to use (can list any number). Note jacobian_sparsity cannot be optimized (non-differentiable): it is just something we track.")
 parser.add_argument("--loss_weighting", default="manual", choices=["manual", "relobralo", "IMTL", "two_stage"])
 parser.add_argument("--lambdas", nargs="+", type=float, default=[1.0, 10.0], help="If loss_weighting is manual, provide weights in the same order as `args.losses`")
@@ -1103,14 +1104,16 @@ grid_env_info = grid_env_info[var4nn]
 grid_env_info["original_lon"] = original_lons_grid
 grid_env_info["original_lat"] = original_lats_grid
 
-# Exclude all rows with nan values
-grid_env_info = grid_env_info.dropna(axis=0, how='any')
+# # Exclude all rows with nan values  TODO Removed, check
+# grid_env_info = grid_env_info.dropna(axis=0, how='any')
+# print("After dropna", grid_env_info.shape, grid_env_info.head())
 
-# Select the rows with lon and lat values within continental US
+# Select the rows with lon and lat values within continental US (and not nan)
 grid_US_mask = (grid_env_info["original_lon"] >= -124.763068) \
 			& (grid_env_info["original_lon"] <= -66.949895) \
 			& (grid_env_info["original_lat"] >= 24.521694) \
-			& (grid_env_info["original_lat"] <= 49.384358)  # True if grid cell is within US bounding box
+			& (grid_env_info["original_lat"] <= 49.384358) \
+			& (~grid_env_info.isnull().any(axis=1))  # True if grid cell is within US bounding box and has no nans
 grid_US_profiles = np.where(grid_US_mask)[0]  # Indices (zero-based 'grid profile IDs') of grid cells in US, used later
 grid_env_info_US = grid_env_info[grid_US_mask]
 grid_env_info_num = grid_env_info_US.shape[0]
@@ -1238,11 +1241,10 @@ grid_PRODA_para = grid_PRODA_para.drop(grid_PRODA_para.columns[1:21*9], axis = 1
 # Convert profile ID to zero-based, to match how WOSIS data is processed below
 grid_PRODA_para['profile_id'] = grid_PRODA_para['profile_id'] - 1
 grid_PRODA_para['profile_id'] = grid_PRODA_para['profile_id'].astype(int)
-print("Original grid PRODA para shape", grid_PRODA_para.shape)
 
-# Filter to the 'grid profile IDs' inside the US bounding box
-grid_PRODA_para = grid_PRODA_para[grid_PRODA_para['profile_id'].isin(grid_US_profiles)]
-print("Grid PRODA para shape after filter to US", grid_PRODA_para.shape)
+# # Filter to the 'grid profile IDs' inside the US bounding box. TODO Not needed anymore
+# grid_PRODA_para = grid_PRODA_para[grid_PRODA_para['profile_id'].isin(grid_US_profiles)]
+# print("Grid PRODA para shape after filter to US", grid_PRODA_para.shape)
 
 # First create an empty dataframe with the profile IDs in the same order as grid_env_info_US.
 # Then, we attach the PRODA parameters. NOTE: not all profile IDs have PRODA parameters,
@@ -1770,6 +1772,7 @@ def worker(rank, world_size, job_id):
 			# c_reg_loss = np.nan
 			cure_loss = np.nan
 			nam_l2_loss = np.nan
+			nam_entropy_loss = np.nan
 			senn_robustness_loss = np.nan
 			senn_l1_loss = np.nan
 			senn_sparsity = np.nan
@@ -1887,6 +1890,14 @@ def worker(rank, world_size, job_id):
 				assert args.model in ["nam", "nam_joint", "nag"]
 				f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
 				nam_l2_loss = (f_out ** 2).sum() / (f_out.shape[1] * f_out.shape[2])
+			if "nam_entropy" in args.losses:
+				assert args.model in ["nam", "nam_joint"]
+				f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
+				variance_explained = torch.var(f_out, dim=0)  # [n_features, n_outputs]
+				frac_variance_explained = variance_explained / variance_explained.sum(dim=0, keepdim=True)  # [n_features, n_outputs]. For each output, feature fractions sum to 1
+				p_log_p = -frac_variance_explained * torch.log(frac_variance_explained)  # p(x) log p(x) elementwise
+				nam_entropy_loss = p_log_p.sum(dim=0).mean()
+				print("Frac variance", frac_variance_explained[:, 0])
 			if "senn_robustness" in args.losses:
 				model.eval()
 				senn_robustness_loss = model_without_ddp.senn_robustness_loss()
@@ -1913,6 +1924,7 @@ def worker(rank, world_size, job_id):
 						"spectral": spectral_loss,
 						"cure": cure_loss,
 						"nam_l2": nam_l2_loss,
+						"nam_entropy": nam_entropy_loss,
 						"senn_robustness": senn_robustness_loss,
 						"senn_l1": senn_l1_loss,
 						"senn_sparsity": senn_sparsity,
@@ -2019,6 +2031,7 @@ def worker(rank, world_size, job_id):
 				# c_reg_loss = np.nan
 				senn_robustness_loss = np.nan
 				nam_l2_loss = np.nan
+				nam_entropy_loss = np.nan
 				senn_l1_loss = np.nan
 				senn_sparsity = np.nan
 				cure_loss = np.nan
@@ -2104,6 +2117,13 @@ def worker(rank, world_size, job_id):
 					assert args.model in ["nam", "nam_joint", "nag"]
 					f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
 					nam_l2_loss = (f_out ** 2).sum() / (f_out.shape[1] * f_out.shape[2])
+				if "nam_entropy" in args.losses:
+					assert args.model in ["nam", "nam_joint"]
+					f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
+					variance_explained = torch.var(f_out, dim=0)  # [n_features, n_outputs]
+					frac_variance_explained = variance_explained / variance_explained.sum(dim=0, keepdim=True)  # [n_features, n_outputs]. For each output, feature fractions sum to 1
+					p_log_p = -frac_variance_explained * torch.log(frac_variance_explained)  # p(x) log p(x) elementwise
+					nam_entropy_loss = p_log_p.sum(dim=0).mean()
 				if "senn_robustness" in args.losses:
 					senn_robustness_loss = model_without_ddp.senn_robustness_loss()
 				if "senn_l1" in args.losses:
@@ -2124,6 +2144,7 @@ def worker(rank, world_size, job_id):
 							"spectral": spectral_loss,
 							"cure": cure_loss,
 							"nam_l2": nam_l2_loss,
+							"nam_entropy_loss": nam_entropy_loss,
 							"senn_robustness": senn_robustness_loss,
 							"senn_l1": senn_l1_loss,
 							"senn_sparsity": senn_sparsity,

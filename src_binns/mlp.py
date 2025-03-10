@@ -73,9 +73,7 @@ class mlp(torch.nn.Module):
 
 	def forward(self, x):
 		for ii in range(len(self.layers)):
-			old_x = x
-			x = x + self.layers[ii](x)
-			
+			old_x = x			
 			x = self.layers[ii](x)
 			if self.use_bn:
 				x = self.bns[ii](x)
@@ -364,7 +362,7 @@ class mlp_wrapper(nn.Module):
 		# Pass biogeochemical parameters through sigmoid, constraining them between [0, 1]
 		self.unconstrained_params = mlp_output / clamped_temp_sigmoid
 		constrained_params = self.sigmoid(self.unconstrained_params)
-		if PRODA_para is None:
+		if PRODA_para is None or len(self.para_index) == constrained_params.shape[1]:  # If we are predicting all params, don't need to copy PRODA_para
 			 # If PRODA parameters not provided, neural network must output all params
 			if self.vertical_mixing == 'simple_two_intercepts':
 				assert np.array_equal(self.para_index, np.arange(22))
@@ -373,7 +371,7 @@ class mlp_wrapper(nn.Module):
 			predicted_para = constrained_params
 		else:
 			# Initialize predicted parameters to PRODA parameters; then overwrite some with NN predictions
-			predicted_para = PRODA_para
+			predicted_para = PRODA_para.detach().clone()
 			predicted_para[:, self.para_index] = constrained_params
 
 		if predicted_para.requires_grad:

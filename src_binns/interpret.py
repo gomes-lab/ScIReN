@@ -85,7 +85,7 @@ data_dir_output = '../OUTPUT_DATA/'
 # TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250305-233914_NAM_DEBUGGING_lr=1e-03_fold=1_seed=1/opt_nn_20250305-233914_NAM_DEBUGGING_lr=1e-03_fold=1_seed=1.pt"
 
 # NAM Joint (one model predicts everything, given feature). TODO RENAME
-TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250306-163707_NAMJOINT_lr=1e-03_fold=1_seed=1/opt_nn_20250306-163707_NAMJOINT_lr=1e-03_fold=1_seed=1.pt"
+TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250309-182521_NAMJOINT_lr=1e-03_fold=1_seed=1/opt_nn_20250309-182521_NAMJOINT_lr=1e-03_fold=1_seed=1.pt"
 
 # Original BINN
 # TRAINED_MODEL_PATH = 
@@ -810,14 +810,15 @@ grid_env_info = grid_env_info[var4nn]
 grid_env_info["original_lon"] = original_lons_grid
 grid_env_info["original_lat"] = original_lats_grid
 
-# Exclude all rows with nan values
-grid_env_info = grid_env_info.dropna(axis=0, how='any')
+# # Exclude all rows with nan values
+# grid_env_info = grid_env_info.dropna(axis=0, how='any')
 
-# Select the rows with lon and lat values within continental US
+# Select the rows with lon and lat values within continental US (and not nan)
 grid_US_mask = (grid_env_info["original_lon"] >= -124.763068) \
 			& (grid_env_info["original_lon"] <= -66.949895) \
 			& (grid_env_info["original_lat"] >= 24.521694) \
-			& (grid_env_info["original_lat"] <= 49.384358)  # True if grid cell is within US bounding box
+			& (grid_env_info["original_lat"] <= 49.384358) \
+			& (~grid_env_info.isnull().any(axis=1))  # True if grid cell is within US bounding box and has no nans
 grid_US_profiles = np.where(grid_US_mask)[0]  # Indices (zero-based 'grid profile IDs') of grid cells in US, used later
 grid_env_info_US = grid_env_info[grid_US_mask]
 grid_env_info_num = grid_env_info_US.shape[0]
@@ -947,9 +948,9 @@ grid_PRODA_para['profile_id'] = grid_PRODA_para['profile_id'] - 1
 grid_PRODA_para['profile_id'] = grid_PRODA_para['profile_id'].astype(int)
 print("Original grid PRODA para shape", grid_PRODA_para.shape)
 
-# Filter to the 'grid profile IDs' inside the US bounding box
-grid_PRODA_para = grid_PRODA_para[grid_PRODA_para['profile_id'].isin(grid_US_profiles)]
-print("Grid PRODA para shape after filter to US", grid_PRODA_para.shape)
+# # Filter to the 'grid profile IDs' inside the US bounding box. TODO Not needed anymore
+# grid_PRODA_para = grid_PRODA_para[grid_PRODA_para['profile_id'].isin(grid_US_profiles)]
+# print("Grid PRODA para shape after filter to US", grid_PRODA_para.shape)
 
 # First create an empty dataframe with the profile IDs in the same order as grid_env_info_US.
 # Then, we attach the PRODA parameters. NOTE: not all profile IDs have PRODA parameters,
@@ -1120,7 +1121,6 @@ with torch.no_grad():
 			for row, feat_idx in enumerate(important_feature_idx):  # Important features
 				feat_name = NAM_FEATURE_ORDER[feat_idx]
 				ax = axeslist[row, para_idx]
-				print("Para idx", para_idx, "Feat idx", feat_idx)
 				if feat_idx < len(model.non_categorical_indices):  # Numeric feature
 					if args.model == "nam":  # Separate model for each input-output pair
 						feat_nn = model.mlp.feature_nns[feat_idx * len(para_names) + para_idx].cpu()
