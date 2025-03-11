@@ -85,10 +85,13 @@ data_dir_output = '../OUTPUT_DATA/'
 # TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250305-233914_NAM_DEBUGGING_lr=1e-03_fold=1_seed=1/opt_nn_20250305-233914_NAM_DEBUGGING_lr=1e-03_fold=1_seed=1.pt"
 
 # NAM Joint (one model predicts everything, given feature). TODO RENAME
-TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250309-182521_NAMJOINT_lr=1e-03_fold=1_seed=1/opt_nn_20250309-182521_NAMJOINT_lr=1e-03_fold=1_seed=1.pt"
+# TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250309-182521_NAMJOINT_lr=1e-03_fold=1_seed=1/opt_nn_20250309-182521_NAMJOINT_lr=1e-03_fold=1_seed=1.pt"
 
-# Original BINN
-# TRAINED_MODEL_PATH = 
+# BINN-Synthetic 
+TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250310-171603_BINN_SYNTHETIC_lr=1e-02_fold=1_seed=1/opt_nn_20250310-171603_BINN_SYNTHETIC_lr=1e-02_fold=1_seed=1.pt"
+
+# Original BINN (hardsigmoid)
+
 PLOT_DIR = os.path.join(os.path.dirname(TRAINED_MODEL_PATH), 'visualizations')
 
 ############################################################
@@ -1111,7 +1114,7 @@ with torch.no_grad():
 										title="Feature contributions")
 
 		# Loop through each output parameter. Plot shape function of 5 most influential features
-		N_ROWS = len(NAM_FEATURE_ORDER)
+		N_ROWS = 10
 		fig, axeslist = plt.subplots(N_ROWS, len(para_names), figsize=(5*len(para_names), 2*N_ROWS))
 		for para_idx in range(len(para_names)):
 			important_feature_idx = torch.topk(variances[:, para_idx], N_ROWS).indices

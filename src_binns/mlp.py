@@ -73,14 +73,14 @@ class mlp(torch.nn.Module):
 
 	def forward(self, x):
 		for ii in range(len(self.layers)):
-			old_x = x			
+			old_x = x		
 			x = self.layers[ii](x)
+			if self.residual and old_x.shape == x.shape:  # Residual connection. Only around linear, TODO maybe it should wrap aroudn linear/activaton/linear
+				x += old_x
+
 			if self.use_bn:
 				x = self.bns[ii](x)
 			x = self.act(x)
-
-			if self.residual and old_x.shape == x.shape:  # Residual connection around linear, batchnorm, activation
-				x += old_x
 
 			if self.dropout_prob > 0:
 				x = self.dropout(x)

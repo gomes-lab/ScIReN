@@ -266,7 +266,7 @@ def plot_matrix(matrix, row_labels, col_labels, filename, title):
     if torch.is_tensor(matrix):
         matrix = matrix.detach().cpu().numpy()
     vmax = np.max(np.abs(matrix))
-    fig, ax = plt.subplots(figsize=(0.3*len(col_labels)+3, 0.3*len(row_labels)+3))
+    fig, ax = plt.subplots(figsize=(0.5*len(col_labels)+3, 0.5*len(row_labels)+3))
     ax.imshow(matrix, cmap="RdBu", vmin=-vmax, vmax=vmax)
 
     # Show all ticks and label them with the respective list entries

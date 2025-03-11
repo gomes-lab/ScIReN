@@ -805,52 +805,64 @@ current_PRODA_para = np.clip(current_PRODA_para, a_min=0, a_max=1)
 #############################
 # PRODA soc simulation data #
 #############################
-# Initialize numpy array for PRODA soc simulation data
-PRODA_soc_simu = np.ones((len(current_data_profile_id), 200))*np.nan
+# Check if synthetic labels were already precomputed and saved
+if args.representative_sample:
+	synthetic_label_path = os.path.join(data_dir_input, "synthetic_labels/synthetic_soc_representative.npy")
+elif args.n_datapoints != -1:
+	synthetic_label_path = os.path.join(data_dir_input, f"synthetic_labels/synthetic_soc_datapoints={args.n_datapoints}_seed={args.seed}.npy")
+else:
+	synthetic_label_path = os.path.join(data_dir_input, "synthetic_labels/synthetic_soc_full.npy")
 
-if args.synthetic_labels:
-	start_time = time.time()
-	for i in range(len(current_data_profile_id)):
-		# Get the current profile's data
-		current_data_x_simu = current_data_x[i, :, :, :]
-		current_data_z_simu = current_data_z[i, :]
-		current_PRODA_para_simu = current_PRODA_para[i, :]
+if os.path.exists(synthetic_label_path):  # If synthetic labels available, load them
+	PRODA_soc_simu = torch.load(synthetic_label_path)
+else:  # Otherwise compute synthetic labels from the PRODA parameters
+	PRODA_soc_simu = np.ones((len(current_data_profile_id), 200))*np.nan
 
-		# Convert the data to tensor, reshape to shape [1, 60, 12, 13] and [1, 21]
-		current_data_x_simu = torch.tensor(current_data_x_simu, dtype=torch.float32).unsqueeze(0)
-		current_data_z_simu = torch.tensor(current_data_z_simu, dtype=torch.float32).unsqueeze(0)
-		current_PRODA_para_simu = torch.tensor(current_PRODA_para_simu, dtype=torch.float32).unsqueeze(0)
+	if args.synthetic_labels:
 
-		# Run the simulation
-		PRODA_soc_simu[i, :] = fun_model_simu(current_PRODA_para_simu, current_data_x_simu, current_data_z_simu, args.vertical_mixing, args.vectorized)
+		start_time = time.time()
+		for i in range(len(current_data_profile_id)):
+			# Get the current profile's data
+			current_data_x_simu = current_data_x[i, :, :, :]
+			current_data_z_simu = current_data_z[i, :]
+			current_PRODA_para_simu = current_PRODA_para[i, :]
 
-		# If any simulation is over 1,000,000 gC/m2, set it to nan
-		if np.any(PRODA_soc_simu[i, :] > 1000000):
-			print(">>>>>>>>>>>>>>>>>>>>>>>> Extreme simulated SOC. Coordinates", current_data_c[i, :])
-			print("PRODA params", current_PRODA_para[i, :])
-			valid_loc = ~np.isnan(current_data_z[i, :])
-			print("Depths", current_data_z[i, valid_loc])
-			print("SOC simu", PRODA_soc_simu[i, valid_loc])
-			print("SOC obs", current_data_y[i, valid_loc])
+			# Convert the data to tensor, reshape to shape [1, 60, 12, 13] and [1, 21]
+			current_data_x_simu = torch.tensor(current_data_x_simu, dtype=torch.float32).unsqueeze(0)
+			current_data_z_simu = torch.tensor(current_data_z_simu, dtype=torch.float32).unsqueeze(0)
+			current_PRODA_para_simu = torch.tensor(current_PRODA_para_simu, dtype=torch.float32).unsqueeze(0)
 
-	# Drop the profiles with all nan values
-	valid_profile_loc = np.where(np.all(np.isnan(PRODA_soc_simu), axis=1) == False)[0]
-	current_data_y = current_data_y[valid_profile_loc, :]
-	current_data_z = current_data_z[valid_profile_loc, :]
-	current_data_c = current_data_c[valid_profile_loc, :]
-	current_data_x = current_data_x[valid_profile_loc, :, :, :]
-	current_data_profile_id = current_data_profile_id[valid_profile_loc]
-	current_PRODA_para = current_PRODA_para[valid_profile_loc, :]
-	PRODA_soc_simu = PRODA_soc_simu[valid_profile_loc, :]
-	obs_upper_depth_matrix = obs_upper_depth_matrix[valid_profile_loc, :]
-	obs_lower_depth_matrix = obs_lower_depth_matrix[valid_profile_loc, :]
+			# Run the simulation
+			PRODA_soc_simu[i, :] = fun_model_simu(current_PRODA_para_simu, current_data_x_simu, current_data_z_simu, args.vertical_mixing, args.vectorized)
 
-	print("Time taken to run PRODA soc simu", time.time() - start_time)
-	print("Shape of PRODA soc simu", PRODA_soc_simu.shape)
-	print("Shape of current data x", current_data_x.shape)
+			# If any simulation is over 1,000,000 gC/m2, set it to nan
+			if np.any(PRODA_soc_simu[i, :] > 1000000):
+				print(">>>>>>>>>>>>>>>>>>>>>>>> Extreme simulated SOC. Coordinates", current_data_c[i, :])
+				print("PRODA params", current_PRODA_para[i, :])
+				valid_loc = ~np.isnan(current_data_z[i, :])
+				print("Depths", current_data_z[i, valid_loc])
+				print("SOC simu", PRODA_soc_simu[i, valid_loc])
+				print("SOC obs", current_data_y[i, valid_loc])
 
-	# If using synthetic labels, treat the simulated SOC as the true labels
-	current_data_y = PRODA_soc_simu
+		# Drop the profiles with all nan values
+		valid_profile_loc = np.where(np.all(np.isnan(PRODA_soc_simu), axis=1) == False)[0]
+		current_data_y = current_data_y[valid_profile_loc, :]
+		current_data_z = current_data_z[valid_profile_loc, :]
+		current_data_c = current_data_c[valid_profile_loc, :]
+		current_data_x = current_data_x[valid_profile_loc, :, :, :]
+		current_data_profile_id = current_data_profile_id[valid_profile_loc]
+		current_PRODA_para = current_PRODA_para[valid_profile_loc, :]
+		PRODA_soc_simu = PRODA_soc_simu[valid_profile_loc, :]
+		obs_upper_depth_matrix = obs_upper_depth_matrix[valid_profile_loc, :]
+		obs_lower_depth_matrix = obs_lower_depth_matrix[valid_profile_loc, :]
+
+		print("Time taken to run PRODA soc simu", time.time() - start_time)
+		print("Shape of PRODA soc simu", PRODA_soc_simu.shape)
+		print("Shape of current data x", current_data_x.shape)
+
+		# If using synthetic labels, treat the simulated SOC as the true labels
+		current_data_y = PRODA_soc_simu
+		torch.save(PRODA_soc_simu, synthetic_label_path)
 
 
 ###############################################################
@@ -1347,7 +1359,7 @@ def ddp_setup(rank, world_size):
 	os.environ['RANK'] = str(rank)
 	os.environ['WORLD_SIZE'] = str(world_size)
 	os.environ["MASTER_ADDR"] = "localhost"
-	os.environ["MASTER_PORT"] = "12356"
+	os.environ["MASTER_PORT"] = "12353"
 
 	if torch.cuda.is_available():
 		# Set device to the appropriate GPU
@@ -1368,6 +1380,7 @@ def ddp_setup(rank, world_size):
 
 # Start training
 def worker(rank, world_size, job_id):
+	print("Start worker", rank, world_size, job_id, flush=True)
 
 	# Filename to store loss records and visualizations
 	nn_training_name = job_id + '_' + model_name
@@ -1600,6 +1613,7 @@ def worker(rank, world_size, job_id):
 	# Data loaders with DistributedSampler
 	train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)
 	val_loader = DataLoader(val_dataset, batch_size=args.batch_size, sampler=val_sampler)
+	print("Rank", rank, "DataLoader created", flush=True)
 
 	# training and validation loop
 	num_epoch = args.n_epochs
@@ -1673,6 +1687,7 @@ def worker(rank, world_size, job_id):
 	start_time = time.time()
 	time_limit_exceeded = False
 	whether_break = torch.tensor(0).to(device)
+	print("Rank", rank, "About to start forloop", flush=True)
 
 	for iepoch in range(start_epoch, num_epoch):
 		epoch_start = time.time()
@@ -2238,7 +2253,7 @@ def worker(rank, world_size, job_id):
 		all_val_pred_soc = torch.cat(all_val_pred_soc, dim=0)
 		all_val_true_soc = torch.cat(all_val_true_soc, dim=0)
 
-		if args.plot and (iepoch % 50 == 0):
+		if args.plot and (iepoch % 50 == 1):
 			print("Creating plots", datetime.now())
 
 			# Estimate max examples per rank. Ok for some to be nan
@@ -2254,7 +2269,7 @@ def worker(rank, world_size, job_id):
 				padded = torch.full([new_length, tensor.shape[1]], torch.nan, device=device)
 				padded[0:tensor.shape[0]] = tensor
 				return padded
-			
+
 			all_train_pred_para = pad_tensor(all_train_pred_para, train_examples_per_rank, device)
 			all_train_proda_para = pad_tensor(all_train_proda_para, train_examples_per_rank, device)
 			all_train_coords = pad_tensor(all_train_coords, train_examples_per_rank, device)
@@ -2436,6 +2451,7 @@ def worker(rank, world_size, job_id):
 			print(f'{datetime.now()} - Epoch {iepoch} Rank {rank} - Train NSE: {train_NSE}, validation NSE: {val_NSE}, time: {train_time:.2f}', flush=True)
 			print(f'Train losses ({all_train_pred_soc.shape[0]} examples): {train_losses_epoch}')
 			print(f'Validation losses ({all_val_pred_soc.shape[0]} examples): {val_losses_epoch}')
+			sys.stdout.flush()
 
 			# Relobralo update
 			if args.loss_weighting == "relobralo" and iepoch >= 1:
