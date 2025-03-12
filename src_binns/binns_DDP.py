@@ -808,14 +808,14 @@ current_PRODA_para = np.clip(current_PRODA_para, a_min=0, a_max=1)
 # Check if synthetic labels were already precomputed and saved
 os.makedirs(os.path.join(data_dir_input, "synthetic_labels"), exist_ok=True)
 if args.representative_sample:
-	synthetic_label_path = os.path.join(data_dir_input, "synthetic_labels/synthetic_soc_representative.npz")
+	synthetic_label_path = os.path.join(data_dir_input, "synthetic_labels/synthetic_soc_representative.npy")
 elif args.n_datapoints != -1:
-	synthetic_label_path = os.path.join(data_dir_input, f"synthetic_labels/synthetic_soc_datapoints={args.n_datapoints}_seed={args.seed}.npz")
+	synthetic_label_path = os.path.join(data_dir_input, f"synthetic_labels/synthetic_soc_datapoints={args.n_datapoints}_seed={args.seed}.npy")
 else:
-	synthetic_label_path = os.path.join(data_dir_input, "synthetic_labels/synthetic_soc_full.npz")
+	synthetic_label_path = os.path.join(data_dir_input, "synthetic_labels/synthetic_soc_full.npy")
 
 if os.path.exists(synthetic_label_path):  # If synthetic labels available, load them
-	PRODA_soc_simu = torch.tensor(np.load(synthetic_label_path), dtype=torch.float32)
+	PRODA_soc_simu = np.load(synthetic_label_path)
 else:  # Otherwise compute synthetic labels from the PRODA parameters
 	PRODA_soc_simu = np.ones((len(current_data_profile_id), 200))*np.nan
 
@@ -863,7 +863,7 @@ else:  # Otherwise compute synthetic labels from the PRODA parameters
 
 		# If using synthetic labels, treat the simulated SOC as the true labels
 		current_data_y = PRODA_soc_simu
-		np.save(synthetic_label_path, PRODA_soc_simu.detach().cpu().numpy())
+		np.save(synthetic_label_path, PRODA_soc_simu)
 
 
 ###############################################################
