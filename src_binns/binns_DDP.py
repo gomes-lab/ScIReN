@@ -806,6 +806,7 @@ current_PRODA_para = np.clip(current_PRODA_para, a_min=0, a_max=1)
 # PRODA soc simulation data #
 #############################
 # Check if synthetic labels were already precomputed and saved
+os.makedirs(os.path.join(data_dir_input, "synthetic_labels"), exist_ok=True)
 if args.representative_sample:
 	synthetic_label_path = os.path.join(data_dir_input, "synthetic_labels/synthetic_soc_representative.npy")
 elif args.n_datapoints != -1:
@@ -1359,7 +1360,7 @@ def ddp_setup(rank, world_size):
 	os.environ['RANK'] = str(rank)
 	os.environ['WORLD_SIZE'] = str(world_size)
 	os.environ["MASTER_ADDR"] = "localhost"
-	os.environ["MASTER_PORT"] = "12353"
+	os.environ["MASTER_PORT"] = "12357"
 
 	if torch.cuda.is_available():
 		# Set device to the appropriate GPU
