@@ -59,7 +59,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import multiprocessing
-from multiprocessing import Process
+from torch.multiprocessing import Process  # TODO CHECK
 from scipy.io import loadmat
 import netCDF4 as ncread 
 import mat73
@@ -1381,7 +1381,7 @@ def ddp_setup(rank, world_size):
 
 # Start training
 def worker(rank, world_size, job_id):
-	print("Start worker", rank, world_size, job_id, flush=True)
+	# print("Start worker", rank, world_size, job_id, flush=True)
 
 	# Filename to store loss records and visualizations
 	nn_training_name = job_id + '_' + model_name
@@ -1550,16 +1550,21 @@ def worker(rank, world_size, job_id):
 	else:
 		# Create model
 		model = model_class(**model_kwargs).to(device)
+	if rank < 3:
+		print("Rank", rank, "Created model")
 
 	# Create distributed version of the model
 	if args.use_ddp == 1:
 		if torch.cuda.is_available():
 			model = DDP(model, device_ids=[device])
-		else:  # CPU only 
+		else:  # CPU only
+			print("DDP model with cpu")
 			model = DDP(model)
 		model_without_ddp = model.module
 	else:
 		model_without_ddp = model
+	if rank < 3:
+		print("Rank", rank, "distributed model")
 
 	# Optimizer
 	if args.optimizer == "AdamW":
@@ -1614,7 +1619,8 @@ def worker(rank, world_size, job_id):
 	# Data loaders with DistributedSampler
 	train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)
 	val_loader = DataLoader(val_dataset, batch_size=args.batch_size, sampler=val_sampler)
-	print("Rank", rank, "DataLoader created", flush=True)
+	if rank < 3:
+		print("Rank", rank, "DataLoader created", flush=True)
 
 	# training and validation loop
 	num_epoch = args.n_epochs
@@ -1651,13 +1657,16 @@ def worker(rank, world_size, job_id):
 			val_pred_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, device=device, dtype=torch.float32)
 			val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, device=device, dtype=torch.float32)
 			# model.eval()  # TODO Can't really use eval mode before model is trained, since batchnorm stats are not there yet
+			print("Rank 0, right before val model", flush=True)
 			with torch.no_grad():
 				temp_SOC, temp_pred_para = model(val_x, val_z, val_c, whether_predict=0, PRODA_para=val_proda_para.to(device))
+			print("Rank 0, right after val model", flush=True)
 			val_pred_soc[val_profile_id, :] = temp_SOC.detach()
 			val_pred_para[val_profile_id, :] = temp_pred_para.detach()
+			print("Rank 0 before writing", flush=True)
 			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_soc.detach().cpu().numpy(), delimiter = ',')
 			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_para.detach().cpu().numpy(), delimiter = ',')
-
+			print("Rank 0 after writing", flush=True)
 	else: 
 		# If resuming from a checkpoint, load loss history
 		train_loss_history = checkpoint_worker['train_loss_history']
@@ -1685,10 +1694,12 @@ def worker(rank, world_size, job_id):
 			print(model)
 
 	# record start time
+	dist.barrier()
 	start_time = time.time()
 	time_limit_exceeded = False
 	whether_break = torch.tensor(0).to(device)
-	print("Rank", rank, "About to start forloop", flush=True)
+	if rank < 3:
+		print("Rank", rank, "About to start forloop", flush=True)
 
 	for iepoch in range(start_epoch, num_epoch):
 		epoch_start = time.time()
@@ -2253,8 +2264,10 @@ def worker(rank, world_size, job_id):
 		all_val_z = torch.cat(all_val_z, dim=0)
 		all_val_pred_soc = torch.cat(all_val_pred_soc, dim=0)
 		all_val_true_soc = torch.cat(all_val_true_soc, dim=0)
+		if rank < 3:
+			print(rank, "Concatenated", datetime.now())
 
-		if args.plot and (iepoch % 50 == 1):
+		if args.plot and (iepoch % 50 == 0):
 			print("Creating plots", datetime.now())
 
 			# Estimate max examples per rank. Ok for some to be nan
@@ -3439,6 +3452,8 @@ if __name__ == '__main__':
 		assert world_size == len(os.environ["CUDA_VISIBLE_DEVICES"].split(",")), "If using GPU: world_size (num_CPU) must equal number of GPUs in CUDA_VISIBLE_DEVICES"
 		import torch.multiprocessing as mp
 		mp.set_start_method('spawn', force=True)
+	import torch.multiprocessing as mp  # TODO
+	mp.set_start_method('spawn', force=True)
 
 	# Create the processes
 	for rank in range(world_size):
