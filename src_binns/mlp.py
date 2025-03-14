@@ -6,7 +6,7 @@ from fun_matrix_clm5_vectorized import fun_model_simu, fun_model_prediction
 from pe_gcn_model import GCN, PEGCN, GridCellSpatialRelationEncoder, SpatialSmoother
 from torch_geometric.nn import GCNConv, GATConv, SimpleConv, knn_graph
 from torch_geometric.utils import get_laplacian, to_dense_adj, to_torch_coo_tensor
-from misc_utils import get_activation, get_param_constraint, select_depth
+import misc_utils
 from spatial_utils import *
 import visualization_utils
 
@@ -39,7 +39,7 @@ class mlp(torch.nn.Module):
 			if use_bn:
 				self.bns.append(torch.nn.BatchNorm1d(dims[ii+1]))
 		self.layer_output = torch.nn.Linear(dims[-2], dims[-1])
-		self.act = get_activation(activation)
+		self.act = misc_utils.get_activation(activation)
 
 		# Initialize linear layers
 		if init == "xavier_uniform":
@@ -288,7 +288,7 @@ class mlp_wrapper(nn.Module):
 			raise ValueError("Unsupported base_model")
 
 		# Parameter constraint
-		self.sigmoid = get_param_constraint(param_constraint)
+		self.sigmoid = misc_utils.get_param_constraint(param_constraint)
 
 		# If using sigmoid: the "temperature" we divide by before the sigmoid
 		self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)
@@ -303,7 +303,7 @@ class mlp_wrapper(nn.Module):
 
 
 	def forward(self, input_var, wosis_depth, coords, whether_predict, PRODA_para=None,
-			 	return_spatial_embedding=False, one_param_only=False):
+			 	return_spatial_embedding=False, one_param_only=False, ignore_input=False):
 
 		predictor = input_var[:, :, 0, 0]
 		forcing = input_var[:, :, :, :]
@@ -551,6 +551,43 @@ class mlp_wrapper(nn.Module):
 			emb.zero_grad(set_to_none=False)
 
 
+class ConstantParameters(nn.Module):
+	"""
+	Finds single set of parameters that works best across all sites.
+	Tries to use the same param_constraint as down the line.
+	"""
+	def __init__(self, num_params, vertical_mixing, param_constraint='sigmoid', min_temp=10, max_temp=109):
+		super().__init__()
+
+		# Unconstrained params: learnable tensor
+		self.best_params = torch.nn.Parameter(torch.zeros((num_params)), requires_grad=True)
+
+		# Parameter constraint
+		self.sigmoid = misc_utils.get_param_constraint(param_constraint)
+
+		# If using sigmoid: the "temperature" we divide by before the sigmoid
+		self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)
+		self.min_temp = min_temp
+		self.max_temp = max_temp
+		self.vertical_mixing = vertical_mixing
+
+
+	def forward(self, input_var, wosis_depth, *args, **kwargs):
+		forcing = input_var[:, :, :, :]
+		obs_depth = wosis_depth
+
+		# Duplicate the constant parameters for each example (site)
+		self.unconstrained_params = self.best_params.repeat(input_var.shape[0], 1)
+
+		# Pass parameters through param constraint
+		clamped_temp_sigmoid = self.min_temp + (self.max_temp - self.min_temp) * F.sigmoid(self.temp_sigmoid)
+		h5 = self.sigmoid(self.unconstrained_params / clamped_temp_sigmoid)
+
+		# print("forward_ignoring_input Current params", h5[0, :])
+		simu_soc = fun_model_simu(h5, forcing, obs_depth, self.vertical_mixing)  # [batch, n_depths]
+		return simu_soc, h5
+
+
 #---------------------------------------------------
 # Pure NN without process-based model
 #---------------------------------------------------
@@ -642,7 +679,7 @@ class nn_only(nn.Module):
 		else:
 			raise ValueError("Unsupported base_model")
 
-		self.act = get_activation(activation)
+		self.act = misc_utils.get_activation(activation)
 
 		# Final layer: "params" -> SOC pools
 		self.final_layer = nn.Linear(self.num_params, self.output_dim)
@@ -718,7 +755,7 @@ class nn_only(nn.Module):
 		if whether_predict == 1:
 			return pred_output, self.sigmoid(pred_para)
 		else:
-			simu_soc = select_depth(pred_output, forcing, obs_depth)
+			simu_soc = misc_utils.select_depth(pred_output, forcing, obs_depth)
 			return simu_soc, self.sigmoid(pred_para)
 
 
@@ -843,7 +880,7 @@ class BINN_Hybrid(nn.Module):
 
 		# sigmoid parameter
 		self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)
-		self.sigmoid = get_param_constraint(param_constraint)
+		self.sigmoid = misc_utils.get_param_constraint(param_constraint)
 
 		# LibMTL specific
 		self.rep_grad = rep_grad  # Whether to compute gradients w.r.t. parameters as well
@@ -1005,11 +1042,11 @@ class GNN_BINN(nn.Module):
 
 		# Dropout/activation
 		self.dropout = nn.Dropout(dropout_prob)
-		self.act = get_activation(activation)
+		self.act = misc_utils.get_activation(activation)
 
 		# sigmoid parameter
 		self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)
-		self.sigmoid = get_param_constraint(param_constraint)
+		self.sigmoid = misc_utils.get_param_constraint(param_constraint)
 
 		# LibMTL specific
 		self.rep_grad = rep_grad  # Whether to compute gradients w.r.t. parameters as well
@@ -1193,7 +1230,7 @@ class Spatial_BINN(nn.Module):
 
 		# sigmoid parameter
 		self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)
-		self.sigmoid = get_param_constraint(param_constraint)
+		self.sigmoid = misc_utils.get_param_constraint(param_constraint)
 
 		# LibMTL specific
 		self.rep_grad = rep_grad  # Whether to compute gradients w.r.t. parameters as well

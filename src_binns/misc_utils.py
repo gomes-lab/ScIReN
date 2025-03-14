@@ -2,6 +2,7 @@ import collections
 import torch
 import torch.nn
 import numpy as np
+from mlp import GNN_BINN, Spatial_BINN, mlp_wrapper, nn_only, BINN_Hybrid
 
 
 @torch.no_grad()
@@ -260,3 +261,139 @@ def get_param_constraint(param_constraint):
 		return torch.nn.Identity()
 	else:
 		raise ValueError("Invalid param_constraint")
+
+
+def get_model(args, var4nn, var_idx_to_emb, device, para_index, train_x, train_y):
+	"""
+	Given the commandline args, returns the correct model class and a dict of kwargs
+	"""
+	if args.model in ["new_mlp", "lipmlp", "senn", "nam", "nam_joint", "nag"]:
+		model_class = mlp_wrapper
+		model_kwargs = {"input_vars": len(var4nn),
+						"var_idx_to_emb": var_idx_to_emb,
+						"vertical_mixing": args.vertical_mixing,
+						"vectorized": args.vectorized,
+						"pos_enc": args.pos_enc,
+						"base_model": args.model,
+						"one_hot": (args.categorical == "one_hot"),
+						"use_bn": args.use_bn,
+						"dropout_prob": args.dropout_prob,
+						"activation": args.activation,
+						"param_constraint": args.param_constraint,  
+						"losses": args.losses,
+						"device": device,
+						"min_temp": args.min_temp,
+						"max_temp": args.max_temp,
+						"init": args.init,
+						"width": args.width,
+						"num_layers": args.num_layers,
+						"residual": args.residual,
+						"para_index": para_index,
+						"feature_dropout": args.feature_dropout}
+
+	elif args.model == 'binn_hybrid':
+		model_class = BINN_Hybrid
+		model_kwargs = {"input_vars": len(var4nn),
+						"var_idx_to_emb": var_idx_to_emb,
+						"vertical_mixing": args.vertical_mixing,
+						"pos_enc": args.pos_enc,
+						"base_model": "new_mlp",
+						"one_hot": (args.categorical == "one_hot"),
+						"use_bn": args.use_bn,
+						"dropout_prob": args.dropout_prob,
+						"activation": args.activation,
+						"param_constraint": args.param_constraint,
+						"losses": args.losses,
+						"device": device}
+
+	elif args.model == 'nn_only':
+		model_class = nn_only
+
+		# Calculate mean/std of Y
+		if args.standardize_output:
+			output_values = train_y.flatten()[~torch.isnan(train_y.flatten())]
+			output_mean = torch.mean(output_values)
+			output_std = torch.std(output_values)
+		else:
+			output_mean, output_std = None, None
+		print("NN only, output_mean", output_mean, "output_std", output_std)
+
+		model_kwargs = {"input_vars": len(var4nn),
+						"var_idx_to_emb": var_idx_to_emb,
+						"pos_enc": args.pos_enc,
+						"output_dim": 140,
+						"base_model": "new_mlp",
+						"one_hot": (args.categorical == "one_hot"),
+						"use_bn": args.use_bn,
+						"dropout_prob": args.dropout_prob,
+						"activation": args.activation,
+						"losses": args.losses,
+						"device": device,
+						"output_mean": output_mean,
+						"output_std": output_std,
+						"init": args.init,
+						"width": args.width,
+						"num_layers": args.num_layers,
+						"residual": args.residual}
+
+	elif args.model == 'gnn':
+		model_class = GNN_BINN
+		model_kwargs = {"input_vars": len(var4nn),
+						"var_idx_to_emb": var_idx_to_emb,
+						"vertical_mixing": args.vertical_mixing,
+						"pos_enc": args.pos_enc,
+						"k": args.k,
+						"one_hot": (args.categorical == "one_hot"),
+						"use_bn": args.use_bn,
+						"dropout_prob": args.dropout_prob,
+						"activation": args.activation,
+						"param_constraint": args.param_constraint,
+						"losses": args.losses,
+						"graph_conv": args.graph_conv,
+						"device": device}
+	elif args.model == 'spatial':
+		model_class = Spatial_BINN
+		model_kwargs = {"input_vars": len(var4nn),
+						"var_idx_to_emb": var_idx_to_emb,
+						"vertical_mixing": args.vertical_mixing,
+						"pos_enc": args.pos_enc,
+						"k": args.k,
+						"one_hot": (args.categorical == "one_hot"),
+						"use_bn": args.use_bn,
+						"dropout_prob": args.dropout_prob,
+						"activation": args.activation,
+						"param_constraint": args.param_constraint,
+						"losses": args.losses,
+						"device": device}
+	else:
+		raise ValueError("Invalid args.model")
+
+	# Standardize input if requested
+	if args.standardize_input:
+		model_kwargs["train_x"] = train_x.to(device)
+	return model_class, model_kwargs
+
+
+def get_optimizer_and_scheduler(model, args):
+	# Optimizer
+	if args.optimizer == "AdamW":
+		optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+	elif args.optimizer == "SGD":
+		optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+	else:
+		raise ValueError("Invalid args.optimizer")
+
+	# If desired, add a learning rate scheduler that decays the learning rate throughout training
+	if args.scheduler == "reduce_on_plateau":
+		scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)  #, mode="max")
+	elif args.scheduler == "step":
+		scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
+	elif args.scheduler == "cosine":
+		scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+	elif args.scheduler == "cosine_restarts":
+		scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=20)
+	elif args.scheduler == "none":
+		scheduler = None
+	else:
+		raise ValueError("Invalid args.scheduler")
+	return optimizer, scheduler

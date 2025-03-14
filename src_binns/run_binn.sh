@@ -21,13 +21,15 @@ do
             python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
                 --lr $LR --optimizer AdamW --weight_decay 0 \
                 --seed $SEED --init default --min_temp 1 --max_temp 1 \
-                --n_epochs 1 --patience 100 --model new_mlp --vertical_mixing original --vectorized yes \
-                --activation leaky_relu --use_bn --categorical embedding --embed_dim 5 --pos_enc none \
+                --n_epochs 200 --patience 100 --model new_mlp --vertical_mixing original --vectorized yes \
+                --activation leaky_relu --use_bn --categorical one_hot --pos_enc none \
                 --losses smooth_l1 param_reg --loss_weighting manual --lambdas 1 100 \
-                --num_CPU 5 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_EXAMPLE" --plot
+                --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "DEBUG"  # "BINN_EXAMPLE" --plot
         done
     done
 done
+exit
+
 
 # Reproducing the BINN paper
 for LR in 1e-2

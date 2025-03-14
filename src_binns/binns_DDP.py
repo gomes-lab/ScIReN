@@ -14,12 +14,10 @@ import subprocess
 import argparse
 from collections import OrderedDict
 import misc_utils
-from mlp import mlp_wrapper
 from sklearn.model_selection import KFold
-
-from mlp import GNN_BINN, Spatial_BINN, mlp_wrapper, nn_only, BINN_Hybrid
-from torch.optim.swa_utils import AveragedModel, SWALR
+from mlp import ConstantParameters
 from pe_gcn_model import GridCellSpatialRelationEncoder
+from torch.optim.swa_utils import AveragedModel, SWALR
 from spatial_utils import *
 from losses import binns_loss, compute_param_matching_loss, compute_param_violation_loss
 import visualization_utils
@@ -59,7 +57,8 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import multiprocessing
-from torch.multiprocessing import Process  # TODO CHECK
+# from torch.multiprocessing import Process  # TODO CHECK
+from multiprocessing import Process
 from scipy.io import loadmat
 import netCDF4 as ncread 
 import mat73
@@ -1010,9 +1009,6 @@ if args.whether_resume == 0:
 			test_loc = np.flatnonzero(np.isin(cell_id, test_cells))
 			val_loc = np.flatnonzero(np.isin(cell_id, val_cells))
 			train_loc = np.setdiff1d(np.setdiff1d(np.arange(0, n_datapoints), test_loc), val_loc)
-			for i in range(args.n_folds):
-				fold_cells = s[i::args.n_folds]
-				print("Fold", i, "Examples", len(np.flatnonzero(np.isin(cell_id, fold_cells))))
 		else:
 			raise ValueError("Invalid value of --split")
 
@@ -1360,8 +1356,7 @@ def ddp_setup(rank, world_size):
 	os.environ['RANK'] = str(rank)
 	os.environ['WORLD_SIZE'] = str(world_size)
 	os.environ["MASTER_ADDR"] = "localhost"
-	os.environ["MASTER_PORT"] = "12357"
-
+	os.environ["MASTER_PORT"] = "12349"
 	if torch.cuda.is_available():
 		# Set device to the appropriate GPU
 		gpu = int(os.environ["CUDA_VISIBLE_DEVICES"].split(",")[rank])
@@ -1422,110 +1417,22 @@ def worker(rank, world_size, job_id):
 
 	# TODO Not sure if "global model" is correct
 	# global model
-	if args.model in ["new_mlp", "lipmlp", "senn", "nam", "nam_joint", "nag"]:
-		model_class = mlp_wrapper
-		model_kwargs = {"input_vars": len(var4nn),
-						"var_idx_to_emb": var_idx_to_emb,
-						"vertical_mixing": args.vertical_mixing,
-						"vectorized": args.vectorized,
-						"pos_enc": args.pos_enc,
-						"base_model": args.model,
-						"one_hot": (args.categorical == "one_hot"),
-						"use_bn": args.use_bn,
-						"dropout_prob": args.dropout_prob,
-						"activation": args.activation,
-						"param_constraint": args.param_constraint,  
-						"losses": args.losses,
-						"device": device,
-						"min_temp": args.min_temp,
-						"max_temp": args.max_temp,
-						"init": args.init,
-						"width": args.width,
-						"num_layers": args.num_layers,
-						"residual": args.residual,
-						"para_index": para_index,
-						"feature_dropout": args.feature_dropout}
-
-	elif args.model == 'binn_hybrid':
-		model_class = BINN_Hybrid
-		model_kwargs = {"input_vars": len(var4nn),
-						"var_idx_to_emb": var_idx_to_emb,
-						"vertical_mixing": args.vertical_mixing,
-						"pos_enc": args.pos_enc,
-						"base_model": "new_mlp",
-						"one_hot": (args.categorical == "one_hot"),
-						"use_bn": args.use_bn,
-						"dropout_prob": args.dropout_prob,
-						"activation": args.activation,
-						"param_constraint": args.param_constraint,
-						"losses": args.losses,
-						"device": device}
-
-	elif args.model == 'nn_only':
-		model_class = nn_only
-
-		# Calculate mean/std of Y
-		if args.standardize_output:
-			output_values = train_y.flatten()[~torch.isnan(train_y.flatten())]
-			output_mean = torch.mean(output_values)
-			output_std = torch.std(output_values)
-		else:
-			output_mean, output_std = None, None
-		print("NN only, output_mean", output_mean, "output_std", output_std)
-
-		model_kwargs = {"input_vars": len(var4nn),
-						"var_idx_to_emb": var_idx_to_emb,
-						"pos_enc": args.pos_enc,
-						"output_dim": 140,
-						"base_model": "new_mlp",
-						"one_hot": (args.categorical == "one_hot"),
-						"use_bn": args.use_bn,
-						"dropout_prob": args.dropout_prob,
-						"activation": args.activation,
-						"losses": args.losses,
-						"device": device,
-						"output_mean": output_mean,
-						"output_std": output_std,
-						"init": args.init,
-						"width": args.width,
-						"num_layers": args.num_layers,
-						"residual": args.residual}
-
-	elif args.model == 'gnn':
-		model_class = GNN_BINN
-		model_kwargs = {"input_vars": len(var4nn),
-						"var_idx_to_emb": var_idx_to_emb,
-						"vertical_mixing": args.vertical_mixing,
-						"pos_enc": args.pos_enc,
-						"k": args.k,
-						"one_hot": (args.categorical == "one_hot"),
-						"use_bn": args.use_bn,
-						"dropout_prob": args.dropout_prob,
-						"activation": args.activation,
-						"param_constraint": args.param_constraint,
-						"losses": args.losses,
-						"graph_conv": args.graph_conv,
-						"device": device}
-	elif args.model == 'spatial':
-		model_class = Spatial_BINN
-		model_kwargs = {"input_vars": len(var4nn),
-						"var_idx_to_emb": var_idx_to_emb,
-						"vertical_mixing": args.vertical_mixing,
-						"pos_enc": args.pos_enc,
-						"k": args.k,
-						"one_hot": (args.categorical == "one_hot"),
-						"use_bn": args.use_bn,
-						"dropout_prob": args.dropout_prob,
-						"activation": args.activation,
-						"param_constraint": args.param_constraint,
-						"losses": args.losses,
-						"device": device}
+	if args.bias_only_epochs > 0 and (args.whether_resume == 0 or checkpoint_main["epoch"] < args.bias_only_epochs):
+		# If training bias only, temporarily set the model to ConstantParameters
+		# and then switch to the real model after that many epochs.
+		# Exception: If we are resuming and the epoch is already past bias_only_epochs,
+		# go to the else branch (don't create the ConstantParameters model, create the full model)
+		model_class = ConstantParameters
+		model_kwargs = {
+			"num_params": len(para_names),
+			"vertical_mixing": args.vertical_mixing,
+			"param_constraint": args.param_constraint,
+			"min_temp": args.min_temp,
+			"max_temp": args.max_temp
+		}
 	else:
-		raise ValueError("Invalid args.model")
-
-	# Standardize input if requested
-	if args.standardize_input:
-		model_kwargs["train_x"] = train_x.to(device)
+		model_class, model_kwargs = misc_utils.get_model(args, var4nn, var_idx_to_emb, device,
+														para_index, train_x, train_y)
 
 	if args.whether_resume == 1:
 		# Load the model from the checkpoint, and overwrite model_kwargs if saved
@@ -1550,49 +1457,24 @@ def worker(rank, world_size, job_id):
 	else:
 		# Create model
 		model = model_class(**model_kwargs).to(device)
-	if rank < 3:
-		print("Rank", rank, "Created model")
 
 	# Create distributed version of the model
 	if args.use_ddp == 1:
 		if torch.cuda.is_available():
 			model = DDP(model, device_ids=[device])
 		else:  # CPU only
-			print("DDP model with cpu")
 			model = DDP(model)
 		model_without_ddp = model.module
 	else:
 		model_without_ddp = model
-	if rank < 3:
-		print("Rank", rank, "distributed model")
 
-	# Optimizer
-	if args.optimizer == "AdamW":
-		optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-	elif args.optimizer == "SGD":
-		optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-	else:
-		raise ValueError("Invalid args.optimizer")
-
-	# Scheduler
+	# Optimizer and scheduler
+	optimizer, scheduler = misc_utils.get_optimizer_and_scheduler(model, args)
 	if args.use_swa:
 		# Stochastic Weight Averaging. TODO - not tested fully.
 		swa_model = AveragedModel(model)
-		scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr, gamma=0.1)
-		swa_start = 25
-		swa_scheduler = SWALR(optimizer, swa_lr=args.lr)
-	else:
-		# If desired, add a learning rate scheduler that decays the learning rate throughout training
-		if args.scheduler == "reduce_on_plateau":
-			scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)  #, mode="max")
-		elif args.scheduler == "step":
-			scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
-		elif args.scheduler == "cosine":
-			scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=20)
-		elif args.scheduler == "none":
-			scheduler = None
-		else:
-			raise ValueError("Invalid args.scheduler")
+		swa_start = 5
+		swa_scheduler = SWALR(optimizer, swa_lr=0.05)
 
 	if args.whether_resume == 1:
 		# Load the model from the checkpoint
@@ -1619,8 +1501,6 @@ def worker(rank, world_size, job_id):
 	# Data loaders with DistributedSampler
 	train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)
 	val_loader = DataLoader(val_dataset, batch_size=args.batch_size, sampler=val_sampler)
-	if rank < 3:
-		print("Rank", rank, "DataLoader created", flush=True)
 
 	# training and validation loop
 	num_epoch = args.n_epochs
@@ -1657,16 +1537,12 @@ def worker(rank, world_size, job_id):
 			val_pred_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, device=device, dtype=torch.float32)
 			val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, device=device, dtype=torch.float32)
 			# model.eval()  # TODO Can't really use eval mode before model is trained, since batchnorm stats are not there yet
-			print("Rank 0, right before val model", flush=True)
 			with torch.no_grad():
 				temp_SOC, temp_pred_para = model(val_x, val_z, val_c, whether_predict=0, PRODA_para=val_proda_para.to(device))
-			print("Rank 0, right after val model", flush=True)
 			val_pred_soc[val_profile_id, :] = temp_SOC.detach()
 			val_pred_para[val_profile_id, :] = temp_pred_para.detach()
-			print("Rank 0 before writing", flush=True)
 			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_soc.detach().cpu().numpy(), delimiter = ',')
 			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_para.detach().cpu().numpy(), delimiter = ',')
-			print("Rank 0 after writing", flush=True)
 	else: 
 		# If resuming from a checkpoint, load loss history
 		train_loss_history = checkpoint_worker['train_loss_history']
@@ -1698,8 +1574,7 @@ def worker(rank, world_size, job_id):
 	start_time = time.time()
 	time_limit_exceeded = False
 	whether_break = torch.tensor(0).to(device)
-	if rank < 3:
-		print("Rank", rank, "About to start forloop", flush=True)
+	print("Rank", rank, "About to start forloop", flush=True)
 
 	for iepoch in range(start_epoch, num_epoch):
 		epoch_start = time.time()
@@ -1724,6 +1599,8 @@ def worker(rank, world_size, job_id):
 		# clear gradients
 		optimizer.zero_grad()
 		model.zero_grad()
+
+		# If using the scheduler, record the learning rate for each epoch
 		if scheduler is not None and rank == 0:
 			if iepoch == 0:
 				# If scheduler has never been stepped, get_last_lr does not work
@@ -1735,7 +1612,25 @@ def worker(rank, world_size, job_id):
 				curr_lr = scheduler.get_last_lr()[0]
 			print(f"Epoch {iepoch}: lr = {curr_lr}")
 			lr_history[iepoch] = curr_lr
-	
+
+		# If we have trained for "bias_only_epochs" epochs and it's
+		# time to switch to training the full model, change the model to the full model
+		if args.bias_only_epochs > 0 and iepoch == args.bias_only_epochs:
+			model_class, model_kwargs = misc_utils.get_model(args, var4nn, var_idx_to_emb, device,
+															para_index, train_x, train_y)
+			model = model_class(**model_kwargs).to(device)
+
+			# Create distributed version of the model
+			if args.use_ddp == 1:
+				if torch.cuda.is_available():
+					model = DDP(model, device_ids=[device])
+				else:
+					model = DDP(model)
+				model_without_ddp = model.module
+			else:
+				model_without_ddp = model
+			optimizer, scheduler = misc_utils.get_optimizer_and_scheduler(model, args)
+
 		# -------------------------------------training
 		loss_record_train = list()  # List of Tensors. Each Tensor contains losses in the order of args.losses.
 		metrics_record_train = list()  # List of Tensors (one per batch). Each Tensor contains 3 values: [MSE, MAE, NSE]
@@ -1761,9 +1656,7 @@ def worker(rank, world_size, job_id):
 
 			#------------ 1 forward
 			# train_nn_start = time.time()
-			if iepoch < args.bias_only_epochs:
-				batch_y_hat, batch_pred_para = model_without_ddp.forward_ignoring_input(batch_x, batch_z)
-			elif args.model in ['gnn', 'spatial']:
+			if args.model in ['gnn', 'spatial']:
 				# GNN/spatial models return extra information about spatial smoothness that might be used in loss function
 				plot_dir = PLOT_DIR if (ibatch==1 and iepoch%5==0) else None
 				batch_y_hat, batch_pred_para, spatial_emb, laplacian = model(batch_x, batch_z, batch_c, whether_predict=0, return_extra=True, plot_dir=plot_dir, one_param_only=args.one_param_only)
@@ -2034,9 +1927,7 @@ def worker(rank, world_size, job_id):
 				batch_profile_id = batch_profile_id.to(device)
 
 				# 1 forward
-				if iepoch < args.bias_only_epochs:
-					batch_y_hat, batch_pred_para = model_without_ddp.forward_ignoring_input(batch_x, batch_z)
-				elif args.model in ['gnn', 'spatial']:
+				if args.model in ['gnn', 'spatial']:
 					plot_dir = PLOT_DIR if (ibatch==1 and iepoch%5==0) else None
 					batch_y_hat, batch_pred_para, spatial_emb, laplacian = model(batch_x, batch_z, batch_c, whether_predict=0, return_extra=True)
 				elif args.model == 'binn_hybrid':
@@ -2589,15 +2480,16 @@ def worker(rank, world_size, job_id):
 		dist.barrier()
 
 		# # Add a learning rate scheduler
-		if args.use_swa and val_NSE.item() < 0.5 and iepoch > swa_start:
-			swa_model.update_parameters(model)
-			swa_scheduler.step()
-		elif args.scheduler == "reduce_on_plateau":
-			scheduler.step(val_metrics_history[iepoch, 2])
-		elif scheduler is not None:
-			scheduler.step()
-		if rank == 0 and scheduler is not None:
-			print("New learning rate =", scheduler.get_last_lr())
+		if iepoch >= args.bias_only_epochs:
+			if args.use_swa and val_NSE.item() < 0.5 and iepoch > swa_start:
+				swa_model.update_parameters(model)
+				swa_scheduler.step()
+			elif args.scheduler == "reduce_on_plateau":
+				scheduler.step(val_metrics_history[iepoch, 2])
+			elif scheduler is not None:
+				scheduler.step()
+			if rank == 0 and scheduler is not None:
+				print("New learning rate =", scheduler.get_last_lr())
 
 		if args.loss_weighting == "two_stage" and iepoch > args.second_start:
 			args.lambdas = args.second_lambdas
@@ -3452,12 +3344,13 @@ if __name__ == '__main__':
 		assert world_size == len(os.environ["CUDA_VISIBLE_DEVICES"].split(",")), "If using GPU: world_size (num_CPU) must equal number of GPUs in CUDA_VISIBLE_DEVICES"
 		import torch.multiprocessing as mp
 		mp.set_start_method('spawn', force=True)
-	import torch.multiprocessing as mp  # TODO
-	mp.set_start_method('spawn', force=True)
+	else:
+		import torch.multiprocessing as mp
+		mp.set_start_method('spawn', force=True)
 
 	# Create the processes
 	for rank in range(world_size):
-		p = Process(target=worker, args=(rank, world_size, job_id))
+		p = mp.Process(target=worker, args=(rank, world_size, job_id))
 		p.start()
 		processes.append(p)
 
