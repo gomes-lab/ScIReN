@@ -85,7 +85,7 @@ parser = argparse.ArgumentParser()
 
 # Model architecture
 parser.add_argument("--note", type=str, default="", help="Optional name to give to the model")
-parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp', 'senn', 'nam', 'nam_joint', 'nag', 'gnn', 'spatial', 'nn_only', 'binn_hybrid'], help="Model type")
+parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp', 'senn', 'nam', 'nam_joint', 'nag', 'kan', 'gnn', 'spatial', 'nn_only', 'binn_hybrid'], help="Model type")
 parser.add_argument("--width", type=int, default=128, help="Size of hidden layers (new_mlp or nn_only)")
 parser.add_argument("--num_layers", type=int, default=4, help="Size of hidden layers (new_mlp or nn_only)")
 parser.add_argument("--residual", action='store_true', help="Whether to add residual connections in neural network portion (MLP)")
@@ -116,7 +116,7 @@ parser.add_argument("--data_seed", type=int, default=-1, help="Random seed for s
 parser.add_argument("--n_datapoints", type=int, default=-1, help="Set this to train on a random subset of this many datapoints (for train+val+test). -1 to use the whole dataset")
 parser.add_argument("--representative_sample", action='store_true', help="Whether to restrict to ~1000 'representative profiles'")
 parser.add_argument("--cross_val_idx", type=int, default=0, help="""Cross-validation index. 0 means no cross-validation (fixed train/val/test split), 
-                    		while a number between 1 and k means to use that index's fold (1-based). Note that this script only runs one fold;
+							while a number between 1 and k means to use that index's fold (1-based). Note that this script only runs one fold;
 							you need to manually combine results from multiple folds.""")
 parser.add_argument("--n_folds", type=int, default=10, help="Number of folds if using cross-validation")
 parser.add_argument("--split", type=str, default='random', choices=['random', 'horizontal', 'vertical', 'us_vs_world', 'grid2'],
@@ -155,7 +155,7 @@ parser.add_argument("--clip_value", type=float, default=-1, help="Clip value for
 # Losses and loss weights
 parser.add_argument("--losses", nargs="+", choices=["l1", "smooth_l1", "l2", "param_reg", "param_violation", "param_matching", "jacobian",
 													"jacobian_sparsity", "spectral", "lipmlp", "cure", "senn_robustness", "senn_l1", "senn_sparsity", 
-													"nam_l2", "nam_entropy", "spatial_error", "spatial_emb_smoothness", "param_smoothness", "residual"], default=["smooth_l1", "param_reg"],
+													"nam_l2", "nam_entropy", "kan_sparsity", "spatial_error", "spatial_emb_smoothness", "param_smoothness", "residual"], default=["smooth_l1", "param_reg"],
 					help="Losses to use (can list any number). Note jacobian_sparsity cannot be optimized (non-differentiable): it is just something we track.")
 parser.add_argument("--loss_weighting", default="manual", choices=["manual", "relobralo", "IMTL", "two_stage"])
 parser.add_argument("--lambdas", nargs="+", type=float, default=[1.0, 10.0], help="If loss_weighting is manual, provide weights in the same order as `args.losses`")
@@ -168,7 +168,7 @@ parser.add_argument("--relobralo_temp", type=float, default=0.1, help="Softmax t
 parser.add_argument("--relobralo_saudade", type=float, default=0.999, help="Saudade (1 minus probability of looking back to epoch 0)")
 
 # Positional encoding / GNN
-parser.add_argument("--lonlat_features", action='store_true', help="Whether longitude and latitude should be passed as features")
+parser.add_argument("--features", type=str, choices=["all", "all_including_lonlat", "ten"], default="all", help="Which features to use. Default `all` includes all features except lon/lat. To include lon/lat explicitly, use `all_including_lonlat`. `ten` is 10 handcrafted features")
 parser.add_argument("--pos_enc", type=str, default='none', choices=['none', 'early', 'late'],
 					help="How lon/lat features are encoded. 'none' means not used. 'early' means that positional encoding is concatenated with other features. 'late' means that it is only used as an error term for the latent parameters.")
 parser.add_argument("--graph_conv", type=str, default="gcn", choices=["gcn", "gat", "gcn1", "gat1"], help="For GNN, which graph conv to use")
@@ -616,19 +616,25 @@ env_info_names = ['ProfileNum', 'ProfileID', 'LayerNum', 'Lon', 'Lat', 'Date', \
 'R_Squared']
 
 # Variables used in training the NN. NOTE the order changed from before.
-GEOGRAPHY_VARS = ['Lon', 'Lat', 'Elevation', 'Abs_Depth_to_Bedrock', 'Occurrence_R_Horizon', 'nbedrock']
-if not args.lonlat_features:
-	GEOGRAPHY_VARS.remove('Lon')
-	GEOGRAPHY_VARS.remove('Lat')
-CLIMATE_VARS = ['Koppen_Climate_2018', 'BIO1', 'BIO2', 'BIO3', 'BIO4', 'BIO5', 'BIO6', 'BIO7', 'BIO8', 'BIO9', 'BIO10', 'BIO11', 'BIO12', 'BIO13', 'BIO14', 'BIO15', 'BIO16', 'BIO17', 'BIO18', 'BIO19']
-SOIL_TEXTURE_VARS = ['USDA_Suborder', 'WRB_Subgroup', 'Coarse_Fragments_v_0cm', 'Coarse_Fragments_v_30cm', 'Coarse_Fragments_v_100cm',
-					 'Clay_Content_0cm', 'Clay_Content_30cm', 'Clay_Content_100cm', 'Silt_Content_0cm', 'Silt_Content_30cm', 'Silt_Content_100cm',
-					 'Texture_USDA_0cm', 'Texture_USDA_30cm', 'Texture_USDA_100cm', 'Sand_Content_0cm', 'Sand_Content_30cm', 'Sand_Content_100cm',
-					 'Bulk_Density_0cm', 'Bulk_Density_30cm', 'Bulk_Density_100cm']
-SOIL_CHEMICAL_VARS = ['SWC_v_Wilting_Point_0cm', 'SWC_v_Wilting_Point_30cm', 'SWC_v_Wilting_Point_100cm', 'pH_Water_0cm', 'pH_Water_30cm', 'pH_Water_100cm',
-					  'CEC_0cm', 'CEC_30cm', 'CEC_100cm', 'Garde_Acid']
-VEGETATION_VARS = ['ESA_Land_Cover', 'cesm2_npp', 'cesm2_npp_std', 'cesm2_vegc']
-var4nn = GEOGRAPHY_VARS + CLIMATE_VARS + SOIL_TEXTURE_VARS + SOIL_CHEMICAL_VARS + VEGETATION_VARS
+if args.features in ["all", "all_including_lonlat"]:
+	GEOGRAPHY_VARS = ['Lon', 'Lat', 'Elevation', 'Abs_Depth_to_Bedrock', 'Occurrence_R_Horizon', 'nbedrock']
+	if args.features != "all_including_lonlat":
+		GEOGRAPHY_VARS.remove('Lon')
+		GEOGRAPHY_VARS.remove('Lat')
+	CLIMATE_VARS = ['Koppen_Climate_2018', 'BIO1', 'BIO2', 'BIO3', 'BIO4', 'BIO5', 'BIO6', 'BIO7', 'BIO8', 'BIO9', 'BIO10', 'BIO11', 'BIO12', 'BIO13', 'BIO14', 'BIO15', 'BIO16', 'BIO17', 'BIO18', 'BIO19']
+	SOIL_TEXTURE_VARS = ['USDA_Suborder', 'WRB_Subgroup', 'Coarse_Fragments_v_0cm', 'Coarse_Fragments_v_30cm', 'Coarse_Fragments_v_100cm',
+						'Clay_Content_0cm', 'Clay_Content_30cm', 'Clay_Content_100cm', 'Silt_Content_0cm', 'Silt_Content_30cm', 'Silt_Content_100cm',
+						'Texture_USDA_0cm', 'Texture_USDA_30cm', 'Texture_USDA_100cm', 'Sand_Content_0cm', 'Sand_Content_30cm', 'Sand_Content_100cm',
+						'Bulk_Density_0cm', 'Bulk_Density_30cm', 'Bulk_Density_100cm']
+	SOIL_CHEMICAL_VARS = ['SWC_v_Wilting_Point_0cm', 'SWC_v_Wilting_Point_30cm', 'SWC_v_Wilting_Point_100cm', 'pH_Water_0cm', 'pH_Water_30cm', 'pH_Water_100cm',
+						'CEC_0cm', 'CEC_30cm', 'CEC_100cm', 'Garde_Acid']
+	VEGETATION_VARS = ['ESA_Land_Cover', 'cesm2_npp', 'cesm2_npp_std', 'cesm2_vegc']
+	var4nn = GEOGRAPHY_VARS + CLIMATE_VARS + SOIL_TEXTURE_VARS + SOIL_CHEMICAL_VARS + VEGETATION_VARS
+elif args.features == "ten":
+	# Ten handcrafted features
+	var4nn = ["BIO1", "BIO12", "Clay_Content_avg", "Sand_Content_avg", "Bulk_Density_avg", "SWC_v_Wilting_Point_avg", "pH_Water_avg", "CEC_avg", "cesm2_npp", "cesm2_vegc"]
+else:
+	raise ValueError("Invalid features")
 
 # Load environmental covariates
 env_info = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_env_info.mat')
@@ -678,6 +684,13 @@ env_info.columns = env_info_names
 env_info["original_lon"] = original_lons
 env_info["original_lat"] = original_lats
 
+# Logic to add columns for "average" variables (e.g. average over layers)
+for v in var4nn:
+	if v not in env_info_names:
+		var_prefix = v.split("_avg")[0]
+		columns = env_info.filter(regex=(f"{var_prefix}*"))
+		env_info[v] = columns.mean(axis=1)
+
 
 ########################################################################
 # Preprocessing of categorical variables. Perhaps this should be moved
@@ -708,11 +721,12 @@ for var in var4nn:
 	curr_idx += n_indices
 
 # Indices of each group after categorical variables are expanded
-GEOGRAPHY_INDICES = [i for var in GEOGRAPHY_VARS for i in var_to_indices[var]]
-CLIMATE_INDICES = [i for var in CLIMATE_VARS for i in var_to_indices[var]]
-SOIL_TEXTURE_INDICES = [i for var in SOIL_TEXTURE_VARS for i in var_to_indices[var]]
-SOIL_CHEMICAL_INDICES = [i for var in SOIL_CHEMICAL_VARS for i in var_to_indices[var]]
-VEGETATION_INDICES = [i for var in VEGETATION_VARS for i in var_to_indices[var]]
+if args.features in ["all", "all_including_lonlat"]:
+	GEOGRAPHY_INDICES = [i for var in GEOGRAPHY_VARS for i in var_to_indices[var]]
+	CLIMATE_INDICES = [i for var in CLIMATE_VARS for i in var_to_indices[var]]
+	SOIL_TEXTURE_INDICES = [i for var in SOIL_TEXTURE_VARS for i in var_to_indices[var]]
+	SOIL_CHEMICAL_INDICES = [i for var in SOIL_CHEMICAL_VARS for i in var_to_indices[var]]
+	VEGETATION_INDICES = [i for var in VEGETATION_VARS for i in var_to_indices[var]]
 print("Var to indices", var_to_indices)
 
 
@@ -720,7 +734,7 @@ print("Var to indices", var_to_indices)
 # training data
 #---------------------------------------------------
 # Input features (environmental covariates)
-current_data_x = np.ones((len(profile_collection), len(var4nn), 12, 13))*np.nan
+current_data_x = np.ones((len(profile_collection), max(len(var4nn), 20), 12, 13))*np.nan
 
 # Fill in input features
 # NOTE: env_info is indexed starting from 0, and profile_collection
@@ -1108,6 +1122,13 @@ for ivar in np.arange(0, len(col_max_min_grid[:, 0])):
 grid_env_info = df(grid_env_info)
 grid_env_info.columns = grid_env_info_names
 
+# Logic to add columns for "average" variables (e.g. average over layers)
+for v in var4nn:
+	if v not in env_info_names:
+		var_prefix = v.split("_avg")[0]
+		columns = grid_env_info.filter(regex=(f"{var_prefix}*"))
+		grid_env_info[v] = columns.mean(axis=1)
+
 # Only keep the variables used in training the NN
 grid_env_info = grid_env_info[var4nn]
 grid_env_info["original_lon"] = original_lons_grid
@@ -1129,6 +1150,8 @@ grid_env_info_num = grid_env_info_US.shape[0]
 
 # Check the max value of categorical variables, if it is larger than the number of categories, then remove the row
 for group in categorical_vars:
+	if group[0] not in var4nn:
+		continue
 	mask = grid_env_info_US[group].apply(lambda x: (x > np.max(env_info[group])).any(), axis=1)
 	indices_to_remove = grid_env_info_US[mask].index
 	grid_env_info_US = grid_env_info_US.drop(indices_to_remove)
@@ -1173,7 +1196,7 @@ for irow in np.arange(0, grid_env_info_num):
 # end
 
 # wrapping up for the nn prediction
-predict_data_x = np.ones((grid_env_info_num, len(var4nn), 12, 13))*np.nan
+predict_data_x = np.ones((grid_env_info_num, max(len(var4nn), 20), 12, 13))*np.nan
 predict_data_x[:, 0:len(var4nn), 0, 0] = np.array(grid_env_info_US.loc[:, var4nn])
 predict_data_x[:, 0:12, 0, 1] = model_force_pred_input_vector_cwd
 predict_data_x[:, 0:12, 0, 2] = model_force_pred_input_vector_litter1
@@ -1261,7 +1284,7 @@ grid_PRODA_para['profile_id'] = grid_PRODA_para['profile_id'].astype(int)
 grid_PRODA_para_aligned = pd.DataFrame({'profile_id': grid_US_profiles})
 grid_PRODA_para_aligned = grid_PRODA_para_aligned.merge(grid_PRODA_para, how='left', on='profile_id')
 grid_PRODA_para = grid_PRODA_para_aligned[['mean_1', 'mean_2', 'mean_3', 'mean_4', 'mean_5', 'mean_6', 'mean_7', 'mean_8', 'mean_9', 'mean_10', 'mean_11', \
-							                  'mean_12', 'mean_13', 'mean_14', 'mean_15', 'mean_16', 'mean_17', 'mean_18', 'mean_19', 'mean_20', 'mean_21']].to_numpy()
+											  'mean_12', 'mean_13', 'mean_14', 'mean_15', 'mean_16', 'mean_17', 'mean_18', 'mean_19', 'mean_20', 'mean_21']].to_numpy()
 grid_PRODA_para = np.clip(grid_PRODA_para, a_min=0, a_max=1)
 
 # Convert predict data to tensors
@@ -1330,7 +1353,7 @@ def create_output_folders(args):
 	return job_id
 
 
-def ddp_setup(rank, world_size):
+def ddp_setup(rank, world_size, port):
 	"""
 	Setup environment parameters and devices.
 	Source: https://github.com/pytorch/examples/blob/main/distributed/ddp-tutorial-series/multigpu.py
@@ -1356,7 +1379,7 @@ def ddp_setup(rank, world_size):
 	os.environ['RANK'] = str(rank)
 	os.environ['WORLD_SIZE'] = str(world_size)
 	os.environ["MASTER_ADDR"] = "localhost"
-	os.environ["MASTER_PORT"] = "12349"
+	os.environ["MASTER_PORT"] = port
 	if torch.cuda.is_available():
 		# Set device to the appropriate GPU
 		gpu = int(os.environ["CUDA_VISIBLE_DEVICES"].split(",")[rank])
@@ -1375,7 +1398,7 @@ def ddp_setup(rank, world_size):
 
 
 # Start training
-def worker(rank, world_size, job_id):
+def worker(rank, world_size, job_id, port):
 	# print("Start worker", rank, world_size, job_id, flush=True)
 
 	# Filename to store loss records and visualizations
@@ -1390,7 +1413,7 @@ def worker(rank, world_size, job_id):
 
 	# Set up distributed environment
 	if args.use_ddp == 1:
-		device = ddp_setup(rank, world_size)
+		device = ddp_setup(rank, world_size, port)
 	else:
 		device = "cuda:" + str(os.environ["CUDA_VISIBLE_DEVICES"].split(',')[0]) if torch.cuda.is_available() else "cpu"
 	print(f"Finished DDP setup. Rank {rank} of {world_size}. Device {device}. JobID {job_id}.")
@@ -1404,6 +1427,8 @@ def worker(rank, world_size, job_id):
 		# Note that within a 'group', variables share embeddings. For example,
 		# for 'Texture_USDA_0cm' and 'Texture_USDA_30cm', the embedding of each
 		# category is the same.
+		if group[0] not in var4nn:
+			continue
 		n_categories = var_to_categories[group[0]]
 		if args.categorical == "embedding":
 			emb = nn.Embedding(num_embeddings=n_categories, embedding_dim=args.embed_dim).to(device)
@@ -1432,7 +1457,7 @@ def worker(rank, world_size, job_id):
 		}
 	else:
 		model_class, model_kwargs = misc_utils.get_model(args, var4nn, var_idx_to_emb, device,
-														para_index, train_x, train_y)
+										 				 para_index, train_x, train_y)
 
 	if args.whether_resume == 1:
 		# Load the model from the checkpoint, and overwrite model_kwargs if saved
@@ -1463,7 +1488,7 @@ def worker(rank, world_size, job_id):
 		if torch.cuda.is_available():
 			model = DDP(model, device_ids=[device])
 		else:  # CPU only
-			model = DDP(model)
+			model = DDP(model, find_unused_parameters=True)
 		model_without_ddp = model.module
 	else:
 		model_without_ddp = model
@@ -1488,8 +1513,11 @@ def worker(rank, world_size, job_id):
 	fun_loss = binns_loss
 
 	# Initialize datasets
-	train_dataset = MergeDataset(train_x, train_y, train_z, train_c, train_profile_id, train_proda_para)
-	val_dataset = MergeDataset(val_x, val_y, val_z, val_c, val_profile_id, val_proda_para)
+	# Push to GPU if it fits in the GPU memory. If it doesn't, remove .to(device) below.
+	train_dataset = MergeDataset(train_x.to(device), train_y.to(device), train_z.to(device), train_c.to(device), train_profile_id.to(device), train_proda_para.to(device))
+	val_dataset = MergeDataset(val_x.to(device), val_y.to(device), val_z.to(device), val_c.to(device), val_profile_id.to(device), val_proda_para.to(device))
+	# train_dataset = MergeDataset(train_x, train_y, train_z, train_c, train_profile_id, train_proda_para)
+	# val_dataset = MergeDataset(val_x, val_y, val_z, val_c, val_profile_id, val_proda_para)
 
 	# Use DistributedSampler for distributed training
 	if args.use_ddp == 1:
@@ -1499,8 +1527,8 @@ def worker(rank, world_size, job_id):
 		train_sampler, val_sampler = None, None
 
 	# Data loaders with DistributedSampler
-	train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)
-	val_loader = DataLoader(val_dataset, batch_size=args.batch_size, sampler=val_sampler)
+	train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler)  #, num_workers=4, persistent_workers=True)
+	val_loader = DataLoader(val_dataset, batch_size=args.batch_size, sampler=val_sampler)  # , num_workers=4, persistent_workers=True)
 
 	# training and validation loop
 	num_epoch = args.n_epochs
@@ -1532,18 +1560,23 @@ def worker(rank, world_size, job_id):
 			# print the model structure
 			print(model)
 
-		# try to save the predicted parameters before training.
+			# # try to save the predicted parameters before training.
 		elif rank == 0:
-			val_pred_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, device=device, dtype=torch.float32)
-			val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, device=device, dtype=torch.float32)
 			# model.eval()  # TODO Can't really use eval mode before model is trained, since batchnorm stats are not there yet
+			print("Rank 0 About to val model before training", flush=True)
 			with torch.no_grad():
-				temp_SOC, temp_pred_para = model(val_x, val_z, val_c, whether_predict=0, PRODA_para=val_proda_para.to(device))
-			val_pred_soc[val_profile_id, :] = temp_SOC.detach()
-			val_pred_para[val_profile_id, :] = temp_pred_para.detach()
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_soc.detach().cpu().numpy(), delimiter = ',')
-			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_para.detach().cpu().numpy(), delimiter = ',')
-	else: 
+				val_pred_soc = torch.tensor(np.ones((wosis_profile_info.shape[0], 200))*np.nan, device=device, dtype=torch.float32)
+				val_pred_para = torch.tensor(np.ones((wosis_profile_info.shape[0], len(para_names)))*np.nan, device=device, dtype=torch.float32)
+
+				# Since this is only run on one rank, it's important to use model.module, otherwise hangs may arise.
+				# https://github.com/pytorch/pytorch/issues/54059
+				temp_SOC, temp_pred_para = model.module(val_x, val_z, val_c, whether_predict=0, PRODA_para=val_proda_para.to(device))
+				print("Rank 0 finished val model before training", flush=True)
+				val_pred_soc[val_profile_id, :] = temp_SOC.detach()
+				val_pred_para[val_profile_id, :] = temp_pred_para.detach()
+				np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_soc.detach().cpu().numpy(), delimiter = ',')
+				np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_para.detach().cpu().numpy(), delimiter = ',')
+	else:
 		# If resuming from a checkpoint, load loss history
 		train_loss_history = checkpoint_worker['train_loss_history']
 		val_loss_history = checkpoint_worker['val_loss_history']
@@ -1570,11 +1603,9 @@ def worker(rank, world_size, job_id):
 			print(model)
 
 	# record start time
-	dist.barrier()
 	start_time = time.time()
 	time_limit_exceeded = False
 	whether_break = torch.tensor(0).to(device)
-	print("Rank", rank, "About to start forloop", flush=True)
 
 	for iepoch in range(start_epoch, num_epoch):
 		epoch_start = time.time()
@@ -1616,9 +1647,12 @@ def worker(rank, world_size, job_id):
 		# If we have trained for "bias_only_epochs" epochs and it's
 		# time to switch to training the full model, change the model to the full model
 		if args.bias_only_epochs > 0 and iepoch == args.bias_only_epochs:
+			old_bias = model_without_ddp.best_params.data  # Get optimal param set from ConstantParameters model
+			print("OLD BIAS", old_bias)
 			model_class, model_kwargs = misc_utils.get_model(args, var4nn, var_idx_to_emb, device,
 															para_index, train_x, train_y)
 			model = model_class(**model_kwargs).to(device)
+			model.mlp.layer_output.bias.data = old_bias
 
 			# Create distributed version of the model
 			if args.use_ddp == 1:
@@ -1642,7 +1676,7 @@ def worker(rank, world_size, job_id):
 		# torch.autograd.set_detect_anomaly(True)   # <- helps debug gradient anomalies but is VERY SLOW
 		for batch_info in train_loader:
 			batch_x, batch_y, batch_z, batch_c, batch_profile_id, batch_proda_para = batch_info
-
+			# print("First batch", flush=True)
 			if batch_x.shape[0] == 1 and args.use_bn:  # Batch size of 1 during training does not work with BatchNorm
 				continue
 
@@ -1655,7 +1689,7 @@ def worker(rank, world_size, job_id):
 			batch_profile_id = batch_profile_id.to(device)
 
 			#------------ 1 forward
-			# train_nn_start = time.time()
+			# train_nn_start = time.time()Const
 			if args.model in ['gnn', 'spatial']:
 				# GNN/spatial models return extra information about spatial smoothness that might be used in loss function
 				plot_dir = PLOT_DIR if (ibatch==1 and iepoch%5==0) else None
@@ -1666,6 +1700,7 @@ def worker(rank, world_size, job_id):
 			else:
 				# Normal models just return predicted (1) SOC, (2) parameters
 				batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0, one_param_only=args.one_param_only, PRODA_para=batch_proda_para)
+			# print(rank, "after forward", flush=True)
 
 			# Check if batch_pred_para is nan or inf
 			if torch.isnan(batch_pred_para).any() or torch.isinf(batch_pred_para).any():
@@ -1677,7 +1712,7 @@ def worker(rank, world_size, job_id):
 			# Check for extreme para values
 			if args.model != 'nn_only' and (torch.any(batch_pred_para < 0.00001) or torch.any(batch_pred_para > 0.99999)):
 				print("Extreme param values")
-				print(batch_pred_para)
+				print(batch_pred_para[torch.any(((batch_pred_para < 0.00001) | (batch_pred_para > 0.99999)), dim=1), :])
 
 			#------------ 2 compute the objective function
 			l1_loss, smooth_l1_loss, l2_loss, param_reg_loss, train_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
@@ -1693,6 +1728,7 @@ def worker(rank, world_size, job_id):
 			cure_loss = np.nan
 			nam_l2_loss = np.nan
 			nam_entropy_loss = np.nan
+			kan_sparsity_loss = np.nan
 			senn_robustness_loss = np.nan
 			senn_l1_loss = np.nan
 			senn_sparsity = np.nan
@@ -1817,7 +1853,11 @@ def worker(rank, world_size, job_id):
 				frac_variance_explained = variance_explained / variance_explained.sum(dim=0, keepdim=True)  # [n_features, n_outputs]. For each output, feature fractions sum to 1
 				p_log_p = -frac_variance_explained * torch.log(frac_variance_explained)  # p(x) log p(x) elementwise
 				nam_entropy_loss = p_log_p.sum(dim=0).mean()
-				print("Frac variance", frac_variance_explained[:, 0])
+			if "kan_sparsity" in args.losses:
+				assert args.model == "kan"
+
+				# These are default arguments taken from https://github.com/KindXiaoming/pykan/blob/master/kan/MultKAN.py#L1411
+				kan_sparsity_loss = model_without_ddp.mlp.get_reg(reg_metric='edge_forward_spline_n', lamb_l1=1., lamb_entropy=2., lamb_coef=0., lamb_coefdiff=0.)
 			if "senn_robustness" in args.losses:
 				model.eval()
 				senn_robustness_loss = model_without_ddp.senn_robustness_loss()
@@ -1845,6 +1885,7 @@ def worker(rank, world_size, job_id):
 						"cure": cure_loss,
 						"nam_l2": nam_l2_loss,
 						"nam_entropy": nam_entropy_loss,
+						"kan_sparsity": kan_sparsity_loss,
 						"senn_robustness": senn_robustness_loss,
 						"senn_l1": senn_l1_loss,
 						"senn_sparsity": senn_sparsity,
@@ -1874,6 +1915,7 @@ def worker(rank, world_size, job_id):
 			#------------ 5 step in the opposite direction of the gradient
 			# with torch.no_grad(): para = para - eta*para.grad # eta is learning rate
 			optimizer.step()
+			# print(rank, "after optimizer step", flush=True)
 
 			# Noise
 			if args.noise_std > 0:
@@ -1950,6 +1992,7 @@ def worker(rank, world_size, job_id):
 				senn_robustness_loss = np.nan
 				nam_l2_loss = np.nan
 				nam_entropy_loss = np.nan
+				kan_sparsity_loss = np.nan
 				senn_l1_loss = np.nan
 				senn_sparsity = np.nan
 				cure_loss = np.nan
@@ -2042,6 +2085,13 @@ def worker(rank, world_size, job_id):
 					frac_variance_explained = variance_explained / variance_explained.sum(dim=0, keepdim=True)  # [n_features, n_outputs]. For each output, feature fractions sum to 1
 					p_log_p = -frac_variance_explained * torch.log(frac_variance_explained)  # p(x) log p(x) elementwise
 					nam_entropy_loss = p_log_p.sum(dim=0).mean()
+
+				if "kan_sparsity" in args.losses:
+					assert args.model == "kan"
+
+					# These are default arguments taken from https://github.com/KindXiaoming/pykan/blob/master/kan/MultKAN.py#L1411
+					kan_sparsity_loss = model_without_ddp.mlp.get_reg(reg_metric='edge_forward_spline_n', lamb_l1=1., lamb_entropy=2., lamb_coef=0., lamb_coefdiff=0.)
+
 				if "senn_robustness" in args.losses:
 					senn_robustness_loss = model_without_ddp.senn_robustness_loss()
 				if "senn_l1" in args.losses:
@@ -2062,7 +2112,8 @@ def worker(rank, world_size, job_id):
 							"spectral": spectral_loss,
 							"cure": cure_loss,
 							"nam_l2": nam_l2_loss,
-							"nam_entropy_loss": nam_entropy_loss,
+							"nam_entropy": nam_entropy_loss,
+							"kan_sparsity": kan_sparsity_loss,
 							"senn_robustness": senn_robustness_loss,
 							"senn_l1": senn_l1_loss,
 							"senn_sparsity": senn_sparsity,
@@ -2155,11 +2206,9 @@ def worker(rank, world_size, job_id):
 		all_val_z = torch.cat(all_val_z, dim=0)
 		all_val_pred_soc = torch.cat(all_val_pred_soc, dim=0)
 		all_val_true_soc = torch.cat(all_val_true_soc, dim=0)
-		if rank < 3:
-			print(rank, "Concatenated", datetime.now())
 
 		if args.plot and (iepoch % 50 == 0):
-			print("Creating plots", datetime.now())
+			print("Creating plots", datetime.now(), flush=True)
 
 			# Estimate max examples per rank. Ok for some to be nan
 			train_examples_per_rank = len(train_sampler)  # math.ceil(len(train_sampler) / world_size)
@@ -2627,6 +2676,7 @@ def worker(rank, world_size, job_id):
 	else:
 		best_guess_model = model  # Do not need to create a new model
 		best_guess_model.load_state_dict(new_checkpoint['model_state_dict'])
+		best_guess_model = best_guess_model.module  # Remove DDP wrapper as this will only be run on one rank
 	print("Loaded model for rank: {}".format(rank))
 
 	dist.barrier()
@@ -2645,7 +2695,7 @@ def worker(rank, world_size, job_id):
 		train_NSE_list = train_metrics_history[~np.any(np.isnan(train_metrics_history), axis=1), 2].flatten().tolist()
 		val_NSE_list = val_metrics_history[~np.any(np.isnan(val_metrics_history), axis=1), 2].flatten().tolist()
 		visualization_utils.plot_losses(os.path.join(PLOT_DIR, "nses.png"),
-									    [train_NSE_list, val_NSE_list],
+										[train_NSE_list, val_NSE_list],
 										["Train NSE", "Val NSE"],
 										min_val=0, max_val=1.2)
 
@@ -2667,7 +2717,7 @@ def worker(rank, world_size, job_id):
 		with torch.no_grad():
 			# Get predictions for train examples, compute loss & plot
 			best_guess_train_y_hat, best_guess_train_pred_para = best_guess_model(train_x.to(device), train_z.to(device), train_c.to(device),
-																			      whether_predict=0, PRODA_para=train_proda_para.to(device))
+																				  whether_predict=0, PRODA_para=train_proda_para.to(device))
 			train_mae, train_smooth_l1_loss, train_mse, _, train_NSE = fun_loss(best_guess_train_y_hat, train_y.to(device), best_guess_train_pred_para)
 			print(f'Train - MSE: {train_mse.item():.2f}, MAE: {train_mae.item():.2f}, NSE: {train_NSE.item():.2f}')
 
@@ -2680,7 +2730,7 @@ def worker(rank, world_size, job_id):
 			if test_split_ratio != 0:
 				# Get predictions for test examples, compute loss & plot
 				best_guess_test_y_hat, best_guess_test_pred_para = best_guess_model(test_x.to(device), test_z.to(device), test_c.to(device),
-																				    whether_predict=0, PRODA_para=test_proda_para.to(device))
+																					whether_predict=0, PRODA_para=test_proda_para.to(device))
 				test_mae, test_smooth_l1_loss, test_mse, _, test_NSE = fun_loss(best_guess_test_y_hat, test_y.to(device), best_guess_test_pred_para)
 				print(f'Test - MSE: {test_mse.item():.2f}, MAE: {test_mae.item():.2f}, NSE: {test_NSE.item():.2f}')
 
@@ -3322,6 +3372,14 @@ def worker(rank, world_size, job_id):
 	dist.destroy_process_group()
 
 
+def find_free_port():
+	"""Finds an unused port."""
+	import socket
+	with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+		s.bind(('', 0))
+		s.listen(1)
+		return str(s.getsockname()[1])
+
 
 if __name__ == '__main__':
 
@@ -3334,9 +3392,12 @@ if __name__ == '__main__':
 	print("MAIN, JOB ID", job_id)
 	print("Command:", " ".join(sys.argv))
 
+	# Find free port
+	port = find_free_port()
+
 	# If not using DDP, just call the worker directly
 	if args.use_ddp == 0:
-		worker(rank=0, world_size=1, job_id=job_id)
+		worker(rank=0, world_size=1, job_id=job_id, port=port)
 		exit(0)
 
 	# Spawn method is required if using GPU
@@ -3344,13 +3405,10 @@ if __name__ == '__main__':
 		assert world_size == len(os.environ["CUDA_VISIBLE_DEVICES"].split(",")), "If using GPU: world_size (num_CPU) must equal number of GPUs in CUDA_VISIBLE_DEVICES"
 		import torch.multiprocessing as mp
 		mp.set_start_method('spawn', force=True)
-	else:
-		import torch.multiprocessing as mp
-		mp.set_start_method('spawn', force=True)
 
 	# Create the processes
 	for rank in range(world_size):
-		p = mp.Process(target=worker, args=(rank, world_size, job_id))
+		p = Process(target=worker, args=(rank, world_size, job_id, port))
 		p.start()
 		processes.append(p)
 

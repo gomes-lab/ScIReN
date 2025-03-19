@@ -474,19 +474,25 @@ env_info_names = ['ProfileNum', 'ProfileID', 'LayerNum', 'Lon', 'Lat', 'Date', \
 'R_Squared']
 
 # Variables used in training the NN. NOTE the order changed from before.
-GEOGRAPHY_VARS = ['Lon', 'Lat', 'Elevation', 'Abs_Depth_to_Bedrock', 'Occurrence_R_Horizon', 'nbedrock']
-if not args.lonlat_features:
-	GEOGRAPHY_VARS.remove('Lon')
-	GEOGRAPHY_VARS.remove('Lat')
-CLIMATE_VARS = ['Koppen_Climate_2018', 'BIO1', 'BIO2', 'BIO3', 'BIO4', 'BIO5', 'BIO6', 'BIO7', 'BIO8', 'BIO9', 'BIO10', 'BIO11', 'BIO12', 'BIO13', 'BIO14', 'BIO15', 'BIO16', 'BIO17', 'BIO18', 'BIO19']
-SOIL_TEXTURE_VARS = ['USDA_Suborder', 'WRB_Subgroup', 'Coarse_Fragments_v_0cm', 'Coarse_Fragments_v_30cm', 'Coarse_Fragments_v_100cm',
-					 'Clay_Content_0cm', 'Clay_Content_30cm', 'Clay_Content_100cm', 'Silt_Content_0cm', 'Silt_Content_30cm', 'Silt_Content_100cm',
-					 'Texture_USDA_0cm', 'Texture_USDA_30cm', 'Texture_USDA_100cm', 'Sand_Content_0cm', 'Sand_Content_30cm', 'Sand_Content_100cm',
-					 'Bulk_Density_0cm', 'Bulk_Density_30cm', 'Bulk_Density_100cm']
-SOIL_CHEMICAL_VARS = ['SWC_v_Wilting_Point_0cm', 'SWC_v_Wilting_Point_30cm', 'SWC_v_Wilting_Point_100cm', 'pH_Water_0cm', 'pH_Water_30cm', 'pH_Water_100cm',
-					  'CEC_0cm', 'CEC_30cm', 'CEC_100cm', 'Garde_Acid']
-VEGETATION_VARS = ['ESA_Land_Cover', 'cesm2_npp', 'cesm2_npp_std', 'cesm2_vegc']
-var4nn = GEOGRAPHY_VARS + CLIMATE_VARS + SOIL_TEXTURE_VARS + SOIL_CHEMICAL_VARS + VEGETATION_VARS
+if args.features in ["all", "all_including_lonlat"]:
+	GEOGRAPHY_VARS = ['Lon', 'Lat', 'Elevation', 'Abs_Depth_to_Bedrock', 'Occurrence_R_Horizon', 'nbedrock']
+	if args.features != "all_including_lonlat":
+		GEOGRAPHY_VARS.remove('Lon')
+		GEOGRAPHY_VARS.remove('Lat')
+	CLIMATE_VARS = ['Koppen_Climate_2018', 'BIO1', 'BIO2', 'BIO3', 'BIO4', 'BIO5', 'BIO6', 'BIO7', 'BIO8', 'BIO9', 'BIO10', 'BIO11', 'BIO12', 'BIO13', 'BIO14', 'BIO15', 'BIO16', 'BIO17', 'BIO18', 'BIO19']
+	SOIL_TEXTURE_VARS = ['USDA_Suborder', 'WRB_Subgroup', 'Coarse_Fragments_v_0cm', 'Coarse_Fragments_v_30cm', 'Coarse_Fragments_v_100cm',
+						'Clay_Content_0cm', 'Clay_Content_30cm', 'Clay_Content_100cm', 'Silt_Content_0cm', 'Silt_Content_30cm', 'Silt_Content_100cm',
+						'Texture_USDA_0cm', 'Texture_USDA_30cm', 'Texture_USDA_100cm', 'Sand_Content_0cm', 'Sand_Content_30cm', 'Sand_Content_100cm',
+						'Bulk_Density_0cm', 'Bulk_Density_30cm', 'Bulk_Density_100cm']
+	SOIL_CHEMICAL_VARS = ['SWC_v_Wilting_Point_0cm', 'SWC_v_Wilting_Point_30cm', 'SWC_v_Wilting_Point_100cm', 'pH_Water_0cm', 'pH_Water_30cm', 'pH_Water_100cm',
+						'CEC_0cm', 'CEC_30cm', 'CEC_100cm', 'Garde_Acid']
+	VEGETATION_VARS = ['ESA_Land_Cover', 'cesm2_npp', 'cesm2_npp_std', 'cesm2_vegc']
+	var4nn = GEOGRAPHY_VARS + CLIMATE_VARS + SOIL_TEXTURE_VARS + SOIL_CHEMICAL_VARS + VEGETATION_VARS
+elif args.features == "ten":
+	# Ten handcrafted features
+	var4nn = ["BIO1", "BIO12", "Clay_Content_avg", "Sand_Content_avg", "Bulk_Density_avg", "SWC_v_Wilting_Point_avg", "pH_Water_avg", "CEC_avg", "cesm2_npp", "cesm2_vegc"]
+else:
+	raise ValueError("Invalid features")
 
 # Load environmental covariates
 env_info = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_env_info.mat')
@@ -536,6 +542,13 @@ env_info.columns = env_info_names
 env_info["original_lon"] = original_lons
 env_info["original_lat"] = original_lats
 
+# Logic to add columns for "average" variables (e.g. average over layers)
+for v in var4nn:
+	if v not in env_info_names:
+		var_prefix = v.split("_avg")[0]
+		columns = env_info.filter(regex=(f"{var_prefix}*"))
+		env_info[v] = columns.mean(axis=1)
+
 
 ########################################################################
 # Preprocessing of categorical variables. Perhaps this should be moved
@@ -566,11 +579,12 @@ for var in var4nn:
 	curr_idx += n_indices
 
 # Indices of each group after categorical variables are expanded
-GEOGRAPHY_INDICES = [i for var in GEOGRAPHY_VARS for i in var_to_indices[var]]
-CLIMATE_INDICES = [i for var in CLIMATE_VARS for i in var_to_indices[var]]
-SOIL_TEXTURE_INDICES = [i for var in SOIL_TEXTURE_VARS for i in var_to_indices[var]]
-SOIL_CHEMICAL_INDICES = [i for var in SOIL_CHEMICAL_VARS for i in var_to_indices[var]]
-VEGETATION_INDICES = [i for var in VEGETATION_VARS for i in var_to_indices[var]]
+if args.features in ["all", "all_including_lonlat"]:
+	GEOGRAPHY_INDICES = [i for var in GEOGRAPHY_VARS for i in var_to_indices[var]]
+	CLIMATE_INDICES = [i for var in CLIMATE_VARS for i in var_to_indices[var]]
+	SOIL_TEXTURE_INDICES = [i for var in SOIL_TEXTURE_VARS for i in var_to_indices[var]]
+	SOIL_CHEMICAL_INDICES = [i for var in SOIL_CHEMICAL_VARS for i in var_to_indices[var]]
+	VEGETATION_INDICES = [i for var in VEGETATION_VARS for i in var_to_indices[var]]
 print("Var to indices", var_to_indices)
 
 
@@ -578,7 +592,7 @@ print("Var to indices", var_to_indices)
 # training data
 #---------------------------------------------------
 # Input features (environmental covariates)
-current_data_x = np.ones((len(profile_collection), len(var4nn), 12, 13))*np.nan
+current_data_x = np.ones((len(profile_collection), max(len(var4nn), 20), 12, 13))*np.nan
 
 # Fill in input features
 # NOTE: env_info is indexed starting from 0, and profile_collection
@@ -808,6 +822,13 @@ for ivar in np.arange(0, len(col_max_min_grid[:, 0])):
 grid_env_info = df(grid_env_info)
 grid_env_info.columns = grid_env_info_names
 
+# Logic to add columns for "average" variables (e.g. average over layers)
+for v in var4nn:
+	if v not in env_info_names:
+		var_prefix = v.split("_avg")[0]
+		columns = grid_env_info.filter(regex=(f"{var_prefix}*"))
+		grid_env_info[v] = columns.mean(axis=1)
+
 # Only keep the variables used in training the NN
 grid_env_info = grid_env_info[var4nn]
 grid_env_info["original_lon"] = original_lons_grid
@@ -828,6 +849,8 @@ grid_env_info_num = grid_env_info_US.shape[0]
 
 # Check the max value of categorical variables, if it is larger than the number of categories, then remove the row
 for group in categorical_vars:
+	if group[0] not in var4nn:
+		continue
 	mask = grid_env_info_US[group].apply(lambda x: (x > np.max(env_info[group])).any(), axis=1)
 	indices_to_remove = grid_env_info_US[mask].index
 	grid_env_info_US = grid_env_info_US.drop(indices_to_remove)
@@ -872,7 +895,7 @@ for irow in np.arange(0, grid_env_info_num):
 # end
 
 # wrapping up for the nn prediction
-predict_data_x = np.ones((grid_env_info_num, len(var4nn), 12, 13))*np.nan
+predict_data_x = np.ones((grid_env_info_num, max(len(var4nn), 20), 12, 13))*np.nan
 predict_data_x[:, 0:len(var4nn), 0, 0] = np.array(grid_env_info_US.loc[:, var4nn])
 predict_data_x[:, 0:12, 0, 1] = model_force_pred_input_vector_cwd
 predict_data_x[:, 0:12, 0, 2] = model_force_pred_input_vector_litter1

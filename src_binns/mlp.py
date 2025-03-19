@@ -1,3 +1,4 @@
+import fun_matrix_clm5_experimental
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -178,6 +179,7 @@ class mlp_wrapper(nn.Module):
 		self.base_model = base_model
 
 		# List of non-categorical variable indices.
+		self.input_vars = input_vars
 		self.non_categorical_indices = list(set(list(range(input_vars))).difference(var_idx_to_emb.keys()))
 		self.new_input_size = len(self.non_categorical_indices)
 
@@ -239,7 +241,7 @@ class mlp_wrapper(nn.Module):
 			self.new_input_size += self.num_params  # Add the spatial embeddings
 
 		# Neural network: mapping input features to biogeochemical parameters
-		layer_sizes =  [self.new_input_size] + [width] * (num_layers-1) + [self.num_params] 
+		layer_sizes = [self.new_input_size] + [width] * (num_layers-1) + [self.num_params] 
 		if base_model == "lipmlp":
 			# EXPERIMENTAL: LipMLP (Lipschitz-regularized neural network)
 			if residual: raise NotImplementedError("residual network not implemented for lipmlp")
@@ -255,7 +257,8 @@ class mlp_wrapper(nn.Module):
 			# EXPERIMENTAL: Neural Additive Models
 			assert pos_enc in ["none", "late"], "With NAM, positional embedding size (if it exists) should equal the number of outputs"
 			assert not self.one_hot, "With NAM, you should use `--categorical embedding --embed_dim NUM_PARAMS`"
-			assert next(iter(self.var_idx_to_emb.values())).embedding_dim == self.num_params, "With NAM, categorical embedding dim should equal the number of outputs"			
+			if len(self.var_idx_to_emb) > 0:
+				assert next(iter(self.var_idx_to_emb.values())).embedding_dim == self.num_params, "With NAM, categorical embedding dim should equal the number of outputs"			
 
 			# Process activation
 			from nam_models import ExULayer, ReLULayer, MultiOutputNAM, MultiOutputJointNAM
@@ -284,6 +287,10 @@ class mlp_wrapper(nn.Module):
 			# Basic MLP
 			self.mlp = mlp(layer_sizes, use_bn=use_bn, dropout_prob=dropout_prob,
 				  		   activation=activation, init=init, residual=residual)
+		elif base_model == "kan":
+			import kan
+			self.mlp = kan.KAN(width=layer_sizes, grid=3, k=3, seed=42, device=device)
+			# self.mlp.speed()  # Disable symbolic branch
 		else:
 			raise ValueError("Unsupported base_model")
 
@@ -305,37 +312,52 @@ class mlp_wrapper(nn.Module):
 	def forward(self, input_var, wosis_depth, coords, whether_predict, PRODA_para=None,
 			 	return_spatial_embedding=False, one_param_only=False, ignore_input=False):
 
-		predictor = input_var[:, :, 0, 0]
+		predictor = input_var[:, 0:self.input_vars, 0, 0]
 		forcing = input_var[:, :, :, :]
 		obs_depth = wosis_depth
 
 		# For some reason spatial encoder requires coords to have shape [batch, 1, 2] 
 		coords = coords.unsqueeze(1).detach()
 
-		# Compute embeddings for all categorical variables
-		embs = []
-		for idx, embedding_layer in self.var_idx_to_emb.items():
-			idx = int(idx)
-			if self.one_hot:
-				emb = F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
-			else:
-				# NOTE (2025-03-05): Not normalizing embeddings anymore.
-				emb = embedding_layer(predictor[:, idx].int())
-			embs.append(emb)
-		all_embs = torch.concatenate(embs, dim=1)
-
 		# Preprocess numeric (non-categorical) features
 		features = predictor[:, self.non_categorical_indices]  # [batch, n_features]
 		if self.input_mean is not None and self.input_std is not None:
 			features = (features - self.input_mean) / self.input_std
+		
+		if torch.isnan(features).any():
+			print("Features nan")
+			print(features)
 
-		# Combine numeric features and categorical embeddings
-		new_input = torch.concatenate([features, all_embs], dim=1)
+		# Compute embeddings for all categorical variables
+		if len(self.var_idx_to_emb) >= 1:
+			embs = []
+			for idx, embedding_layer in self.var_idx_to_emb.items():
+				idx = int(idx)
+				if self.one_hot:
+					emb = F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
+				else:
+					# NOTE (2025-03-05): Not normalizing embeddings anymore.
+					emb = embedding_layer(predictor[:, idx].int())
+				embs.append(emb)
+
+				if torch.isnan(emb).any():
+					print("Emb nan", idx)
+					print(emb.data)
+			all_embs = torch.concatenate(embs, dim=1)
+
+			# Combine numeric features and categorical embeddings
+			new_input = torch.concatenate([features, all_embs], dim=1)
+		else:
+			new_input = features
 
 		# Spatial Encoding
 		if self.pos_enc == "early":
 			spatial_embeddings = self.spatial_encoder(coords).squeeze(1)  # Remove the channel dimension. [batch, params]
 			new_input = torch.concatenate([spatial_embeddings, new_input], dim=1)
+
+			if torch.isnan(spatial_embeddings).any():
+				print("Spatial emb nan")
+				print(spatial_embeddings)
 
 		# check if new_input is nan
 		if torch.isnan(new_input).any() or torch.isinf(new_input).any():
@@ -388,15 +410,30 @@ class mlp_wrapper(nn.Module):
 
 		# Ignore examples where predicted_para was nan. This should only happen when PRODA_para
 		# contains nan values.
+		predicted_para.requires_grad_ =True
+		self.predicted_para = predicted_para
 		valid_mask = ~torch.any((torch.isnan(predicted_para) | torch.isinf(predicted_para)), dim=1)
 		if torch.sum(~valid_mask) > 0:
 			print("predicted_para had nan")
 
 		# CLM5 process-based model
 		if whether_predict == 1:
-			simu_soc = fun_model_prediction(predicted_para[valid_mask], forcing, self.vertical_mixing, self.vectorized)
+			# simu_soc = fun_model_prediction(predicted_para[valid_mask], forcing, self.vertical_mixing, self.vectorized)
+			simu_soc = fun_matrix_clm5_experimental.fun_model_prediction(predicted_para[valid_mask], forcing, self.vertical_mixing, self.vectorized)
 		else:
-			simu_soc = fun_model_simu(predicted_para[valid_mask], forcing, obs_depth, self.vertical_mixing, self.vectorized)
+			#simu_soc = fun_model_simu(predicted_para[valid_mask], forcing, obs_depth, self.vertical_mixing, self.vectorized)
+			simu_soc = fun_matrix_clm5_experimental.fun_model_simu(predicted_para[valid_mask], forcing, obs_depth, self.vertical_mixing, self.vectorized)
+			# print("=================================")
+			# print("Depths", obs_depth[0:5, 0:10])
+			# print("SIMU SOC OLD", simu_soc[0:5, 0:10])
+			# print("SIMU SOC NEW", simu_soc_experimental[0:5, 0:10])
+
+			# unequal_idx = torch.nonzero((simu_soc_experimental - simu_soc).abs() > 1e-5)
+			# if unequal_idx.shape[0] > 0:
+			# 	print("Unequal idx", unequal_idx)
+			# 	print("SIMU SOC OLD", simu_soc[unequal_idx[0, 0], 0:15])
+			# 	print("SIMU SOC NEW", simu_soc_experimental[unequal_idx[0, 0], 0:15])
+			# assert torch.allclose(simu_soc, simu_soc_experimental, atol=1e-5, equal_nan=True)
 		simu_soc_with_nan = torch.full((predicted_para.shape[0], simu_soc.shape[1]), float('nan'), device=input_var.device)
 		simu_soc_with_nan[valid_mask] = simu_soc
 
@@ -410,7 +447,7 @@ class mlp_wrapper(nn.Module):
 		"""
 		Use same parameter set for all sites (determined by layer_output's bias).
 		"""
-		predictor = input_var[:, :, 0, 0]
+		predictor = input_var[:, 0:self.input_vars, 0, 0]
 		forcing = input_var[:, :, :, :]
 		obs_depth = wosis_depth
 
@@ -584,7 +621,7 @@ class ConstantParameters(nn.Module):
 		h5 = self.sigmoid(self.unconstrained_params / clamped_temp_sigmoid)
 
 		# print("forward_ignoring_input Current params", h5[0, :])
-		simu_soc = fun_model_simu(h5, forcing, obs_depth, self.vertical_mixing)  # [batch, n_depths]
+		simu_soc = fun_matrix_clm5_experimental.fun_model_simu(h5, forcing, obs_depth, self.vertical_mixing)  # [batch, n_depths]
 		return simu_soc, h5
 
 
@@ -669,7 +706,7 @@ class nn_only(nn.Module):
 			)
 
 		# MLP backbone
-		layer_sizes =  [self.new_input_size] + [width] * (num_layers-1) + [self.num_param] 
+		layer_sizes = [self.new_input_size] + [width] * (num_layers-1) + [self.num_params] 
 		if base_model == "lipmlp":
 			if residual: raise NotImplementedError("residual network not implemented for lipmlp")
 			self.mlp = lipmlp(layer_sizes, use_bn=use_bn, dropout_prob=dropout_prob)  # TODO different initialization methods, activations, dropout, etc. not supported
@@ -696,7 +733,7 @@ class nn_only(nn.Module):
 
 	def forward(self, input_var, wosis_depth, coords, whether_predict,
 				return_spatial_embedding=False, **kwargs):
-		predictor = input_var[:, :, 0, 0]
+		predictor = input_var[:, 0:self.input_vars, 0, 0]
 		forcing = input_var[:, :, :, :]
 		obs_depth = wosis_depth
 
@@ -829,6 +866,7 @@ class BINN_Hybrid(nn.Module):
 		self.pos_enc = pos_enc
 
 		# List of non-categorical variable indices
+		self.input_vars = input_vars
 		self.non_categorical_indices = list(set(list(range(input_vars))).difference(var_idx_to_emb.keys()))
 		self.new_input_size = len(self.non_categorical_indices)
 
@@ -891,7 +929,7 @@ class BINN_Hybrid(nn.Module):
 
 	def forward(self, input_var, wosis_depth, coords, whether_predict,
 				return_residual=False):
-		predictor = input_var[:, :, 0, 0]
+		predictor = input_var[:, 0:self.input_vars, 0, 0]
 		forcing = input_var[:, :, :, :]
 		obs_depth = wosis_depth
 		coords = coords.unsqueeze(1).detach().cpu().numpy()  # coords should be a numpy array
@@ -983,6 +1021,7 @@ class GNN_BINN(nn.Module):
 		self.k = k
 
 		# List of non-categorical variable indices
+		self.input_vars = input_vars
 		self.non_categorical_indices = list(set(list(range(input_vars))).difference(var_idx_to_emb.keys()))
 		self.new_input_size = len(self.non_categorical_indices)
 
@@ -1057,7 +1096,7 @@ class GNN_BINN(nn.Module):
 
 	def forward(self, input_var, wosis_depth, coords,
 				 whether_predict, ei=None, ew=None, plot_dir=None, return_extra=False):
-		predictor = input_var[:, :, 0, 0]
+		predictor = input_var[:, 0:self.input_vars, 0, 0]
 		forcing = input_var[:, :, :, :]
 		obs_depth = wosis_depth
 		# print("Predictor dtype", predictor.dtype, "Coords", coords.dtype)
@@ -1188,6 +1227,7 @@ class Spatial_BINN(nn.Module):
 		self.k = k
 
 		# List of non-categorical variable indices
+		self.input_vars = input_vars
 		self.non_categorical_indices = list(set(list(range(input_vars))).difference(var_idx_to_emb.keys()))
 		self.new_input_size = len(self.non_categorical_indices)
 
@@ -1242,7 +1282,7 @@ class Spatial_BINN(nn.Module):
 	def forward(self, input_var, wosis_depth, coords,
 				whether_predict, ei=None, ew=None,
 				plot_dir=None, return_extra=False):
-		predictor = input_var[:, :, 0, 0]
+		predictor = input_var[:, 0:self.input_vars, 0, 0]
 		forcing = input_var[:, :, :, :]
 		obs_depth = wosis_depth
 

@@ -267,7 +267,7 @@ def get_model(args, var4nn, var_idx_to_emb, device, para_index, train_x, train_y
 	"""
 	Given the commandline args, returns the correct model class and a dict of kwargs
 	"""
-	if args.model in ["new_mlp", "lipmlp", "senn", "nam", "nam_joint", "nag"]:
+	if args.model in ["new_mlp", "lipmlp", "senn", "nam", "nam_joint", "nag", "kan"]:
 		model_class = mlp_wrapper
 		model_kwargs = {"input_vars": len(var4nn),
 						"var_idx_to_emb": var_idx_to_emb,
