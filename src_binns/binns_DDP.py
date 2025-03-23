@@ -191,6 +191,17 @@ if args.loss_weighting in ["manual", "relobralo", "two_stage"]:
 	args.lambdas = torch.tensor(args.lambdas)
 	args.second_lambdas = torch.tensor(args.second_lambdas)
 
+<<<<<<< Updated upstream
+=======
+if torch.cuda.is_available():
+	dev = 'cuda'
+else:
+	dev = 'cpu'
+# @joshuafan changed
+# dev = 'cpu'
+device = torch.device(dev)  
+print(datetime.now(), '------------device: ', device, '------------')
+>>>>>>> Stashed changes
 
 def set_seeds(seed):
 	"""
