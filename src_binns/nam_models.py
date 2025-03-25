@@ -4,6 +4,7 @@ Models described in the Neural Additive Models paper.
 Source: https://github.com/kherud/neural-additive-models-pt/blob/master/nam/model.py
 """
 from typing import Union, Iterable, Sized, Tuple
+import math
 import torch
 import torch.nn.functional as F
 
@@ -177,7 +178,7 @@ class MultiOutputNAM(torch.nn.Module):
         f_out = f_out / (self.divide_by ** 2)  # TEMP 
         f_out = self.feature_dropout(f_out)
         self.f_out = f_out
-        return f_out.sum(axis=1) + self.bias
+        return f_out.sum(dim=1) + self.bias
 
     def _feature_nns(self, x):
         outputs = []
@@ -217,6 +218,13 @@ class MultiOutputJointNAM(torch.nn.Module):
         elif isinstance(shallow_units, int):
             shallow_units = [shallow_units for _ in range(input_size)]
 
+        # import mlp
+        # self.feature_nns = torch.nn.ModuleList([
+        #     mlp.mlp([1] + [shallow_units[i]] + list(hidden_units) + [n_outputs],
+        #             use_bn=True, dropout_prob=0, activation="leaky_relu", residual=True)
+        #     for i in range(input_size)
+        # ])
+
         self.feature_nns = torch.nn.ModuleList([
             FeatureNN(shallow_units=shallow_units[i],
                       hidden_units=hidden_units,
@@ -238,14 +246,68 @@ class MultiOutputJointNAM(torch.nn.Module):
 
         # Divide by a constant to ensure that the summed output at initialization does not
         # saturate the sigmoid. This constant could be tuned. Theoretically should it be sqrt(n_features)?
-        self.divide_by = f_out.shape[1]  # n_features
+        self.divide_by = math.sqrt(f_out.shape[1])  # math.sqrt(f_out.shape[1])  # n_features
         f_out = f_out / self.divide_by
         f_out = self.feature_dropout(f_out)
         self.f_out = f_out
-        return f_out.sum(axis=1) + self.bias
+        return torch.sum(f_out, dim=1) + self.bias
 
     def _feature_nns(self, x):
         """
         For each feature, returns a [batch, n_outputs] tensor.
         """
         return [self.feature_nns[i](x[:, i]) for i in range(self.input_size)]
+
+
+
+class MultiOutputJointNAM2(torch.nn.Module):
+    """
+    Same as MultiOutputJointNAM, but uses our MLP implementation inside each additive model
+    """
+    def __init__(self,
+                 input_size: int,
+                 layer_sizes: list[int],
+                 use_bn: bool,
+                 dropout_prob: float,
+                 activation: str,
+                 init: str,
+                 residual: bool,
+                 feature_dropout: float = 0.,
+                 ):
+        super().__init__()
+        self.input_size = input_size
+        self.layer_sizes = layer_sizes
+        self.n_outputs = self.layer_sizes[-1]
+        assert self.layer_sizes[0] == 1, "For NAM, each feature NN only takes in 1 input"
+
+        import mlp
+        self.feature_nns = torch.nn.ModuleList([
+            mlp.mlp(layer_sizes, use_bn=use_bn, dropout_prob=dropout_prob,
+				  	activation=activation, init=init, residual=residual)
+            for i in range(input_size)
+        ])
+
+        self.feature_dropout = torch.nn.Dropout(p=feature_dropout)
+        self.bias = torch.nn.Parameter(torch.zeros(self.n_outputs))
+
+    def forward(self, x):
+        x_numeric = x[:, :self.input_size]
+        x_categorical = x[:, self.input_size:]
+        f_out = torch.cat(self._feature_nns(x_numeric), dim=-1)  # [batch, numeric_features*n_outputs]
+        assert f_out.shape[1] == self.input_size * self.n_outputs
+        f_out = torch.cat([f_out, x_categorical], dim=-1)  # [batch, n_features*n_outputs], n_features includes both numeric and categorical features
+        f_out = f_out.reshape((f_out.shape[0], -1, self.n_outputs))  # [batch, n_features, n_outputs]
+
+        # Divide by a constant to ensure that the summed output at initialization does not
+        # saturate the sigmoid. This constant could be tuned. Theoretically should it be sqrt(n_features)?
+        self.divide_by = f_out.shape[1]  # math.sqrt(f_out.shape[1])  # n_features
+        f_out = f_out / self.divide_by
+        f_out = self.feature_dropout(f_out)
+        self.f_out = f_out
+        return torch.sum(f_out, dim=1) + self.bias
+
+    def _feature_nns(self, x):
+        """
+        For each feature, returns a [batch, n_outputs] tensor.
+        """
+        return [self.feature_nns[i](x[:, i:i+1]) for i in range(self.input_size)]

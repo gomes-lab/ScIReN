@@ -207,7 +207,7 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
 
     # Plot points
     gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
-    gdf.plot(column=var_name, ax=ax, marker='o', markersize=8, legend=True, zorder=10, vmin=min_val, vmax=max_val)  # legend_kwds={'shrink': 0.7},
+    gdf.plot(column=var_name, ax=ax, marker='o', markersize=8, legend=True, zorder=10, vmin=min_val, vmax=max_val, legend_kwds={'label': f'Change to {var_name}'})  # legend_kwds={'shrink': 0.7},
     ax.set_title(title)
 
     if plot_dir is not None:
@@ -288,18 +288,37 @@ def plot_matrix(matrix, row_labels, col_labels, filename, title):
     plt.close()
 
 
-def plot_shape_function(feat_nn, feat_vals, ax, title, xlabel, ylabel, divide_by=1.0):
+def plot_shape_function(feat_nn, feat_vals, ax, title, xlabel, ylabel, divide_by=1.0, scaling_x_min=None, scaling_x_max=None, scaling_y_min=None, scaling_y_max=None):
     """
     divide_by is an optional factor to divide the y value by
-    """   
+    scaling_min, scaling_max were the max/min used to scale the feature before passing to BINN.
+    If they are set, plot the shape function in the original units.
+    """
+    # If no scaling, set scaling_x/y_min to be 0, scaling_x/y_max to be 1
+    if scaling_x_min is None:
+        scaling_x_min = 0
+    if scaling_x_max is None:
+        scaling_x_max = 1
+    if scaling_y_min is None:
+        scaling_y_min = 0
+    if scaling_y_max is None:
+        scaling_y_max = 1
+
+    # min, max and intermediate feature values, AFTER being normalized to [0, 1]
     min_x = feat_vals.min().item() - 0.05
     max_x = feat_vals.max().item() + 0.05
     xs = torch.linspace(min_x, max_x, 100)
+
+    # Original feature values BEFORE min/max normalization
+    original_min_x = min_x * (scaling_x_max - scaling_x_min) + scaling_x_min
+    original_max_x = max_x * (scaling_x_max - scaling_x_min) + scaling_x_min
+    original_xs = xs * (scaling_x_max - scaling_x_min) + scaling_x_min  # Original x before min/max normalization
     ys = feat_nn(xs).squeeze() / divide_by
+    ys = ys * (scaling_y_max - scaling_y_min)   # Only consider relative changes, so don't add y_min
     min_y = ys.min().item() - 0.05
     max_y = ys.max().item() + 0.05
-    ax.plot(xs, ys)
-    ax.set_xlim(min_x, max_x)
+    ax.plot(original_xs, ys)
+    ax.set_xlim(original_min_x, original_max_x)
     ax.set_ylim(min_y, max_y)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -311,14 +330,14 @@ def plot_shape_function(feat_nn, feat_vals, ax, title, xlabel, ylabel, divide_by
         single_feature_data = feat_vals  # single_features[name]
         x_n_blocks = 20  # min(n_blocks, len(unique_feat_data))
 
-        segments = (max_x - min_x) / x_n_blocks
+        segments = (original_max_x - original_min_x) / x_n_blocks
         density = np.histogram(single_feature_data, bins=x_n_blocks)
         normed_density = density[0] / np.max(density[0])
         rect_params = []
 
         for p in range(x_n_blocks):
-            start_x = min_x + segments * p
-            end_x = min_x + segments * (p + 1)
+            start_x = original_min_x + segments * p
+            end_x = original_min_x + segments * (p + 1)
             d = min(1.0, 0.01 + normed_density[p])
             rect_params.append((d, start_x, end_x))
 

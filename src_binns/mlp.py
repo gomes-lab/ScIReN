@@ -269,18 +269,31 @@ class mlp_wrapper(nn.Module):
 			elif activation == 'relu':
 				shallow_layer = ReLULayer
 				shallow_units = width
-				hidden_units = (width, width)
+				hidden_units = (width, )  # width)
 			else:
 				raise ValueError("For NAM, activation must be exu or relu")
 			
 			if base_model == "nam":
-				self.mlp = MultiOutputNAM(input_size=len(self.non_categorical_indices), shallow_units=shallow_units,
+				self.mlp = MultiOutputNAM(input_size=len(self.non_categorical_indices), 			   	shallow_units=shallow_units,
 								    	  hidden_units=hidden_units, shallow_layer=shallow_layer,
 										  feature_dropout=feature_dropout, hidden_dropout=dropout_prob, n_outputs=self.num_params)
 			elif base_model == "nam_joint":
 				self.mlp = MultiOutputJointNAM(input_size=len(self.non_categorical_indices), shallow_units=shallow_units,
 								    	       hidden_units=hidden_units, shallow_layer=shallow_layer,
 										       feature_dropout=feature_dropout, hidden_dropout=dropout_prob, n_outputs=self.num_params)
+		elif base_model == "nam_joint2":
+			# Modified NAM which makes use of our MLP implementation for each feature network
+			assert pos_enc in ["none", "late"], "With NAM, positional embedding size (if it exists) should equal the number of outputs"
+			assert not self.one_hot, "With NAM, you should use `--categorical embedding --embed_dim NUM_PARAMS`"
+			if len(self.var_idx_to_emb) > 0:
+				assert next(iter(self.var_idx_to_emb.values())).embedding_dim == self.num_params, "With NAM, categorical embedding dim should equal the number of outputs"			
+			from nam_models import MultiOutputJointNAM2
+			self.mlp = MultiOutputJointNAM2(input_size=len(self.non_categorical_indices),
+											layer_sizes=[1] + layer_sizes[1:],
+											use_bn=use_bn, dropout_prob=dropout_prob,
+											activation=activation, init=init, residual=residual,
+											feature_dropout=feature_dropout)
+
 		elif base_model == "nag":
 			raise NotImplementedError()
 		elif base_model == "new_mlp":
@@ -396,8 +409,8 @@ class mlp_wrapper(nn.Module):
 			predicted_para = PRODA_para.detach().clone()
 			predicted_para[:, self.para_index] = constrained_params
 
-		if predicted_para.requires_grad:
-			predicted_para.retain_grad()
+		# if predicted_para.requires_grad:
+		# 	predicted_para.retain_grad()
 
 		if one_param_only:
 			# EXPERIENTAL: Choose one parameter to update, stop gradient w.r.t. other params
@@ -410,7 +423,7 @@ class mlp_wrapper(nn.Module):
 
 		# Ignore examples where predicted_para was nan. This should only happen when PRODA_para
 		# contains nan values.
-		predicted_para.requires_grad_ =True
+		# predicted_para.requires_grad_ =True
 		self.predicted_para = predicted_para
 		valid_mask = ~torch.any((torch.isnan(predicted_para) | torch.isinf(predicted_para)), dim=1)
 		if torch.sum(~valid_mask) > 0:
@@ -421,7 +434,7 @@ class mlp_wrapper(nn.Module):
 			# simu_soc = fun_model_prediction(predicted_para[valid_mask], forcing, self.vertical_mixing, self.vectorized)
 			simu_soc = fun_matrix_clm5_experimental.fun_model_prediction(predicted_para[valid_mask], forcing, self.vertical_mixing, self.vectorized)
 		else:
-			#simu_soc = fun_model_simu(predicted_para[valid_mask], forcing, obs_depth, self.vertical_mixing, self.vectorized)
+			# simu_soc = fun_model_simu(predicted_para[valid_mask], forcing, obs_depth, self.vertical_mixing, self.vectorized)
 			simu_soc = fun_matrix_clm5_experimental.fun_model_simu(predicted_para[valid_mask], forcing, obs_depth, self.vertical_mixing, self.vectorized)
 			# print("=================================")
 			# print("Depths", obs_depth[0:5, 0:10])

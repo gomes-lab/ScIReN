@@ -85,14 +85,21 @@ data_dir_output = '../OUTPUT_DATA/'
 # TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250305-233914_NAM_DEBUGGING_lr=1e-03_fold=1_seed=1/opt_nn_20250305-233914_NAM_DEBUGGING_lr=1e-03_fold=1_seed=1.pt"
 
 # NAM Joint (one model predicts everything, given feature). TODO RENAME
-# TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250309-182521_NAMJOINT_lr=1e-03_fold=1_seed=1/opt_nn_20250309-182521_NAMJOINT_lr=1e-03_fold=1_seed=1.pt"
+TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250321-002807_NAM_DEBUG_lr=1e-03_fold=1_seed=1/opt_nn_20250321-002807_NAM_DEBUG_lr=1e-03_fold=1_seed=1.pt"
+
+# TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250321-005926_NAM_DEBUG_TEN_lr=1e-03_fold=1_seed=1/opt_nn_20250321-005926_NAM_DEBUG_TEN_lr=1e-03_fold=1_seed=1.pt"
 
 # BINN-Synthetic 
-TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250310-171603_BINN_SYNTHETIC_lr=1e-02_fold=1_seed=1/opt_nn_20250310-171603_BINN_SYNTHETIC_lr=1e-02_fold=1_seed=1.pt"
+# TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250310-171603_BINN_SYNTHETIC_lr=1e-02_fold=1_seed=1/opt_nn_20250310-171603_BINN_SYNTHETIC_lr=1e-02_fold=1_seed=1.pt"
+
+# KAN
+# TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250319-111214_KAN_lr=1e-03_fold=1_seed=1/opt_nn_20250319-111214_KAN_lr=1e-03_fold=1_seed=1.pt"
 
 # Original BINN (hardsigmoid)
 
+
 PLOT_DIR = os.path.join(os.path.dirname(TRAINED_MODEL_PATH), 'visualizations')
+device = "cuda:" + str(os.environ["CUDA_VISIBLE_DEVICES"].split(',')[0]) if torch.cuda.is_available() else "cpu"
 
 ############################################################
 # Load the model checkpoint (so we can see its arguments)
@@ -110,7 +117,7 @@ def set_seeds(seed):
 	torch.backends.cudnn.benchmark = True
 
 checkpoint_path = TRAINED_MODEL_PATH
-checkpoint = torch.load(checkpoint_path, weights_only=False)
+checkpoint = torch.load(checkpoint_path, weights_only=False, map_location=device)
 args = checkpoint['args']  # Recently added, older models might not have this
 set_seeds(args.seed)
 
@@ -190,6 +197,30 @@ PRODA_para['profile_id'] = PRODA_para['profile_id'] - 1
 # Not supporting other options yet.
 para_names = ['diffus', 'cryo', 'q10', 'efolding', 'taucwd', 'taul1', 'taul2', 'tau4s1', 'tau4s2', 'tau4s3', 'fl1s1', 'fl2s1', 'fl3s2', 'fs1s2', 'fs1s3', 'fs2s1', 'fs2s3', 'fs3s1', 'fcwdl2', 'w-scaling', 'beta']
 para_index = np.arange(0, len(para_names))
+
+# Min/max values
+PARA_MIN_MAX = np.array([[3e-5, 5e-4], 
+				         [3e-5, 16*1e-4],
+						 [1.2, 3],
+						 [0.1, 1],
+						 [1, 6],
+						 [0.0001, 0.11],
+						 [0.1, 0.3],
+						 [0.0001, 0.5],
+						 [1, 10],
+						 [20, 400],
+						 [0.1, 0.8],
+						 [0.2, 0.8],
+						 [0.2, 0.8],
+						 [0.0001, 0.4],
+						 [0.0001, 0.1],
+						 [0.1, 0.74],
+						 [0.0001, 0.1],
+						 [0.0001, 0.9],
+						 [0.5, 1],
+						 [0.0001, 5],
+						 [0.5, 0.9999]])
+
 
 # Soil depths info
 # width between two interfaces
@@ -494,16 +525,6 @@ elif args.features == "ten":
 else:
 	raise ValueError("Invalid features")
 
-# Load environmental covariates
-env_info = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_env_info.mat')
-env_info = env_info['EnvInfo']
-original_lons = env_info[:, 3].copy()
-original_lats = env_info[:, 4].copy()
-
-# Min/max for each feature
-col_max_min = loadmat(data_dir_input + 'wosis_2019_snap_shot/world_grid_envinfo_present_cesm2_clm5_cen_vr_v2_whole_time_col_max_min.mat')
-col_max_min = col_max_min['col_max_min']
-
 
 ################################################
 # Categorical variables                        #
@@ -517,37 +538,54 @@ categorical_vars = [['ESA_Land_Cover'], ['Texture_USDA_0cm', 'Texture_USDA_30cm'
 categorical_vars_flattened = [item for sublist in categorical_vars for item in sublist]
 
 
-#####################################################################
-# Transform covariates to [0, 1] range based on precomputed min/max #
-#####################################################################
+#############################################################################################
+# Load environmental covariates, and transform to [0, 1] range based on precomputed min/max #
+#############################################################################################
+# Load environmental covariates
+env_info = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_env_info.mat')
+env_info = env_info['EnvInfo']
+original_lons = env_info[:, 3].copy()  # Save the original (unscaled) lon/lat
+original_lats = env_info[:, 4].copy()
+env_info = df(env_info)
+env_info.columns = env_info_names
+
+# Min/max for each feature
+col_max_min = loadmat(data_dir_input + 'wosis_2019_snap_shot/world_grid_envinfo_present_cesm2_clm5_cen_vr_v2_whole_time_col_max_min.mat')
+col_max_min = col_max_min['col_max_min']
+
 # Don't want to transform categorical variables, so set max/min to nan
 for group in categorical_vars:
 	for var in group:
 		idx = env_info_names.index(var)
 		col_max_min[idx, :] = np.nan
 
-warnings.filterwarnings("ignore")  # Ignore warnings about subtracting nan
-for ivar in np.arange(3, len(col_max_min[:, 0])):
-	if np.isnan(col_max_min[ivar, :]).any():
-		pass
-	else:
-		env_info[:, ivar] = (env_info[:, ivar] - col_max_min[ivar, 0])/(col_max_min[ivar, 1] - col_max_min[ivar, 0])
-		env_info[(env_info[:, ivar] > 1), ivar] = 1
-		env_info[(env_info[:, ivar] < 0), ivar] = 0
-warnings.resetwarnings()
-
-
-env_info = df(env_info)
-env_info.columns = env_info_names
-env_info["original_lon"] = original_lons
-env_info["original_lat"] = original_lats
-
-# Logic to add columns for "average" variables (e.g. average over layers)
+# Logic to add columns for "average" variables (e.g. average over layers).
+# Also record the min/max for these new columns.
+all_col_max_mins = [col_max_min]
 for v in var4nn:
 	if v not in env_info_names:
 		var_prefix = v.split("_avg")[0]
 		columns = env_info.filter(regex=(f"{var_prefix}*"))
 		env_info[v] = columns.mean(axis=1)
+		indices = [env_info_names.index(col) for col in columns.columns]
+		new_max_min = np.mean(col_max_min[indices, :], axis=0, keepdims=True)  # keep shape [1, 2]
+		all_col_max_mins.append(new_max_min)
+col_max_min = np.concatenate(all_col_max_mins, axis=0)  # shape [num_columns_new, 2]
+
+# Scale numeric features to [0, 1] based on precomputed min/max 
+warnings.filterwarnings("ignore")  # Ignore warnings about subtracting nan
+for ivar in np.arange(3, len(col_max_min[:, 0])):
+	if np.isnan(col_max_min[ivar, :]).any():
+		pass
+	else:
+		env_info.iloc[:, ivar] = (env_info.iloc[:, ivar] - col_max_min[ivar, 0])/(col_max_min[ivar, 1] - col_max_min[ivar, 0])
+		env_info.iloc[(env_info.iloc[:, ivar] > 1), ivar] = 1
+		env_info.iloc[(env_info.iloc[:, ivar] < 0), ivar] = 0
+warnings.resetwarnings()
+
+# Retain orginal lat/lon
+env_info["original_lon"] = original_lons
+env_info["original_lat"] = original_lats
 
 
 ########################################################################
@@ -807,20 +845,11 @@ grid_env_info_names = [\
 	'cesm2_vegc', \
 	'nbedrock']
 
-# Remove the first 3 columns and the last column from the col_max_min matrix
-col_max_min_grid = col_max_min[3:-1, :]
-
-# Normalize grid env info
-for ivar in np.arange(0, len(col_max_min_grid[:, 0])):
-	if np.isnan(col_max_min_grid[ivar, :]).any():
-		pass
-	else:
-		grid_env_info[:, ivar] = (grid_env_info[:, ivar] - col_max_min_grid[ivar, 0])/(col_max_min_grid[ivar, 1] - col_max_min_grid[ivar, 0])
-		grid_env_info[(grid_env_info[:, ivar] > 1), ivar] = 1
-		grid_env_info[(grid_env_info[:, ivar] < 0), ivar] = 0
-
 grid_env_info = df(grid_env_info)
 grid_env_info.columns = grid_env_info_names
+
+# Remove the first 3 columns and the R_squared column from the col_max_min matrix
+col_max_min_grid = np.delete(col_max_min, env_info_names.index("R_Squared"), axis=0)[3:, :]
 
 # Logic to add columns for "average" variables (e.g. average over layers)
 for v in var4nn:
@@ -828,6 +857,15 @@ for v in var4nn:
 		var_prefix = v.split("_avg")[0]
 		columns = grid_env_info.filter(regex=(f"{var_prefix}*"))
 		grid_env_info[v] = columns.mean(axis=1)
+
+# Normalize grid env info
+for ivar in np.arange(0, len(col_max_min_grid[:, 0])):
+	if np.isnan(col_max_min_grid[ivar, :]).any():
+		pass
+	else:
+		grid_env_info.iloc[:, ivar] = (grid_env_info.iloc[:, ivar] - col_max_min_grid[ivar, 0])/(col_max_min_grid[ivar, 1] - col_max_min_grid[ivar, 0])
+		grid_env_info.iloc[(grid_env_info.iloc[:, ivar] > 1), ivar] = 1
+		grid_env_info.iloc[(grid_env_info.iloc[:, ivar] < 0), ivar] = 0
 
 # Only keep the variables used in training the NN
 grid_env_info = grid_env_info[var4nn]
@@ -1014,11 +1052,12 @@ class MergeDataset(Dataset):
 ##############################################################################
 # Construct and load model
 ##############################################################################
-device = "cuda:" + str(os.environ["CUDA_VISIBLE_DEVICES"].split(',')[0]) if torch.cuda.is_available() else "cpu"
-if args.model in ["new_mlp", "lipmlp", "senn", "nam", "nam_joint", "nag"]:
+if args.model in ["new_mlp", "lipmlp", "senn", "nam", "nam_joint", "nag", "kan"]:
 	model_class = mlp_wrapper
 elif args.model == 'nn_only':
 	model_class = nn_only
+else:
+	raise ValueError("Unsupported model")
 model_kwargs = checkpoint["model_kwargs"]
 model = model_class(**model_kwargs).to(device)
 
@@ -1123,6 +1162,14 @@ with torch.no_grad():
 		grid_f_out = model.mlp.f_out
 		grid_new_input = model.new_input
 
+	# KAN-specific visualizations
+	if args.model == "kan":
+		pruned_model = model.mlp  # .prune()
+		pruned_model.plot(scale=5.0, in_vars=var4nn, out_vars=para_names, varscale=0.1)
+		plt.savefig(os.path.join(PLOT_DIR, "kan_plot.png"))
+		plt.close()
+		exit(1)
+
 	# NAM-specific visualziations
 	if args.model in ["nam", "nam_joint"]:
 		# Feature importance
@@ -1130,14 +1177,14 @@ with torch.no_grad():
 		# features are listed in the same order as var_idx_to_emb.keys()
 		# NOTE: the spatial positional encoding is not supported!
 		NAM_FEATURE_ORDER = [var4nn[int(i)] for i in (model.non_categorical_indices + list(model.var_idx_to_emb.keys()))]
-		print("NAM FEATURE ORDER", NAM_FEATURE_ORDER)
+		# print("NAM FEATURE ORDER", NAM_FEATURE_ORDER)
 		variances = torch.var(val_f_out, dim=0)  # [n_features, n_params]
 		visualization_utils.plot_matrix(variances.cpu().detach().numpy(), row_labels=NAM_FEATURE_ORDER, col_labels=para_names,
 										filename=os.path.join(PLOT_DIR, "nam_feature_importance.png"), 
 										title="Feature contributions")
 
 		# Loop through each output parameter. Plot shape function of 5 most influential features
-		N_ROWS = 10
+		N_ROWS = 5
 		fig, axeslist = plt.subplots(N_ROWS, len(para_names), figsize=(5*len(para_names), 2*N_ROWS))
 		for para_idx in range(len(para_names)):
 			important_feature_idx = torch.topk(variances[:, para_idx], N_ROWS).indices
@@ -1146,6 +1193,13 @@ with torch.no_grad():
 			# 	row = feat_idx
 			for row, feat_idx in enumerate(important_feature_idx):  # Important features
 				feat_name = NAM_FEATURE_ORDER[feat_idx]
+				
+				feat_idx_original = list(env_info.columns).index(feat_name)
+				scaling_x_min = col_max_min[feat_idx_original, 0]
+				scaling_x_max = col_max_min[feat_idx_original, 1]
+				scaling_y_min = PARA_MIN_MAX[para_idx, 0]
+				scaling_y_max = PARA_MIN_MAX[para_idx, 1]
+
 				ax = axeslist[row, para_idx]
 				if feat_idx < len(model.non_categorical_indices):  # Numeric feature
 					if args.model == "nam":  # Separate model for each input-output pair
@@ -1154,14 +1208,15 @@ with torch.no_grad():
 						feat_nn_all = model.mlp.feature_nns[feat_idx].cpu()
 						feat_nn = lambda x: feat_nn_all(x)[:, para_idx:para_idx+1]
 					feat_vals = grid_new_input[:, feat_idx].cpu().detach().numpy()  # Values of the feature
-					visualization_utils.plot_shape_function(feat_nn, feat_vals, ax=ax, title=feat_name, xlabel=feat_name, ylabel="Contribution to " + para_names[para_idx], divide_by=6 * model.mlp.divide_by)  # 1/6 is the slope of hardsigmoid, so divide by 6
+					visualization_utils.plot_shape_function(feat_nn, feat_vals, ax=ax, title=feat_name, xlabel=feat_name, ylabel="Change to " + para_names[para_idx], divide_by=6 * model.mlp.divide_by,
+											 				scaling_x_min=scaling_x_min, scaling_x_max=scaling_x_max, scaling_y_min=scaling_y_min, scaling_y_max=scaling_y_max)  # 1/6 is the slope of hardsigmoid, so divide by 6
 				else:  # Categorical feature, plot map of grid contributions
 					f_out = grid_f_out[:, feat_idx, para_idx]
 					visualization_utils.plot_observations_world_map(predict_data_c[:, 0], predict_data_c[:, 1], f_out, None, 
 																	feat_name, title=feat_name, us_only=True, ax=ax)
 
 		# Column headers. Source: https://stackoverflow.com/a/25814386
-		pad = 10
+		pad = 15
 		for ax, para_name in zip(axeslist[0], para_names):
 			ax.annotate(para_name, xy=(0.5, 1), xytext=(0, pad), xycoords='axes fraction', textcoords='offset points',
                         size='large', ha='center', va='baseline')

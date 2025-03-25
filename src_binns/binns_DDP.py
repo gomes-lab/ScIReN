@@ -85,7 +85,7 @@ parser = argparse.ArgumentParser()
 
 # Model architecture
 parser.add_argument("--note", type=str, default="", help="Optional name to give to the model")
-parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp', 'senn', 'nam', 'nam_joint', 'nag', 'kan', 'gnn', 'spatial', 'nn_only', 'binn_hybrid'], help="Model type")
+parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp', 'senn', 'nam', 'nam_joint', 'nam_joint2', 'nag', 'kan', 'gnn', 'spatial', 'nn_only', 'binn_hybrid'], help="Model type")
 parser.add_argument("--width", type=int, default=128, help="Size of hidden layers (new_mlp or nn_only)")
 parser.add_argument("--num_layers", type=int, default=4, help="Size of hidden layers (new_mlp or nn_only)")
 parser.add_argument("--residual", action='store_true', help="Whether to add residual connections in neural network portion (MLP)")
@@ -94,7 +94,7 @@ parser.add_argument("--embed_dim", type=int, default=5, help="Embedding dim for 
 parser.add_argument("--use_bn", action='store_true', help="Whether to use batchnorm")
 parser.add_argument("--dropout_prob", default=0., type=float, help="Dropout prob")
 parser.add_argument("--feature_dropout", default=0., type=float, help="Probability of dropping out entire feature. ONLY SUPPORTED FOR NAM MODELS.")
-parser.add_argument("--activation", type=str, choices=['relu', 'leaky_relu', 'tanh'], default='relu', help="Activation function inside neural network")
+parser.add_argument("--activation", type=str, choices=['relu', 'leaky_relu', 'tanh', 'exu'], default='relu', help="Activation function inside neural network. exu is only supported for NAM (neural additive model)")
 parser.add_argument("--param_constraint", type=str, choices=['sigmoid', 'hardsigmoid', 'none'], default='sigmoid', help="Activation function used to constrain parameter predictions. If sigmoid, we suggest using param_reg loss. If hardsigmoid, use param_violation loss")
 
 # Process-based model settings
@@ -579,10 +579,9 @@ print(datetime.now(), '------------soc data prepared------------')
 nn_split_ratio = 0.1
 test_split_ratio = 0.1
 
-#---------------------------------------------------
-# env info
-#---------------------------------------------------
-# environmental info of soil profiles
+#################################################
+# Environmental feature list                    #
+#################################################
 env_info_names = ['ProfileNum', 'ProfileID', 'LayerNum', 'Lon', 'Lat', 'Date', \
 'Rmean', 'Rmax', 'Rmin', \
 'ESA_Land_Cover', \
@@ -636,16 +635,6 @@ elif args.features == "ten":
 else:
 	raise ValueError("Invalid features")
 
-# Load environmental covariates
-env_info = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_env_info.mat')
-env_info = env_info['EnvInfo']
-original_lons = env_info[:, 3].copy()
-original_lats = env_info[:, 4].copy()
-
-# Min/max for each feature
-col_max_min = loadmat(data_dir_input + 'wosis_2019_snap_shot/world_grid_envinfo_present_cesm2_clm5_cen_vr_v2_whole_time_col_max_min.mat')
-col_max_min = col_max_min['col_max_min']
-
 
 ################################################
 # Categorical variables                        #
@@ -659,37 +648,54 @@ categorical_vars = [['ESA_Land_Cover'], ['Texture_USDA_0cm', 'Texture_USDA_30cm'
 categorical_vars_flattened = [item for sublist in categorical_vars for item in sublist]
 
 
-#####################################################################
-# Transform covariates to [0, 1] range based on precomputed min/max #
-#####################################################################
+#############################################################################################
+# Load environmental covariates, and transform to [0, 1] range based on precomputed min/max #
+#############################################################################################
+# Load environmental covariates
+env_info = loadmat(data_dir_input + 'wosis_2019_snap_shot/wosis_2019_snapshot_hugelius_mishra_env_info.mat')
+env_info = env_info['EnvInfo']
+original_lons = env_info[:, 3].copy()  # Save the original (unscaled) lon/lat
+original_lats = env_info[:, 4].copy()
+env_info = df(env_info)
+env_info.columns = env_info_names
+
+# Min/max for each feature
+col_max_min = loadmat(data_dir_input + 'wosis_2019_snap_shot/world_grid_envinfo_present_cesm2_clm5_cen_vr_v2_whole_time_col_max_min.mat')
+col_max_min = col_max_min['col_max_min']
+
 # Don't want to transform categorical variables, so set max/min to nan
 for group in categorical_vars:
 	for var in group:
 		idx = env_info_names.index(var)
 		col_max_min[idx, :] = np.nan
 
-warnings.filterwarnings("ignore")  # Ignore warnings about subtracting nan
-for ivar in np.arange(3, len(col_max_min[:, 0])):
-	if np.isnan(col_max_min[ivar, :]).any():
-		pass
-	else:
-		env_info[:, ivar] = (env_info[:, ivar] - col_max_min[ivar, 0])/(col_max_min[ivar, 1] - col_max_min[ivar, 0])
-		env_info[(env_info[:, ivar] > 1), ivar] = 1
-		env_info[(env_info[:, ivar] < 0), ivar] = 0
-warnings.resetwarnings()
-
-
-env_info = df(env_info)
-env_info.columns = env_info_names
-env_info["original_lon"] = original_lons
-env_info["original_lat"] = original_lats
-
-# Logic to add columns for "average" variables (e.g. average over layers)
+# Logic to add columns for "average" variables (e.g. average over layers).
+# Also record the min/max for these new columns.
+all_col_max_mins = [col_max_min]
 for v in var4nn:
 	if v not in env_info_names:
 		var_prefix = v.split("_avg")[0]
 		columns = env_info.filter(regex=(f"{var_prefix}*"))
 		env_info[v] = columns.mean(axis=1)
+		indices = [env_info_names.index(col) for col in columns.columns]
+		new_max_min = np.mean(col_max_min[indices, :], axis=0, keepdims=True)  # keep shape [1, 2]
+		all_col_max_mins.append(new_max_min)
+col_max_min = np.concatenate(all_col_max_mins, axis=0)  # shape [num_columns_new, 2]
+
+# Scale numeric features to [0, 1] based on precomputed min/max 
+warnings.filterwarnings("ignore")  # Ignore warnings about subtracting nan
+for ivar in np.arange(3, len(col_max_min[:, 0])):
+	if np.isnan(col_max_min[ivar, :]).any():
+		pass
+	else:
+		env_info.iloc[:, ivar] = (env_info.iloc[:, ivar] - col_max_min[ivar, 0])/(col_max_min[ivar, 1] - col_max_min[ivar, 0])
+		env_info.iloc[(env_info.iloc[:, ivar] > 1), ivar] = 1
+		env_info.iloc[(env_info.iloc[:, ivar] < 0), ivar] = 0
+warnings.resetwarnings()
+
+# Retain orginal lat/lon
+env_info["original_lon"] = original_lons
+env_info["original_lat"] = original_lats
 
 
 ########################################################################
@@ -1107,20 +1113,11 @@ grid_env_info_names = [\
 	'cesm2_vegc', \
 	'nbedrock']
 
-# Remove the first 3 columns and the last column from the col_max_min matrix
-col_max_min_grid = col_max_min[3:-1, :]
-
-# Normalize grid env info
-for ivar in np.arange(0, len(col_max_min_grid[:, 0])):
-	if np.isnan(col_max_min_grid[ivar, :]).any():
-		pass
-	else:
-		grid_env_info[:, ivar] = (grid_env_info[:, ivar] - col_max_min_grid[ivar, 0])/(col_max_min_grid[ivar, 1] - col_max_min_grid[ivar, 0])
-		grid_env_info[(grid_env_info[:, ivar] > 1), ivar] = 1
-		grid_env_info[(grid_env_info[:, ivar] < 0), ivar] = 0
-
 grid_env_info = df(grid_env_info)
 grid_env_info.columns = grid_env_info_names
+
+# Remove the first 3 columns and the R_squared column from the col_max_min matrix
+col_max_min_grid = np.delete(col_max_min, env_info_names.index("R_Squared"), axis=0)[3:, :]
 
 # Logic to add columns for "average" variables (e.g. average over layers)
 for v in var4nn:
@@ -1128,6 +1125,16 @@ for v in var4nn:
 		var_prefix = v.split("_avg")[0]
 		columns = grid_env_info.filter(regex=(f"{var_prefix}*"))
 		grid_env_info[v] = columns.mean(axis=1)
+
+# Normalize grid env info
+for ivar in np.arange(0, len(col_max_min_grid[:, 0])):
+	if np.isnan(col_max_min_grid[ivar, :]).any():
+		pass
+	else:
+		grid_env_info.iloc[:, ivar] = (grid_env_info.iloc[:, ivar] - col_max_min_grid[ivar, 0])/(col_max_min_grid[ivar, 1] - col_max_min_grid[ivar, 0])
+		grid_env_info.iloc[(grid_env_info.iloc[:, ivar] > 1), ivar] = 1
+		grid_env_info.iloc[(grid_env_info.iloc[:, ivar] < 0), ivar] = 0
+
 
 # Only keep the variables used in training the NN
 grid_env_info = grid_env_info[var4nn]
@@ -1439,10 +1446,11 @@ def worker(rank, world_size, job_id, port):
 		for var in group:
 			idx = var4nn.index(var)
 			var_idx_to_emb[idx] = emb
+	print("After categorical", flush=True)
 
 	# TODO Not sure if "global model" is correct
 	# global model
-	if args.bias_only_epochs > 0 and (args.whether_resume == 0 or checkpoint_main["epoch"] < args.bias_only_epochs):
+	if args.bias_only_epochs >= 1 and (args.whether_resume == 0 or checkpoint_main["epoch"] < args.bias_only_epochs):
 		# If training bias only, temporarily set the model to ConstantParameters
 		# and then switch to the real model after that many epochs.
 		# Exception: If we are resuming and the epoch is already past bias_only_epochs,
@@ -1482,13 +1490,14 @@ def worker(rank, world_size, job_id, port):
 	else:
 		# Create model
 		model = model_class(**model_kwargs).to(device)
+	print("Before DDP", flush=True)
 
 	# Create distributed version of the model
 	if args.use_ddp == 1:
 		if torch.cuda.is_available():
 			model = DDP(model, device_ids=[device])
 		else:  # CPU only
-			model = DDP(model, find_unused_parameters=True)
+			model = DDP(model)  #, find_unused_parameters=True)
 		model_without_ddp = model.module
 	else:
 		model_without_ddp = model
@@ -1646,7 +1655,7 @@ def worker(rank, world_size, job_id, port):
 
 		# If we have trained for "bias_only_epochs" epochs and it's
 		# time to switch to training the full model, change the model to the full model
-		if args.bias_only_epochs > 0 and iepoch == args.bias_only_epochs:
+		if args.bias_only_epochs >= 1 and iepoch == args.bias_only_epochs:
 			old_bias = model_without_ddp.best_params.data  # Get optimal param set from ConstantParameters model
 			print("OLD BIAS", old_bias)
 			model_class, model_kwargs = misc_utils.get_model(args, var4nn, var_idx_to_emb, device,
@@ -1676,7 +1685,7 @@ def worker(rank, world_size, job_id, port):
 		# torch.autograd.set_detect_anomaly(True)   # <- helps debug gradient anomalies but is VERY SLOW
 		for batch_info in train_loader:
 			batch_x, batch_y, batch_z, batch_c, batch_profile_id, batch_proda_para = batch_info
-			# print("First batch", flush=True)
+			print(rank, "Batch start", flush=True)
 			if batch_x.shape[0] == 1 and args.use_bn:  # Batch size of 1 during training does not work with BatchNorm
 				continue
 
@@ -1700,7 +1709,6 @@ def worker(rank, world_size, job_id, port):
 			else:
 				# Normal models just return predicted (1) SOC, (2) parameters
 				batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0, one_param_only=args.one_param_only, PRODA_para=batch_proda_para)
-			# print(rank, "after forward", flush=True)
 
 			# Check if batch_pred_para is nan or inf
 			if torch.isnan(batch_pred_para).any() or torch.isinf(batch_pred_para).any():
@@ -1713,6 +1721,10 @@ def worker(rank, world_size, job_id, port):
 			if args.model != 'nn_only' and (torch.any(batch_pred_para < 0.00001) or torch.any(batch_pred_para > 0.99999)):
 				print("Extreme param values")
 				print(batch_pred_para[torch.any(((batch_pred_para < 0.00001) | (batch_pred_para > 0.99999)), dim=1), :])
+			if rank == 0 and ibatch == 1 and iepoch % 10 == 0:
+				print("Predicted para", batch_pred_para)
+				if args.model == "nam_joint2":
+					print("Predicted f_out", model.module.mlp.f_out.shape, model.module.mlp.f_out[0:5])
 
 			#------------ 2 compute the objective function
 			l1_loss, smooth_l1_loss, l2_loss, param_reg_loss, train_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
@@ -1843,11 +1855,11 @@ def worker(rank, world_size, job_id, port):
 				# cure_loss, grad_norm = misc_utils.regularizer(batch_x, batch_y, batch_z, model, binns_loss_simple)
 
 			if "nam_l2" in args.losses:
-				assert args.model in ["nam", "nam_joint", "nag"]
+				assert args.model in ["nam", "nam_joint", "nam_joint2", "nag"]
 				f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
 				nam_l2_loss = (f_out ** 2).sum() / (f_out.shape[1] * f_out.shape[2])
 			if "nam_entropy" in args.losses:
-				assert args.model in ["nam", "nam_joint"]
+				assert args.model in ["nam", "nam_joint", "nam_joint2"]
 				f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
 				variance_explained = torch.var(f_out, dim=0)  # [n_features, n_outputs]
 				frac_variance_explained = variance_explained / variance_explained.sum(dim=0, keepdim=True)  # [n_features, n_outputs]. For each output, feature fractions sum to 1
@@ -1896,7 +1908,6 @@ def worker(rank, world_size, job_id, port):
 
 			# Store losses in a tensor, in the order of args.losses
 			train_losses = torch.stack([loss_dict[loss] for loss in args.losses]).to(device)
-
 			if args.loss_weighting in ["manual", "two_stage", "relobralo"]:
 				# If loss weights are explicitly set: compute weighted total loss, backpropagate
 				total_loss = torch.dot(train_losses, args.lambdas.to(device))
@@ -1912,10 +1923,15 @@ def worker(rank, world_size, job_id, port):
 				# torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_value)
 				torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=args.clip_value)
 
+			# Check gradients
+			# print(rank, "GRAD WRT NAM", model.module.mlp.feature_nns[1].layers[0].weight.grad, flush=True)
+			# print(rank, "DATA WRT NAM", model.module.mlp.feature_nns[1].layers[0].weight.data, flush=True)
+
 			#------------ 5 step in the opposite direction of the gradient
 			# with torch.no_grad(): para = para - eta*para.grad # eta is learning rate
 			optimizer.step()
 			# print(rank, "after optimizer step", flush=True)
+			# print(rank, "DATA WRT NAM AFTER STEP", model.module.mlp.feature_nns[1].layers[0].weight.data, flush=True)
 
 			# Noise
 			if args.noise_std > 0:
@@ -2075,11 +2091,11 @@ def worker(rank, world_size, job_id, port):
 					cure_loss = (jacobian_perturbed - jacobian).square().sum()			
 
 				if "nam_l2" in args.losses:
-					assert args.model in ["nam", "nam_joint", "nag"]
+					assert args.model in ["nam", "nam_joint", "nam_joint2", "nag"]
 					f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
 					nam_l2_loss = (f_out ** 2).sum() / (f_out.shape[1] * f_out.shape[2])
 				if "nam_entropy" in args.losses:
-					assert args.model in ["nam", "nam_joint"]
+					assert args.model in ["nam", "nam_joint", "nam_joint2"]
 					f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
 					variance_explained = torch.var(f_out, dim=0)  # [n_features, n_outputs]
 					frac_variance_explained = variance_explained / variance_explained.sum(dim=0, keepdim=True)  # [n_features, n_outputs]. For each output, feature fractions sum to 1
@@ -2369,7 +2385,7 @@ def worker(rank, world_size, job_id, port):
 				# 		print("x shapes", current_data_x.shape, predict_data_x.shape)
 				# 		lons_list.extend([current_data_c[:, 0], predict_data_c[:, 0]])
 				# 		lats_list.extend([current_data_c[:, 1], predict_data_c[:, 1]])
-				# 		values_list.extend([current_data_x[:, var_idx, 0, 0], predict_data_x[:, var_idx, 0, 0]])
+				# 		values_list.extend([torch.tensor(current_data_x[:, var_idx, 0, 0]), torch.tensor(predict_data_x[:, var_idx, 0, 0])])
 				# 		vars_list.extend([f'Train/Val/Test: {var}', f'Grid: {var}'])
 
 				# 	visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, "covariate_maps.png"),
@@ -3403,12 +3419,12 @@ if __name__ == '__main__':
 	# Spawn method is required if using GPU
 	if torch.cuda.is_available():
 		assert world_size == len(os.environ["CUDA_VISIBLE_DEVICES"].split(",")), "If using GPU: world_size (num_CPU) must equal number of GPUs in CUDA_VISIBLE_DEVICES"
-		import torch.multiprocessing as mp
-		mp.set_start_method('spawn', force=True)
+	import torch.multiprocessing as mp
+	mp.set_start_method('spawn', force=True)
 
 	# Create the processes
 	for rank in range(world_size):
-		p = Process(target=worker, args=(rank, world_size, job_id, port))
+		p = mp.Process(target=worker, args=(rank, world_size, job_id, port))
 		p.start()
 		processes.append(p)
 

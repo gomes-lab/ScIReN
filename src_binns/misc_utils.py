@@ -267,7 +267,7 @@ def get_model(args, var4nn, var_idx_to_emb, device, para_index, train_x, train_y
 	"""
 	Given the commandline args, returns the correct model class and a dict of kwargs
 	"""
-	if args.model in ["new_mlp", "lipmlp", "senn", "nam", "nam_joint", "nag", "kan"]:
+	if args.model in ["new_mlp", "lipmlp", "senn", "nam", "nam_joint", "nam_joint2", "nag", "kan"]:
 		model_class = mlp_wrapper
 		model_kwargs = {"input_vars": len(var4nn),
 						"var_idx_to_emb": var_idx_to_emb,
@@ -382,6 +382,7 @@ def get_optimizer_and_scheduler(model, args):
 		optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
 	else:
 		raise ValueError("Invalid args.optimizer")
+	# print("GETTING OPTIMIZER", list(model.parameters()))
 
 	# If desired, add a learning rate scheduler that decays the learning rate throughout training
 	if args.scheduler == "reduce_on_plateau":
