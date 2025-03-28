@@ -5,6 +5,7 @@ Takes a trained model and produces plots that attempt to visualize/interpret its
 ##################################################################################
 # Boilerplate to load in dataset and trained model. Copied from binns_DDP.py.    #
 ##################################################################################
+print("Starting import")
 import csv
 import functools
 import math
@@ -48,7 +49,7 @@ torch.set_default_dtype(torch.float32)
 
 # Temporary hack to avoid printing np.float64(...) when printing out numpy scalars.
 # TODO fix this
-np.set_printoptions(legacy="1.25")
+np.set_printoptions(legacy="1.21")
 
 import os
 import torch
@@ -81,21 +82,22 @@ from fun_matrix_clm5_vectorized_bulk_converge import fun_bulk_simu
 data_dir_input = '../ENSEMBLE/INPUT_DATA/'
 data_dir_output = '../OUTPUT_DATA/'
 
+# BINN with ten features
+# TRAINED_MODEL_PATH = "../OUTPUT_DATA/neural_network/20250324-225001_BINN_TENFEATURES_HARDSIGMOID_TUNING_lr=1e-03_fold=1_seed=1/opt_nn_20250324-225001_BINN_TENFEATURES_HARDSIGMOID_TUNING_lr=1e-03_fold=1_seed=1.pt"
+
+# KAN with 10 features
+TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250326-134936_KAN_HARDDIAGONAL_TWOSTAGE_lr=1e-02_fold=1_seed=1/opt_nn_20250326-134936_KAN_HARDDIAGONAL_TWOSTAGE_lr=1e-02_fold=1_seed=1.pt"
+
+# NAM models. NOTE These are out of date and I need to double-check they still work.
 # NAM model per input-output pair
 # TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250305-233914_NAM_DEBUGGING_lr=1e-03_fold=1_seed=1/opt_nn_20250305-233914_NAM_DEBUGGING_lr=1e-03_fold=1_seed=1.pt"
 
 # NAM Joint (one model predicts everything, given feature). TODO RENAME
-TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250321-002807_NAM_DEBUG_lr=1e-03_fold=1_seed=1/opt_nn_20250321-002807_NAM_DEBUG_lr=1e-03_fold=1_seed=1.pt"
+# TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250321-002807_NAM_DEBUG_lr=1e-03_fold=1_seed=1/opt_nn_20250321-002807_NAM_DEBUG_lr=1e-03_fold=1_seed=1.pt"
 
+# NAM Joint with 10 features
 # TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250321-005926_NAM_DEBUG_TEN_lr=1e-03_fold=1_seed=1/opt_nn_20250321-005926_NAM_DEBUG_TEN_lr=1e-03_fold=1_seed=1.pt"
 
-# BINN-Synthetic 
-# TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250310-171603_BINN_SYNTHETIC_lr=1e-02_fold=1_seed=1/opt_nn_20250310-171603_BINN_SYNTHETIC_lr=1e-02_fold=1_seed=1.pt"
-
-# KAN
-# TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250319-111214_KAN_lr=1e-03_fold=1_seed=1/opt_nn_20250319-111214_KAN_lr=1e-03_fold=1_seed=1.pt"
-
-# Original BINN (hardsigmoid)
 
 
 PLOT_DIR = os.path.join(os.path.dirname(TRAINED_MODEL_PATH), 'visualizations')
@@ -1164,8 +1166,12 @@ with torch.no_grad():
 
 	# KAN-specific visualizations
 	if args.model == "kan":
-		pruned_model = model.mlp  # .prune()
-		pruned_model.plot(scale=5.0, in_vars=var4nn, out_vars=para_names, varscale=0.1)
+		# testing the regularization function
+		model.mlp.attribute()
+		model.mlp.node_attribute()
+		model.mlp.reg("edge_backward", 1, 1, 0, 0)
+		pruned_model = model.mlp.prune(node_th=0.03, edge_th=0.03)
+		pruned_model.plot(in_vars=var4nn, out_vars=para_names, varscale=0.1)
 		plt.savefig(os.path.join(PLOT_DIR, "kan_plot.png"))
 		plt.close()
 		exit(1)

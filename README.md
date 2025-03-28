@@ -36,6 +36,15 @@ pip install gdown
 gdown 1fQYA2xxeSdu4MLOU25Ej-bQ6eUiFWvXK
 unzip BINN_input_data.zip
 ```
+### KAN
+
+If you want to use the KAN model, please cd into the subfolder and install its requirements and the package itself.
+```
+cd src_binns/pykan
+pip install -r requirements.txt
+pip install -e .
+```
+
 
 ### (OLD STUFF, CAN PROBABLY IGNORE) Alternate commands to install
 

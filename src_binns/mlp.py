@@ -302,7 +302,7 @@ class mlp_wrapper(nn.Module):
 				  		   activation=activation, init=init, residual=residual)
 		elif base_model == "kan":
 			import kan
-			self.mlp = kan.KAN(width=layer_sizes, grid=3, k=3, seed=42, device=device)
+			self.mlp = kan.KAN(width=layer_sizes, grid=3, k=3, seed=42, device=device)  # , diag_init=True, base_fun="identity")
 			# self.mlp.speed()  # Disable symbolic branch
 		else:
 			raise ValueError("Unsupported base_model")

@@ -356,3 +356,33 @@ def plot_shape_function(feat_nn, feat_vals, ax, title, xlabel, ylabel, divide_by
 
     shade_by_density_blocks()
 
+
+def plot_histogram(ax, values, title):
+    """
+    Plots a histogram of the given 'values' to 'ax'. The title contains the 'title' string
+    (along with mean/std/min/max)
+    """
+    ax.hist(values, bins=30)
+    ax.set_title("{} (n={}):\nmean={:.2f}, std={:.2f}\nmin={:.2f}, max={:.2f}\np1={:.2f}, p99={:.2f}".format(
+                 title, len(values), np.mean(values), np.std(values), np.min(values), np.max(values),
+                 np.quantile(values, 0.01), np.quantile(values, 0.99)))
+
+
+def plot_histogram_multiple(list_of_values, names, filename, n_rows=None):
+    """
+    list_of_values is a list that contains Numpy arrays. Plots a histogram for each flattened array.
+    """
+    assert len(list_of_values) == len(names)
+    channel_idx = 0
+    if n_rows is None:
+        n_rows = 3
+    n_cols = math.ceil(len(list_of_values) / n_rows)
+    fig, axeslist = plt.subplots(n_rows, n_cols, figsize=(3*n_cols, 3*n_rows))
+
+    # Loop through each band/percentile combination
+    for idx, values in enumerate(list_of_values):
+        values_flat = values.flatten()
+        plot_histogram(axeslist.ravel()[idx], values_flat, names[idx])
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()

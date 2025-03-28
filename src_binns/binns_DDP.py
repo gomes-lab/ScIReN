@@ -45,7 +45,7 @@ torch.set_default_dtype(torch.float32)
 
 # Temporary hack to avoid printing np.float64(...) when printing out numpy scalars.
 # TODO fix this
-np.set_printoptions(legacy="1.25")
+np.set_printoptions(legacy="1.21")
 
 import os
 import torch
@@ -1406,7 +1406,6 @@ def ddp_setup(rank, world_size, port):
 
 # Start training
 def worker(rank, world_size, job_id, port):
-	# print("Start worker", rank, world_size, job_id, flush=True)
 
 	# Filename to store loss records and visualizations
 	nn_training_name = job_id + '_' + model_name
@@ -1415,7 +1414,7 @@ def worker(rank, world_size, job_id, port):
 	PLOT_DIR = os.path.join(data_dir_output, 'neural_network', job_id, 'visualizations')
 	os.makedirs(PLOT_DIR, exist_ok=True)  # Note: this should already exist from create_output_folders
 
-	# Save printed output to file
+	# Save printed output to file. Does not seem to work on Slurm.
 	# sys.stdout = misc_utils.Logger(os.path.join(data_dir_output, "neural_network", job_id, "output.txt"))
 
 	# Set up distributed environment
@@ -1423,8 +1422,7 @@ def worker(rank, world_size, job_id, port):
 		device = ddp_setup(rank, world_size, port)
 	else:
 		device = "cuda:" + str(os.environ["CUDA_VISIBLE_DEVICES"].split(',')[0]) if torch.cuda.is_available() else "cpu"
-	print(f"Finished DDP setup. Rank {rank} of {world_size}. Device {device}. JobID {job_id}.")
-	# sys.stdout.flush()
+	print(f"Finished DDP setup. Rank {rank} of {world_size}. Device {device}. JobID {job_id}.", flush=True)
 
 	# Create embeddings for categorical variables (each int maps to a different category)
 	# If using PyTorch DDP, I think this has to be done inside worker(). Each worker
@@ -1446,7 +1444,6 @@ def worker(rank, world_size, job_id, port):
 		for var in group:
 			idx = var4nn.index(var)
 			var_idx_to_emb[idx] = emb
-	print("After categorical", flush=True)
 
 	# TODO Not sure if "global model" is correct
 	# global model
@@ -1490,7 +1487,6 @@ def worker(rank, world_size, job_id, port):
 	else:
 		# Create model
 		model = model_class(**model_kwargs).to(device)
-	print("Before DDP", flush=True)
 
 	# Create distributed version of the model
 	if args.use_ddp == 1:
@@ -1685,7 +1681,6 @@ def worker(rank, world_size, job_id, port):
 		# torch.autograd.set_detect_anomaly(True)   # <- helps debug gradient anomalies but is VERY SLOW
 		for batch_info in train_loader:
 			batch_x, batch_y, batch_z, batch_c, batch_profile_id, batch_proda_para = batch_info
-			print(rank, "Batch start", flush=True)
 			if batch_x.shape[0] == 1 and args.use_bn:  # Batch size of 1 during training does not work with BatchNorm
 				continue
 
@@ -1725,6 +1720,12 @@ def worker(rank, world_size, job_id, port):
 				print("Predicted para", batch_pred_para)
 				if args.model == "nam_joint2":
 					print("Predicted f_out", model.module.mlp.f_out.shape, model.module.mlp.f_out[0:5])
+
+			# If KAN, plot activation statistics
+			if args.model == "kan" and (ibatch == 1 and iepoch % 50 == 0):
+				import pykan
+				print("Plotting KAN;")
+				model_without_ddp.mlp.plot_activation_statistics(os.path.join(PLOT_DIR, f"epoch{iepoch}_KAN_activation_stats.png"))
 
 			#------------ 2 compute the objective function
 			l1_loss, smooth_l1_loss, l2_loss, param_reg_loss, train_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)

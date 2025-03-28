@@ -22,7 +22,7 @@
 # If you wanted to request GPUs, uncomment out this line.
 # #SBATCH --gpus 4
 # Request 16 CPU cores (32 hyperthreads).
-#SBATCH -c 64
+#SBATCH -c 8
 # Specify the resources should be assigned to a single task on one node.
 #SBATCH -N 1 -n 1
 # Request a total of 100GB RAM
@@ -117,7 +117,7 @@ do
                 --num_layers 3 --residual --width 256 \
                 --activation leaky_relu --use_bn --embed_dim 5 --pos_enc none \
                 --losses smooth_l1 param_reg --lambdas 1 100 \
-                --num_CPU 32 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_STD"
+                --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_STD"
         done
     done
 done
