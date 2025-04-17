@@ -385,9 +385,9 @@ def get_optimizer_and_scheduler(model, args):
 		optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 	elif args.optimizer == "SGD":
 		optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-	elif args.optimizer == "LBFGS":
-		# From the KAN repo https://github.com/KindXiaoming/pykan/blob/master/kan/MultKAN.py#L1498
-		optimizer = torch.optim.LBFGS(model.parameters(), lr=args.lr, history_size=10, line_search_fn="strong_wolfe", tolerance_grad=1e-32, tolerance_change=1e-32)  #, tolerance_ys=1e-32)
+	# elif args.optimizer == "LBFGS":
+	# 	# From the KAN repo https://github.com/KindXiaoming/pykan/blob/master/kan/MultKAN.py#L1498
+	# 	optimizer = torch.optim.LBFGS(model.parameters(), lr=args.lr, history_size=10, line_search_fn="strong_wolfe", tolerance_grad=1e-32, tolerance_change=1e-32)  #, tolerance_ys=1e-32)
 	else:
 		raise ValueError("Invalid args.optimizer")
 	# print("GETTING OPTIMIZER", list(model.parameters()))

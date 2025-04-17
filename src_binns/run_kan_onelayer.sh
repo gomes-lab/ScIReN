@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Runs BINN training on GPUs, as a Slurm job. Usage:
-# sbatch run_slurm.sh
+# sbatch run_kan_onelayer.sh
 # (To change the number of GPUs, change --gpus and --num_CPU arguments to that number.)
 # (To run on CPU, remove the --gpus line and set --num_CPU to the number of CPUs.)
 # Output will appear in a file 'slurm-N.out' where N is the job ID.
@@ -11,7 +11,7 @@
 #SBATCH --exclude=c0020,c0002
 
 # Name the job so it's meaningful in the job list
-#SBATCH -J kan_onelayer_coefdiff
+#SBATCH -J kan_onelayer
 # Request 4 GPUs 
 # #SBATCH --gpus 4
 # Request 4 CPU cores (9 hyperthreads).

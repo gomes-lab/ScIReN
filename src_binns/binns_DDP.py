@@ -143,7 +143,7 @@ parser.add_argument("--standardize_output", action='store_true', help="ONLY APPL
 
 # Training
 parser.add_argument("--seed", type=int, default=0, help="Random seed for model initialization")
-parser.add_argument("--optimizer", type=str, choices=["SGD", "AdamW", "LBFGS"], default="AdamW")
+parser.add_argument("--optimizer", type=str, choices=["SGD", "AdamW"], default="AdamW")
 parser.add_argument("--scheduler", type=str, choices=["none", "reduce_on_plateau", "step", "cosine"], default="none")
 parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
 parser.add_argument("--momentum", type=float, default=0.9, help="Momentum (SGD ONLY)")
@@ -1718,407 +1718,275 @@ def worker(rank, world_size, job_id, port):
 
 					dist.barrier()  # MAKE SURE THIS DOES NOT CAUSE ISSUES. (Old run - this was every batch outside the if statement)
 
-			# Closure for LBFGS only
-			batch_pred_para, batch_y_hat, train_losses, l1_loss, l2_loss, train_NSE = None, None, None, None, None, None
-			def closure():
-				nonlocal batch_pred_para, batch_y_hat, train_losses, l1_loss, l2_loss, train_NSE
-				optimizer.zero_grad()
+
+			#------------ 1 forward
+			# train_nn_start = time.time()
+			if args.model in ['gnn', 'spatial']:
+				# GNN/spatial models return extra information about spatial smoothness that might be used in loss function
+				plot_dir = PLOT_DIR if (ibatch==1 and iepoch%5==0) else None
+				batch_y_hat, batch_pred_para, spatial_emb, laplacian = model(batch_x, batch_z, batch_c, whether_predict=0, return_extra=True, plot_dir=plot_dir, one_param_only=args.one_param_only)
+			elif args.model == 'binn_hybrid':
+				# BINN hybrid model also returns "residual", which could be penalized in loss function
+				batch_y_hat, batch_pred_para, residual = model(batch_x, batch_z, batch_c, whether_predict=0, return_residual=True, one_param_only=args.one_param_only)
+			else:
+				# Normal models just return predicted (1) SOC, (2) parameters
 				batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0, one_param_only=args.one_param_only, PRODA_para=batch_proda_para)
-				l1_loss, smooth_l1_loss, l2_loss, param_reg_loss, train_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
-				param_violation_loss = np.nan
-				unconstrained_param_loss = np.nan
-				param_matching_loss = np.nan
-				jacobian_loss = np.nan
-				jacobian_sparsity = np.nan
-				lipmlp_loss = np.nan
-				spectral_loss = np.nan
-				cure_loss = np.nan
-				nam_l2_loss = np.nan
-				nam_entropy_loss = np.nan
-				kan_l1_loss = np.nan
-				kan_entropy_loss = np.nan
-				kan_coef_loss = np.nan
-				kan_coefdiff_loss = np.nan
-				senn_robustness_loss = np.nan
-				senn_l1_loss = np.nan
-				senn_sparsity = np.nan
-				spatial_error_loss = np.nan
-				spatial_smoothness_loss = np.nan
-				param_smoothness_loss = np.nan
-				residual_loss = np.nan
 
-				# Parameter losses
-				if "param_violation" in args.losses:  # Penalty if unconstrained params are outside [-3, 3]. Only used with hardsigmoid.
-					param_violation_loss = compute_param_violation_loss(model_without_ddp.unconstrained_params)
-				if "unconstrained_param" in args.losses:
-					unconstrained_param_loss = compute_unconstrained_param_loss(model_without_ddp.unconstrained_params)
-				if "param_matching" in args.losses:  # Penalize extreme parameter values that are far from 0.5
-					param_matching_loss = compute_param_matching_loss(batch_pred_para, batch_proda_para)
-				elif "spectral" in args.losses:
-					assert args.model == "new_mlp", "Spectral norm regularization only works with --model new_mlp"
+			# Check if batch_pred_para is nan or inf
+			if torch.isnan(batch_pred_para).any() or torch.isinf(batch_pred_para).any():
+				whether_break = torch.tensor(1).to(device)
+				for ipara in range(batch_pred_para.shape[0]):
+					if torch.isnan(batch_pred_para[ipara]).any() or torch.isinf(batch_pred_para[ipara]).any():
+						print(f"Epoch {iepoch} batch {ibatch} parameter {ipara} is {batch_pred_para[ipara]}")
 
-					# Compute the spectral norm of the model's layers, and add this as a loss
-					spectral_loss = model_without_ddp.mlp.spectral_norm_parallel(device)
+			# Check for extreme para values
+			# if args.model != 'nn_only' and (torch.any(batch_pred_para < 0.00001) or torch.any(batch_pred_para > 0.99999)) and ibatch == 1:
+			# 	print("Extreme param values")
+			# 	print(batch_pred_para[torch.any(((batch_pred_para < 0.00001) | (batch_pred_para > 0.99999)), dim=1), :])
+			if rank == 0 and ibatch == 1 and iepoch % 10 == 0:
+				print("Predicted para", batch_pred_para)
+				if args.model == "nam_joint2":
+					print("Predicted f_out", model.module.mlp.f_out.shape, model.module.mlp.f_out[0:5])
 
-				jacobian = None
-				if "jacobian" in args.losses:
-					# Jacobian L1 loss, which is intended to encourage sparsity in the Jacobian
-					# (each parameter should only depend on a few features). Doesn't achieve that
-					# very well yet.
-					model.eval()
-					jacobian = model_without_ddp.get_jacobian(noise_std=args.jacobian_noise_std)  # [batch, n_params, n_inputs]
-					jacobian_sparsity = (jacobian.abs() < 1e-6).float().mean()
-					jacobian_loss = jacobian.abs().mean(0).sum()
-					model.train()
+			# If KAN, plot activation statistics
+			if rank == 0 and args.model == "kan" and (ibatch == 1 and iepoch % 50 == 0):
+				import pykan
+				model_without_ddp.mlp.plot_activation_statistics(os.path.join(PLOT_DIR, f"epoch{iepoch}_KAN_activation_stats.png"))
 
-				if "cure" in args.losses:
-					model.eval()
-					cure_h = 1  # in the paper, they linearly increase for first 5 epochs
-					if jacobian is None:
-						jacobian = model_without_ddp.get_jacobian()  #  [batch, n_params, n_inputs]
+			#------------ 2 compute the objective function
+			l1_loss, smooth_l1_loss, l2_loss, param_reg_loss, train_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
 
-					# Find direction to perturb
-					sum_dParam_dInput = jacobian.sum(1)  # [batch, n_inputs]
-					z = torch.sign(sum_dParam_dInput)
-					z = z / torch.linalg.vector_norm(z, dim=1, keepdim=True)
-					jacobian_perturbed = model_without_ddp.get_jacobian(model_without_ddp.new_input + z * cure_h)  # [batch, n_params, n_inputs]
-					cure_loss = (jacobian_perturbed - jacobian).square().sum()			
-					model.train()
+			# Compute additional losses if using. If we are not using them, set them to nan
+			param_violation_loss = np.nan
+			unconstrained_param_loss = np.nan
+			param_matching_loss = np.nan
+			jacobian_loss = np.nan
+			jacobian_sparsity = np.nan
+			lipmlp_loss = np.nan
+			spectral_loss = np.nan
+			# c_reg_loss = np.nan
+			cure_loss = np.nan
+			nam_l2_loss = np.nan
+			nam_entropy_loss = np.nan
+			kan_l1_loss = np.nan
+			kan_entropy_loss = np.nan
+			kan_coef_loss = np.nan
+			kan_coefdiff_loss = np.nan
+			senn_robustness_loss = np.nan
+			senn_l1_loss = np.nan
+			senn_sparsity = np.nan
+			spatial_error_loss = np.nan
+			spatial_smoothness_loss = np.nan
+			param_smoothness_loss = np.nan
+			residual_loss = np.nan
 
-				if "nam_l2" in args.losses:
-					assert args.model in ["nam", "nam_joint", "nam_joint2", "nag"]
-					f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
-					nam_l2_loss = (f_out ** 2).sum() / (f_out.shape[1] * f_out.shape[2])
-				if "nam_entropy" in args.losses:
-					assert args.model in ["nam", "nam_joint", "nam_joint2"]
-					f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
-					variance_explained = torch.var(f_out, dim=0)  # [n_features, n_outputs]
-					frac_variance_explained = variance_explained / variance_explained.sum(dim=0, keepdim=True)  # [n_features, n_outputs]. For each output, feature fractions sum to 1
-					p_log_p = -frac_variance_explained * torch.log(frac_variance_explained)  # p(x) log p(x) elementwise
-					nam_entropy_loss = p_log_p.sum(dim=0).mean()
-				if {"kan_l1", "kan_entropy", "kan_coef", "kan_coefdiff"} & set(args.losses):
-					assert args.model == "kan"
+			# Parameter losses
+			if "param_violation" in args.losses:  # Penalty if unconstrained params are outside [-3, 3]. Only used with hardsigmoid.
+				param_violation_loss = compute_param_violation_loss(model_without_ddp.unconstrained_params)
+			if "unconstrained_param" in args.losses:
+				unconstrained_param_loss = compute_unconstrained_param_loss(model_without_ddp.unconstrained_params)
+			if "param_matching" in args.losses:  # Penalize extreme parameter values that are far from 0.5
+				param_matching_loss = compute_param_matching_loss(batch_pred_para, batch_proda_para)
 
-					# NOTE: the lamb values passed are completely unused, as we direclty obtain the individual loss components and weight them later.
-					kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., return_indiv=True)
+			# EXPERIMENTAL: Spatial losses
+			if "spatial_error" in args.losses:
+				assert args.pos_enc != 'none'
+				spatial_error_loss = torch.mean(spatial_emb ** 2)
+			if "spatial_emb_smoothness" in args.losses:
+				assert args.pos_enc != "none"
+				spatial_smoothness_loss = 0
+				for i in para_index:
+					spatial_smoothness_loss += ((spatial_emb[:, i] @ laplacian @ spatial_emb[:, i]) / torch.sum(spatial_emb[:, i]**2))
+			if "param_smoothness" in args.losses:
+				param_smoothness_loss = 0
+				for i in para_index:
+					param_smoothness_loss += ((batch_pred_para[:, i] @ laplacian @ batch_pred_para[:, i]) / torch.sum(batch_pred_para[:, i]**2))
 
-				if "senn_robustness" in args.losses:
-					model.eval()
-					senn_robustness_loss = model_without_ddp.senn_robustness_loss()
-					model.train()
-				if "senn_l1" in args.losses:
-					senn_l1_loss = model_without_ddp.senn_l1_loss()
-				if "senn_sparsity" in args.losses:
-					senn_sparsity = model_without_ddp.senn_sparsity()
+			# EXPERIMENTAL: If using BINN_Hybrid, also force the PBM output to be close to groundtruth
+			if args.model == "binn_hybrid":
+				assert "residual" in args.losses
+				residual_loss = torch.mean(torch.abs(residual))
 
-				#------------ 3 cleaning gradients
-				optimizer.zero_grad()
+			# EXPERIMENTAL: Lipschitz loss if using
+			if args.model == "lipmlp" and "lipmlp" in args.losses:
+				lipmlp_loss, cs, scalings = model_without_ddp.mlp.get_lipschitz_loss()
+				if ibatch == 1:
+					print("Lipschitz c", cs, "Scalings", scalings)
 
-				#------------ 4 accumulate partical derivatives of objective respect to parameters
-				loss_dict = {"l1": l1_loss,
-							"smooth_l1": smooth_l1_loss,
-							"l2": l2_loss,
-							"param_reg": param_reg_loss,
-							"param_violation": param_violation_loss,
-							"unconstrained_param": unconstrained_param_loss,
-							"param_matching": param_matching_loss,
-							"jacobian": jacobian_loss,
-							"jacobian_sparsity": jacobian_sparsity,
-							"lipmlp": lipmlp_loss,
-							"spectral": spectral_loss,
-							"cure": cure_loss,
-							"nam_l2": nam_l2_loss,
-							"nam_entropy": nam_entropy_loss,
-							"kan_l1": kan_l1_loss,
-							"kan_entropy": kan_entropy_loss,
-							"kan_coef": kan_coef_loss,
-							"kan_coefdiff": kan_coefdiff_loss,
-							"senn_robustness": senn_robustness_loss,
-							"senn_l1": senn_l1_loss,
-							"senn_sparsity": senn_sparsity,
-							"spatial_error": spatial_error_loss,
-							"spatial_emb_smoothness": spatial_smoothness_loss,
-							"param_smoothness": param_smoothness_loss,
-							"residual": residual_loss}
+			# elif args.model == "clip":
+			#   # EXPERIMENTAL, not working yet.
+			#   # CLIP: Cheap Lipschitz Training (https://github.com/TimRoith/CLIP)
+			# 	# ---------------------------------------------------------------------
+			# 	# Adverserial update
+			# 	# ---------------------------------------------------------------------
+			# 	# get initialization for Lipschitz Training set      
+			# 	if ((cache['counter'] % conf.reg_incremental) == 0) or (not ('init' in cache)):
+			# 		if verbosity > 0:
+			# 			print('The Lipschitz set was reset')
+			# 		cache['init'] = reg.u_v_init(conf, lip_cycle, cache)
+			# 		cache['counter'] = 1
+			# 	else:
+			# 		cache['counter'] += 1
 
-				# Store losses in a tensor, in the order of args.losses
-				train_losses = torch.stack([loss_dict[loss] for loss in args.losses]).to(device)
+			# 	# adverserial update on the Lipschitz set
+			# 	u, v = reg.search_u_v(conf, model, cache)
+			# 	# ---------------------------------------------------------------------
+
+			# 	# Use either all tuples or only one tuple for regularization
+			# 	if conf.reg_all:
+			# 		u_reg, v_reg = u, v
+			# 	else:
+			# 		# Use idx:idx+1 to keep shape
+			# 		u_reg = u[cache["idx"]:cache["idx"] + 1].detach()
+			# 		v_reg = v[cache["idx"]:cache["idx"] + 1].detach()
+					
+			# 	# Compute the Lipschitz constant
+			# 	c_reg_loss = reg.lip_constant(conf, model, u_reg, v_reg, mean=conf.reg_all)
+			elif "spectral" in args.losses:
+				assert args.model == "new_mlp", "Spectral norm regularization only works with --model new_mlp"
+
+				# Compute the spectral norm of the model's layers, and add this as a loss
+				spectral_loss = model_without_ddp.mlp.spectral_norm_parallel(device)
+
+			jacobian = None
+			if "jacobian" in args.losses:
+				# Jacobian L1 loss, which is intended to encourage sparsity in the Jacobian
+				# (each parameter should only depend on a few features). Doesn't achieve that
+				# very well yet.
+				model.eval()
+				jacobian = model_without_ddp.get_jacobian()  # [batch, n_params, n_inputs]
+				jacobian_sparsity = (jacobian.abs() < 1e-6).float().mean()
+				jacobian_loss = jacobian.abs().mean(0).sum()
+				model.train()
+
+				# Plot a few jacobians
+				if iepoch % 50 == 0 and ibatch == 1 and args.plot:
+					print("Plotting Jacobian")
+					for example_idx in [0, 1, 2]:
+						visualization_utils.plot_matrix(jacobian[example_idx, :, :], row_labels=para_names, col_labels=var4nn,
+														filename=os.path.join(PLOT_DIR, f"epoch{iepoch}_jacobian_{example_idx}.png"),
+														title=f"Parameter-Feature Jacobian: Epoch {iepoch}, Example {example_idx}")
+
+				# TODO: Try more efficient variations (https://arxiv.org/pdf/1908.02729, https://arxiv.org/pdf/1905.11468)
+			# if "jacobian_entropy" in args.losses:
+				# TODO
+
+			# if "input_gradient" in args.losses:
+			# 	# TODO: Simple input gradient regularization. 
+			# 	model_without_ddp.new_input.retain_grad()
+			# 	batch_pred_para.backward(torch.ones_like(batch_pred_para), retain_graph=True)
+			# 	print("Grad", model_without_ddp.new_input.grad.shape)
+			# 	jacobian = model_without_ddp.new_input.grad  # dParam/dInput: [batch, num_param, num_inputs]
+			# 	avg_jacobian = jacobian.mean(dim=0)
+			# 	jacobian_loss = avg_jacobian.abs().mean()
+
+			if "cure" in args.losses:
+				model.eval()
+				cure_h = 1  # in the paper, they linearly increase for first 5 epochs
+				if jacobian is None:
+					jacobian = model_without_ddp.get_jacobian()  #  [batch, n_params, n_inputs]
+
+				# Find direction to perturb
+				sum_dParam_dInput = jacobian.sum(1)  # [batch, n_inputs]
+				z = torch.sign(sum_dParam_dInput)
+				z = z / torch.linalg.vector_norm(z, dim=1, keepdim=True)
+				jacobian_perturbed = model_without_ddp.get_jacobian(model_without_ddp.new_input + z * cure_h)  # [batch, n_params, n_inputs]
+				# print("Jacobian perturbed", jacobian_perturbed.shape, jacobian_perturbed[0, 0:10, 0:10])
+				# print("Jacobian original", jacobian.shape, jacobian[0, 0:10, 0:10])
+				cure_loss = (jacobian_perturbed - jacobian).square().sum()			
+				model.train()
+				# Curvature regularization. TODO Not tested yet
+				# cure_loss, grad_norm = misc_utils.regularizer(batch_x, batch_y, batch_z, model, binns_loss_simple)
+
+			if "nam_l2" in args.losses:
+				assert args.model in ["nam", "nam_joint", "nam_joint2", "nag"]
+				f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
+				nam_l2_loss = (f_out ** 2).sum() / (f_out.shape[1] * f_out.shape[2])
+			if "nam_entropy" in args.losses:
+				assert args.model in ["nam", "nam_joint", "nam_joint2"]
+				f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
+				variance_explained = torch.var(f_out, dim=0)  # [n_features, n_outputs]
+				frac_variance_explained = variance_explained / variance_explained.sum(dim=0, keepdim=True)  # [n_features, n_outputs]. For each output, feature fractions sum to 1
+				p_log_p = -frac_variance_explained * torch.log(frac_variance_explained)  # p(x) log p(x) elementwise
+				nam_entropy_loss = p_log_p.sum(dim=0).mean()
+			if {"kan_l1", "kan_entropy", "kan_coef", "kan_coefdiff"} & set(args.losses):
+				assert args.model == "kan"
+
+				# NOTE: the lamb values passed are completely unused, as we direclty obtain the individual loss components and weight them later.
+				# For default weights see https://github.com/KindXiaoming/pykan/blob/master/kan/MultKAN.py#L1411
+				kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., return_indiv=True)
+					# model_without_ddp.mlp.get_reg(reg_metric='node_influence_on_output', lamb_l1=0., lamb_entropy=1., lamb_coef=0., lamb_coefdiff=0.)
+
+			if "senn_robustness" in args.losses:
+				model.eval()
+				senn_robustness_loss = model_without_ddp.senn_robustness_loss()
+				model.train()
+			if "senn_l1" in args.losses:
+				senn_l1_loss = model_without_ddp.senn_l1_loss()
+			if "senn_sparsity" in args.losses:
+				senn_sparsity = model_without_ddp.senn_sparsity()
+
+			#------------ 3 cleaning gradients
+			optimizer.zero_grad()
+
+			#------------ 4 accumulate partical derivatives of objective respect to parameters
+			loss_dict = {"l1": l1_loss,
+						"smooth_l1": smooth_l1_loss,
+						"l2": l2_loss,
+						"param_reg": param_reg_loss,
+						"param_violation": param_violation_loss,
+						"unconstrained_param": unconstrained_param_loss,
+						"param_matching": param_matching_loss,
+						"jacobian": jacobian_loss,
+						"jacobian_sparsity": jacobian_sparsity,
+						"lipmlp": lipmlp_loss,
+						# "c_reg": c_reg_loss,
+						"spectral": spectral_loss,
+						"cure": cure_loss,
+						"nam_l2": nam_l2_loss,
+						"nam_entropy": nam_entropy_loss,
+						"kan_l1": kan_l1_loss,
+						"kan_entropy": kan_entropy_loss,
+						"kan_coef": kan_coef_loss,
+						"kan_coefdiff": kan_coefdiff_loss,
+						"senn_robustness": senn_robustness_loss,
+						"senn_l1": senn_l1_loss,
+						"senn_sparsity": senn_sparsity,
+						"spatial_error": spatial_error_loss,
+						"spatial_emb_smoothness": spatial_smoothness_loss,
+						"param_smoothness": param_smoothness_loss,
+						"residual": residual_loss}
+
+			# Store losses in a tensor, in the order of args.losses
+			train_losses = torch.stack([loss_dict[loss] for loss in args.losses]).to(device)
+			if args.loss_weighting in ["manual", "two_stage", "relobralo"]:
+				# If loss weights are explicitly set: compute weighted total loss, backpropagate
 				total_loss = torch.dot(train_losses, args.lambdas.to(device))
 				total_loss.backward()
-				return total_loss
-
-
-			if args.optimizer == "LBFGS":
-				optimizer.step(closure)
 			else:
-				#------------ 1 forward
-				# train_nn_start = time.time()
-				if args.model in ['gnn', 'spatial']:
-					# GNN/spatial models return extra information about spatial smoothness that might be used in loss function
-					plot_dir = PLOT_DIR if (ibatch==1 and iepoch%5==0) else None
-					batch_y_hat, batch_pred_para, spatial_emb, laplacian = model(batch_x, batch_z, batch_c, whether_predict=0, return_extra=True, plot_dir=plot_dir, one_param_only=args.one_param_only)
-				elif args.model == 'binn_hybrid':
-					# BINN hybrid model also returns "residual", which could be penalized in loss function
-					batch_y_hat, batch_pred_para, residual = model(batch_x, batch_z, batch_c, whether_predict=0, return_residual=True, one_param_only=args.one_param_only)
-				else:
-					# Normal models just return predicted (1) SOC, (2) parameters
-					batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0, one_param_only=args.one_param_only, PRODA_para=batch_proda_para)
+				# Specialized multi-task loss balancing methods
+				alphas = model.backward(train_losses)
+				if ibatch == 1:
+					print("Alphas", alphas)
 
-				# Check if batch_pred_para is nan or inf
-				if torch.isnan(batch_pred_para).any() or torch.isinf(batch_pred_para).any():
-					whether_break = torch.tensor(1).to(device)
-					for ipara in range(batch_pred_para.shape[0]):
-						if torch.isnan(batch_pred_para[ipara]).any() or torch.isinf(batch_pred_para[ipara]).any():
-							print(f"Epoch {iepoch} batch {ibatch} parameter {ipara} is {batch_pred_para[ipara]}")
+			# clip gradients. TODO Not tested.
+			if args.clip_value != -1:
+				# torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_value)
+				torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=args.clip_value)
 
-				# Check for extreme para values
-				# if args.model != 'nn_only' and (torch.any(batch_pred_para < 0.00001) or torch.any(batch_pred_para > 0.99999)) and ibatch == 1:
-				# 	print("Extreme param values")
-				# 	print(batch_pred_para[torch.any(((batch_pred_para < 0.00001) | (batch_pred_para > 0.99999)), dim=1), :])
-				if rank == 0 and ibatch == 1 and iepoch % 10 == 0:
-					print("Predicted para", batch_pred_para)
-					if args.model == "nam_joint2":
-						print("Predicted f_out", model.module.mlp.f_out.shape, model.module.mlp.f_out[0:5])
+			# Check gradients
+			# print(rank, "GRAD WRT NAM", model.module.mlp.feature_nns[1].layers[0].weight.grad, flush=True)
+			# print(rank, "DATA WRT NAM", model.module.mlp.feature_nns[1].layers[0].weight.data, flush=True)
 
-				# If KAN, plot activation statistics
-				if rank == 0 and args.model == "kan" and (ibatch == 1 and iepoch % 50 == 0):
-					import pykan
-					model_without_ddp.mlp.plot_activation_statistics(os.path.join(PLOT_DIR, f"epoch{iepoch}_KAN_activation_stats.png"))
+			#------------ 5 step in the opposite direction of the gradient
+			# with torch.no_grad(): para = para - eta*para.grad # eta is learning rate
+			optimizer.step()
+			# print(rank, "after optimizer step", flush=True)
+			# print(rank, "DATA WRT NAM AFTER STEP", model.module.mlp.feature_nns[1].layers[0].weight.data, flush=True)
 
-				#------------ 2 compute the objective function
-				l1_loss, smooth_l1_loss, l2_loss, param_reg_loss, train_NSE = fun_loss(batch_y_hat, batch_y, batch_pred_para)
-
-				# Compute additional losses if using. If we are not using them, set them to nan
-				param_violation_loss = np.nan
-				unconstrained_param_loss = np.nan
-				param_matching_loss = np.nan
-				jacobian_loss = np.nan
-				jacobian_sparsity = np.nan
-				lipmlp_loss = np.nan
-				spectral_loss = np.nan
-				# c_reg_loss = np.nan
-				cure_loss = np.nan
-				nam_l2_loss = np.nan
-				nam_entropy_loss = np.nan
-				kan_l1_loss = np.nan
-				kan_entropy_loss = np.nan
-				kan_coef_loss = np.nan
-				kan_coefdiff_loss = np.nan
-				senn_robustness_loss = np.nan
-				senn_l1_loss = np.nan
-				senn_sparsity = np.nan
-				spatial_error_loss = np.nan
-				spatial_smoothness_loss = np.nan
-				param_smoothness_loss = np.nan
-				residual_loss = np.nan
-
-				# Parameter losses
-				if "param_violation" in args.losses:  # Penalty if unconstrained params are outside [-3, 3]. Only used with hardsigmoid.
-					param_violation_loss = compute_param_violation_loss(model_without_ddp.unconstrained_params)
-				if "unconstrained_param" in args.losses:
-					unconstrained_param_loss = compute_unconstrained_param_loss(model_without_ddp.unconstrained_params)
-				if "param_matching" in args.losses:  # Penalize extreme parameter values that are far from 0.5
-					param_matching_loss = compute_param_matching_loss(batch_pred_para, batch_proda_para)
-
-				# EXPERIMENTAL: Spatial losses
-				if "spatial_error" in args.losses:
-					assert args.pos_enc != 'none'
-					spatial_error_loss = torch.mean(spatial_emb ** 2)
-				if "spatial_emb_smoothness" in args.losses:
-					assert args.pos_enc != "none"
-					spatial_smoothness_loss = 0
-					for i in para_index:
-						spatial_smoothness_loss += ((spatial_emb[:, i] @ laplacian @ spatial_emb[:, i]) / torch.sum(spatial_emb[:, i]**2))
-				if "param_smoothness" in args.losses:
-					param_smoothness_loss = 0
-					for i in para_index:
-						param_smoothness_loss += ((batch_pred_para[:, i] @ laplacian @ batch_pred_para[:, i]) / torch.sum(batch_pred_para[:, i]**2))
-
-				# EXPERIMENTAL: If using BINN_Hybrid, also force the PBM output to be close to groundtruth
-				if args.model == "binn_hybrid":
-					assert "residual" in args.losses
-					residual_loss = torch.mean(torch.abs(residual))
-
-				# EXPERIMENTAL: Lipschitz loss if using
-				if args.model == "lipmlp" and "lipmlp" in args.losses:
-					lipmlp_loss, cs, scalings = model_without_ddp.mlp.get_lipschitz_loss()
-					if ibatch == 1:
-						print("Lipschitz c", cs, "Scalings", scalings)
-
-				# elif args.model == "clip":
-				#   # EXPERIMENTAL, not working yet.
-				#   # CLIP: Cheap Lipschitz Training (https://github.com/TimRoith/CLIP)
-				# 	# ---------------------------------------------------------------------
-				# 	# Adverserial update
-				# 	# ---------------------------------------------------------------------
-				# 	# get initialization for Lipschitz Training set      
-				# 	if ((cache['counter'] % conf.reg_incremental) == 0) or (not ('init' in cache)):
-				# 		if verbosity > 0:
-				# 			print('The Lipschitz set was reset')
-				# 		cache['init'] = reg.u_v_init(conf, lip_cycle, cache)
-				# 		cache['counter'] = 1
-				# 	else:
-				# 		cache['counter'] += 1
-
-				# 	# adverserial update on the Lipschitz set
-				# 	u, v = reg.search_u_v(conf, model, cache)
-				# 	# ---------------------------------------------------------------------
-
-				# 	# Use either all tuples or only one tuple for regularization
-				# 	if conf.reg_all:
-				# 		u_reg, v_reg = u, v
-				# 	else:
-				# 		# Use idx:idx+1 to keep shape
-				# 		u_reg = u[cache["idx"]:cache["idx"] + 1].detach()
-				# 		v_reg = v[cache["idx"]:cache["idx"] + 1].detach()
-						
-				# 	# Compute the Lipschitz constant
-				# 	c_reg_loss = reg.lip_constant(conf, model, u_reg, v_reg, mean=conf.reg_all)
-				elif "spectral" in args.losses:
-					assert args.model == "new_mlp", "Spectral norm regularization only works with --model new_mlp"
-
-					# Compute the spectral norm of the model's layers, and add this as a loss
-					spectral_loss = model_without_ddp.mlp.spectral_norm_parallel(device)
-
-				jacobian = None
-				if "jacobian" in args.losses:
-					# Jacobian L1 loss, which is intended to encourage sparsity in the Jacobian
-					# (each parameter should only depend on a few features). Doesn't achieve that
-					# very well yet.
-					model.eval()
-					jacobian = model_without_ddp.get_jacobian()  # [batch, n_params, n_inputs]
-					jacobian_sparsity = (jacobian.abs() < 1e-6).float().mean()
-					jacobian_loss = jacobian.abs().mean(0).sum()
-					model.train()
-
-					# Plot a few jacobians
-					if iepoch % 50 == 0 and ibatch == 1 and args.plot:
-						print("Plotting Jacobian")
-						for example_idx in [0, 1, 2]:
-							visualization_utils.plot_matrix(jacobian[example_idx, :, :], row_labels=para_names, col_labels=var4nn,
-															filename=os.path.join(PLOT_DIR, f"epoch{iepoch}_jacobian_{example_idx}.png"),
-															title=f"Parameter-Feature Jacobian: Epoch {iepoch}, Example {example_idx}")
-
-					# TODO: Try more efficient variations (https://arxiv.org/pdf/1908.02729, https://arxiv.org/pdf/1905.11468)
-				# if "jacobian_entropy" in args.losses:
-					# TODO
-
-				# if "input_gradient" in args.losses:
-				# 	# TODO: Simple input gradient regularization. 
-				# 	model_without_ddp.new_input.retain_grad()
-				# 	batch_pred_para.backward(torch.ones_like(batch_pred_para), retain_graph=True)
-				# 	print("Grad", model_without_ddp.new_input.grad.shape)
-				# 	jacobian = model_without_ddp.new_input.grad  # dParam/dInput: [batch, num_param, num_inputs]
-				# 	avg_jacobian = jacobian.mean(dim=0)
-				# 	jacobian_loss = avg_jacobian.abs().mean()
-
-				if "cure" in args.losses:
-					model.eval()
-					cure_h = 1  # in the paper, they linearly increase for first 5 epochs
-					if jacobian is None:
-						jacobian = model_without_ddp.get_jacobian()  #  [batch, n_params, n_inputs]
-
-					# Find direction to perturb
-					sum_dParam_dInput = jacobian.sum(1)  # [batch, n_inputs]
-					z = torch.sign(sum_dParam_dInput)
-					z = z / torch.linalg.vector_norm(z, dim=1, keepdim=True)
-					jacobian_perturbed = model_without_ddp.get_jacobian(model_without_ddp.new_input + z * cure_h)  # [batch, n_params, n_inputs]
-					# print("Jacobian perturbed", jacobian_perturbed.shape, jacobian_perturbed[0, 0:10, 0:10])
-					# print("Jacobian original", jacobian.shape, jacobian[0, 0:10, 0:10])
-					cure_loss = (jacobian_perturbed - jacobian).square().sum()			
-					model.train()
-					# Curvature regularization. TODO Not tested yet
-					# cure_loss, grad_norm = misc_utils.regularizer(batch_x, batch_y, batch_z, model, binns_loss_simple)
-
-				if "nam_l2" in args.losses:
-					assert args.model in ["nam", "nam_joint", "nam_joint2", "nag"]
-					f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
-					nam_l2_loss = (f_out ** 2).sum() / (f_out.shape[1] * f_out.shape[2])
-				if "nam_entropy" in args.losses:
-					assert args.model in ["nam", "nam_joint", "nam_joint2"]
-					f_out = model_without_ddp.mlp.f_out  # [batch, n_features, n_outputs]
-					variance_explained = torch.var(f_out, dim=0)  # [n_features, n_outputs]
-					frac_variance_explained = variance_explained / variance_explained.sum(dim=0, keepdim=True)  # [n_features, n_outputs]. For each output, feature fractions sum to 1
-					p_log_p = -frac_variance_explained * torch.log(frac_variance_explained)  # p(x) log p(x) elementwise
-					nam_entropy_loss = p_log_p.sum(dim=0).mean()
-				if {"kan_l1", "kan_entropy", "kan_coef", "kan_coefdiff"} & set(args.losses):
-					assert args.model == "kan"
-
-					# NOTE: the lamb values passed are completely unused, as we direclty obtain the individual loss components and weight them later.
-					# For default weights see https://github.com/KindXiaoming/pykan/blob/master/kan/MultKAN.py#L1411
-					kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., return_indiv=True)
-						# model_without_ddp.mlp.get_reg(reg_metric='node_influence_on_output', lamb_l1=0., lamb_entropy=1., lamb_coef=0., lamb_coefdiff=0.)
-
-				if "senn_robustness" in args.losses:
-					model.eval()
-					senn_robustness_loss = model_without_ddp.senn_robustness_loss()
-					model.train()
-				if "senn_l1" in args.losses:
-					senn_l1_loss = model_without_ddp.senn_l1_loss()
-				if "senn_sparsity" in args.losses:
-					senn_sparsity = model_without_ddp.senn_sparsity()
-
-				#------------ 3 cleaning gradients
-				optimizer.zero_grad()
-
-				#------------ 4 accumulate partical derivatives of objective respect to parameters
-				loss_dict = {"l1": l1_loss,
-							"smooth_l1": smooth_l1_loss,
-							"l2": l2_loss,
-							"param_reg": param_reg_loss,
-							"param_violation": param_violation_loss,
-							"unconstrained_param": unconstrained_param_loss,
-							"param_matching": param_matching_loss,
-							"jacobian": jacobian_loss,
-							"jacobian_sparsity": jacobian_sparsity,
-							"lipmlp": lipmlp_loss,
-							# "c_reg": c_reg_loss,
-							"spectral": spectral_loss,
-							"cure": cure_loss,
-							"nam_l2": nam_l2_loss,
-							"nam_entropy": nam_entropy_loss,
-							"kan_l1": kan_l1_loss,
-							"kan_entropy": kan_entropy_loss,
-							"kan_coef": kan_coef_loss,
-							"kan_coefdiff": kan_coefdiff_loss,
-							"senn_robustness": senn_robustness_loss,
-							"senn_l1": senn_l1_loss,
-							"senn_sparsity": senn_sparsity,
-							"spatial_error": spatial_error_loss,
-							"spatial_emb_smoothness": spatial_smoothness_loss,
-							"param_smoothness": param_smoothness_loss,
-							"residual": residual_loss}
-
-				# Store losses in a tensor, in the order of args.losses
-				train_losses = torch.stack([loss_dict[loss] for loss in args.losses]).to(device)
-				if args.loss_weighting in ["manual", "two_stage", "relobralo"]:
-					# If loss weights are explicitly set: compute weighted total loss, backpropagate
-					total_loss = torch.dot(train_losses, args.lambdas.to(device))
-					total_loss.backward()
-				else:
-					# Specialized multi-task loss balancing methods
-					alphas = model.backward(train_losses)
-					if ibatch == 1:
-						print("Alphas", alphas)
-
-				# clip gradients. TODO Not tested.
-				if args.clip_value != -1:
-					# torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_value)
-					torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=args.clip_value)
-
-				# Check gradients
-				# print(rank, "GRAD WRT NAM", model.module.mlp.feature_nns[1].layers[0].weight.grad, flush=True)
-				# print(rank, "DATA WRT NAM", model.module.mlp.feature_nns[1].layers[0].weight.data, flush=True)
-
-				#------------ 5 step in the opposite direction of the gradient
-				# with torch.no_grad(): para = para - eta*para.grad # eta is learning rate
-				optimizer.step()
-				# print(rank, "after optimizer step", flush=True)
-				# print(rank, "DATA WRT NAM AFTER STEP", model.module.mlp.feature_nns[1].layers[0].weight.data, flush=True)
-
-				# Noise
-				if args.noise_std > 0:
-					misc_utils.inject_noise(model, args.noise_std)
+			# Noise
+			if args.noise_std > 0:
+				misc_utils.inject_noise(model, args.noise_std)
 
 			# Record losses
 			loss_record_train.append(train_losses)
