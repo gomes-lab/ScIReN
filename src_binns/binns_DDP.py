@@ -169,7 +169,6 @@ parser.add_argument("--losses", nargs="+", choices=["l1", "smooth_l1", "l2", "pa
 					help="Losses to use (can list any number). Note jacobian_sparsity cannot be optimized (non-differentiable): it is just something we track.")
 parser.add_argument("--loss_weighting", default="manual", choices=["manual", "relobralo", "IMTL", "two_stage"])
 parser.add_argument("--lambdas", nargs="+", type=float, default=[1.0, 10.0], help="If loss_weighting is manual, provide weights in the same order as `args.losses`")
-parser.add_argument("--lamb_coefdiff", type=float, default=100.0, help="Within the kan sparsity loss, how much weight to put on smoothness btwn adjacent coeffs")
 parser.add_argument("--second_start", type=int, default=30, help="If loss_weighting is two_stage, epoch the second phase starts")
 parser.add_argument("--second_lambdas", nargs="+", type=float, default=[1.0, 10.0], help="If loss_weighting is two_stage, weights for the second stage - in the same order as `args.losses`")
 
@@ -2531,7 +2530,7 @@ def worker(rank, world_size, job_id, port):
 					dist.broadcast(args.lambdas, src=0)
 
 			# If this model is the best so far, save the checkpoint into 'opt_nn_{job_id}.pt'
-			if val_NSE <= best_val_NSE:  # @joshuafan: removed the iepoch==0 condition, switched to new way of calculating NSE (on entire dataset)
+			if allrank_val_NSE <= best_val_NSE:  # @joshuafan: removed the iepoch==0 condition, switched to new way of calculating NSE (on entire dataset)
 				print(f'Best model updated at epoch {iepoch}')
 				best_model_epoch = torch.tensor(iepoch, device=device)
 
@@ -2639,7 +2638,7 @@ def worker(rank, world_size, job_id, port):
 
 		# # Add a learning rate scheduler
 		if iepoch >= args.bias_only_epochs:
-			if args.use_swa and val_NSE.item() < 0.5 and iepoch > swa_start:
+			if args.use_swa and allrank_val_NSE.item() < 0.5 and iepoch > swa_start:
 				swa_model.update_parameters(model)
 				swa_scheduler.step()
 			elif args.scheduler == "reduce_on_plateau":
