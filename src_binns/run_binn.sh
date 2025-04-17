@@ -1,19 +1,21 @@
 #!/bin/bash
 
-# Runs BINN training. You can either run this script interactively or as a slurm job.
-# 1) Interactively:
-# Request job. On slurm, an example command to request 8 CPUs is
-# srun -p full -n 1 -c 8 --time=72:00:00 --mem-per-cpu=10G --pty /bin/bash -l
-# Run the script. From src_binns directory:
-# ./run_binn.sh
-#
-# 2) Via SLURM: Simply run
+# Runs BINN training. Usage (on a slurm cluster):
 # sbatch run_binn.sh
+# (To change the number of CPUs, modify the --num_CPU argument.)
+# (To use GPUs, uncomment the '#SBATCH --gpus' line, change it to the number of GPUs, and set --num_CPU to that number
+# Output will appear in a file 'slurm-N.out' where N is the job ID.
+
+# Alternatively, if you need to run this interactively:
+# 1) Request job. On slurm, an example command to request 8 CPUs is:
+# srun -p regular -n 1 -c 8 --time=72:00:00 --mem-per-cpu=10G --pty /bin/bash -l
+# 2) Run the script. (--num_CPU should be set to number of GPUs if available, otherwise the number of CPUs.)
+# ./run_binn.sh
 
 
 # ================================== SLURM BOILERPLATE ======================================
-# On aida, the full partition contains GPU nodes, while the regular partition only contains CPU.
-# For now CPU seems faster than GPU so use CPU.
+# -p specifies the partition name. On AIDA cluster, use "-p full" if using GPU; otherwise use "-p regular".
+# For now CPU seems faster than GPU.
 #SBATCH -p regular
 #SBATCH --exclude=c0020,c0002
 
@@ -21,14 +23,14 @@
 #SBATCH -J binn_std
 # If you wanted to request GPUs, uncomment out this line.
 # #SBATCH --gpus 4
-# Request 16 CPU cores (32 hyperthreads).
+# Request 4 CPU cores (8 hyperthreads).
 #SBATCH -c 8
 # Specify the resources should be assigned to a single task on one node.
 #SBATCH -N 1 -n 1
-# Request a total of 100GB RAM
-#SBATCH --mem=200GB
-# Request a walltime limit of 72 hours
-#SBATCH -t 120:00:00
+# Amount of RAM needed
+#SBATCH --mem=80GB
+# Walltime limit (72 hours)
+#SBATCH -t 72:00:00
 
 # INFO: Print properties of job as submitted
 echo "SLURM_JOB_ID = $SLURM_JOB_ID"
@@ -49,6 +51,7 @@ echo "SLURM_JOB_CPUS_PER_NODE = $SLURM_JOB_CPUS_PER_NODE"
 echo "SLURM_CPUS_ON_NODE = $SLURM_CPUS_ON_NODE"
 echo "CUDA_VISIBLE_DEVICES = $CUDA_VISIBLE_DEVICES"
 
+
 # Load modules to match compile-time environment
 # module purge
 source ~/.bashrc
@@ -57,6 +60,31 @@ source ~/.bashrc
 
 # Activate environment
 source .venv/bin/activate
+
+
+# TUNING: BINN, ten features, hardsigmoid
+# BINN, Hard constraint
+for LR in 1e-2 1e-1
+do
+    for TEMP in 1
+    do
+        for PREG in 100 1000
+        do
+            for FOLD in 1 2 3 4 5
+            do
+                SEED=$FOLD
+                python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
+                    --optimizer AdamW --lr $LR --weight_decay 0 --seed $SEED \
+                    --features ten \
+                    --init default --min_temp $TEMP --max_temp $TEMP \
+                    --n_epochs 200 --patience 100 --model new_mlp  \
+                    --num_layers 3 --residual --activation leaky_relu --use_bn \
+                    --losses smooth_l1 unconstrained_param --lambdas 1 $PREG --param_constraint hardsigmoid \
+                    --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_HARDSIGMOID_TEN_NEW" --plot
+            done
+        done
+    done
+done
 
 # # Single run. NOTES:
 # # --representative sample restricts to 1000 representative sites. Remove to use the whole dataset (~26000 sites)
@@ -102,25 +130,25 @@ source .venv/bin/activate
 #     done
 # done
 
-# Newer experiment setup
-for LR in 1e-3 1e-2
-do
-    for TEMP in 1
-    do
-        for FOLD in 1 2 3 4 5
-        do
-            SEED=$FOLD
-            python3 binns_DDP.py --data_seed 12345 --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-                --optimizer AdamW --lr $LR --weight_decay 0 \
-                --seed $SEED --init default --min_temp $TEMP --max_temp $TEMP \
-                --n_epochs 100 --patience 20 --model new_mlp \
-                --num_layers 3 --residual --width 256 \
-                --activation leaky_relu --use_bn --embed_dim 5 --pos_enc none \
-                --losses smooth_l1 param_reg --lambdas 1 100 \
-                --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_STD"
-        done
-    done
-done
+# # Newer experiment setup
+# for LR in 1e-3 1e-2
+# do
+#     for TEMP in 1
+#     do
+#         for FOLD in 1 2 3 4 5
+#         do
+#             SEED=$FOLD
+#             python3 binns_DDP.py --data_seed 12345 --split grid2 --cross_val_idx $FOLD --n_folds 5 \
+#                 --optimizer AdamW --lr $LR --weight_decay 0 \
+#                 --seed $SEED --init default --min_temp $TEMP --max_temp $TEMP \
+#                 --n_epochs 100 --patience 20 --model new_mlp \
+#                 --num_layers 3 --residual --width 256 \
+#                 --activation leaky_relu --use_bn --embed_dim 5 --pos_enc none \
+#                 --losses smooth_l1 param_reg --lambdas 1 100 \
+#                 --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_STD"
+#         done
+#     done
+# done
 
 # To resume from a previous partial run, run something like this.
 # Note that "--whether_resume" should be set to 1, and --previous_job_id" should be set to the output folder name we load from.
@@ -141,4 +169,3 @@ done
 #         done
 #     done
 # done
-

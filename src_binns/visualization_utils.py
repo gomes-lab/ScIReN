@@ -18,6 +18,44 @@ def get_git_revision_hash():
     return subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
 
 
+def plot_multiple_losses(filename, losses, labels, splits):
+    """
+    Creates multiple plots (one for each loss type).
+    Each plot contains a curve for each split (train/validation).
+
+    losses should be a list of list of lists. The outermost list
+    contains one element for each plot. Then, the middle list
+    contains one element for each curve. For each curve, we have
+    one element for each epoch.
+
+    labels should be a list of titles for each plot.
+    splits should be a list of labels for each curve within the plot (same for all plots).
+    """
+    n_plots = len(losses)
+    n_cols = 3
+    n_rows = math.ceil(n_plots / n_cols)
+    fig, axeslist = plt.subplots(n_rows, n_cols, figsize=(3*n_cols, 3*n_rows))
+    for plot_idx in range(len(losses)):
+        ax = axeslist.ravel()[plot_idx]
+        plot_losses = losses[plot_idx]
+        loss_type = labels[plot_idx]
+        for curve_idx, loss_curve in enumerate(plot_losses):
+            ax.plot(np.arange(len(loss_curve)), loss_curve, label=splits[curve_idx])
+        ax.set_xlabel("Epoch #")
+        ax.set_ylabel(loss_type)
+        ax.set_title(loss_type)
+        ax.legend()
+
+    # Remove unused plots
+    for plot_idx in range(len(losses), n_cols*n_rows):
+        fig.delaxes(axeslist.ravel()[plot_idx])
+
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
+
+
+
 def plot_losses(filename, losses, labels, min_val=None, max_val=None):
     """
     Plots all loss curves to the given filename.

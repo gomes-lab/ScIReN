@@ -157,7 +157,8 @@ class mlp_wrapper(nn.Module):
 				 activation='relu', param_constraint='sigmoid', rep_grad=False,
 				 losses=["l1", "param_reg"], device="cpu", train_x=None,
 				 min_temp=10, max_temp=109, init="xavier_uniform", width=128,
-				 para_index=None, feature_dropout=0, num_layers=4, residual=False):
+				 para_index=None, feature_dropout=0, num_layers=4, residual=False,
+				 kan_grid=3, kan_grid_margin=0.0, kan_noise=0.3, kan_base_fun="silu", kan_affine_trainable=False):
 		"""
 		var_idx_to_emb is a dictionary mapping from categorical variable index to either
 		(1) Embedding layer (if one_hot is False)
@@ -212,6 +213,11 @@ class mlp_wrapper(nn.Module):
 			train_features = train_x[:, self.non_categorical_indices, 0, 0]
 			self.input_mean = train_features.mean(dim=0, keepdim=True)
 			self.input_std = train_features.std(dim=0, keepdim=True)
+		# elif base_model == "kan":
+		# 	# If KAN, shift input to [-1, 1] range
+		# 	print("KAN - Shifting inputs to [-1, 1]")
+		# 	self.input_mean = 0.5
+		# 	self.input_std = 0.5
 		else:
 			self.input_mean = None
 			self.input_std = None
@@ -274,7 +280,7 @@ class mlp_wrapper(nn.Module):
 				raise ValueError("For NAM, activation must be exu or relu")
 			
 			if base_model == "nam":
-				self.mlp = MultiOutputNAM(input_size=len(self.non_categorical_indices), 			   	shallow_units=shallow_units,
+				self.mlp = MultiOutputNAM(input_size=len(self.non_categorical_indices),	shallow_units=shallow_units,
 								    	  hidden_units=hidden_units, shallow_layer=shallow_layer,
 										  feature_dropout=feature_dropout, hidden_dropout=dropout_prob, n_outputs=self.num_params)
 			elif base_model == "nam_joint":
@@ -302,12 +308,17 @@ class mlp_wrapper(nn.Module):
 				  		   activation=activation, init=init, residual=residual)
 		elif base_model == "kan":
 			import kan
-			self.mlp = kan.KAN(width=layer_sizes, grid=3, k=3, seed=42, device=device)  # , diag_init=True, base_fun="identity")
+			# grid_eps = 1: use evenly-spaced grid
+			self.mlp = kan.KAN(width=layer_sizes, grid=kan_grid, k=3, seed=42, device=device, residual=residual,
+					  		   input_size=len(self.non_categorical_indices), noise_scale=kan_noise,
+							   base_fun=kan_base_fun, affine_trainable=kan_affine_trainable, grid_eps=1.0, 
+							   grid_margin=kan_grid_margin)
 			# self.mlp.speed()  # Disable symbolic branch
 		else:
 			raise ValueError("Unsupported base_model")
 
 		# Parameter constraint
+		self.param_constraint = param_constraint
 		self.sigmoid = misc_utils.get_param_constraint(param_constraint)
 
 		# If using sigmoid: the "temperature" we divide by before the sigmoid
@@ -474,14 +485,30 @@ class mlp_wrapper(nn.Module):
 		return simu_soc, h5
 
 
+	def update_grid(self, *args, **kwargs):
+		"""
+		Wrapper around update_grid for KAN inside."""
+		assert self.base_model == "kan"
+
+		# Call forward to obtain "new_input" (the input to the KAN)
+		# Then use that to update the grid in the KAN
+		self.forward(*args, **kwargs)
+		self.mlp.update_grid_from_samples(self.new_input)
+
+
 	def predict_params_summed(self, func, input):
 		# Returns predicted parameters (post-sigmoid), summed across the batch dim
 		mlp_output = func(input)
 		clamped_temp_sigmoid = self.min_temp + (self.max_temp - self.min_temp) * F.sigmoid(self.temp_sigmoid)
-		predicted_para = self.sigmoid(mlp_output / clamped_temp_sigmoid)
+		if self.param_constraint == "hardsigmoid":
+			# For some reason, taking Jacobian across hardsigmoid doesn't work, but that's
+			# ok as hardisgmoid is linear in the valid range
+			predicted_para = mlp_output / clamped_temp_sigmoid
+		else:
+			predicted_para = self.sigmoid(mlp_output / clamped_temp_sigmoid)
 		return predicted_para.sum(0)
 
-	def get_jacobian(self, input=None):
+	def get_jacobian(self, input=None, noise_std=0):
 		"""
 		Returns Jacobian, of shape [batch, n_param, n_input].
 		For each batch item, it is dParam/dInput.
@@ -489,7 +516,10 @@ class mlp_wrapper(nn.Module):
 		If input is not provided, assume something is cached in self.new_input
 		"""
 		if input is None:
-			input = self.new_input  
+			input = self.new_input
+		if noise_std > 0:
+			input += torch.randn(input.shape) * input.std(dim=0, keepdim=True) * noise_std
+
 
 		# # Naive jacobian. Includes a lot of zero entries as one example's output
 		# # is not influenced by other examples' input.
@@ -664,6 +694,7 @@ class nn_only(nn.Module):
 		self.output_dim = output_dim
 
 		# List of non-categorical variable indices
+		self.input_vars = input_vars
 		self.non_categorical_indices = list(set(list(range(input_vars))).difference(var_idx_to_emb.keys()))
 		self.new_input_size = len(self.non_categorical_indices)
 
@@ -753,25 +784,45 @@ class nn_only(nn.Module):
 		# For some reason spatial encoder requires coords to have shape [batch, 1, 2] 
 		coords = coords.unsqueeze(1).detach()
 
-		# Compute embeddings for all categorical variables
-		embs = []
-		for idx, embedding_layer in self.var_idx_to_emb.items():
-			idx = int(idx)
-			if self.one_hot:
-				emb = F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
-			else:
-				# NOTE (2025-03-05): Not normalizing embeddings anymore.
-				emb = embedding_layer(predictor[:, idx].int())
-			embs.append(emb)
-		all_embs = torch.concatenate(embs, dim=1)
+		# # Compute embeddings for all categorical variables
+		# embs = []
+		# for idx, embedding_layer in self.var_idx_to_emb.items():
+		# 	idx = int(idx)
+		# 	if self.one_hot:
+		# 		emb = F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
+		# 	else:
+		# 		# NOTE (2025-03-05): Not normalizing embeddings anymore.
+		# 		emb = embedding_layer(predictor[:, idx].int())
+		# 	embs.append(emb)
+		# all_embs = torch.concatenate(embs, dim=1)
+
 
 		# Preprocess numeric (non-categorical) features
 		features = predictor[:, self.non_categorical_indices]  # [batch, n_features]
 		if self.input_mean is not None and self.input_std is not None:
 			features = (features - self.input_mean) / self.input_std
 
-		# Combine numeric features and categorical embeddings
-		new_input = torch.concatenate([features, all_embs], dim=1)
+		# Compute embeddings for all categorical variables
+		if len(self.var_idx_to_emb) >= 1:
+			embs = []
+			for idx, embedding_layer in self.var_idx_to_emb.items():
+				idx = int(idx)
+				if self.one_hot:
+					emb = F.one_hot(predictor[:, idx].long(), num_classes=embedding_layer)  # if one_hot, "embedding_layer" is simply the number of classes
+				else:
+					# NOTE (2025-03-05): Not normalizing embeddings anymore.
+					emb = embedding_layer(predictor[:, idx].int())
+				embs.append(emb)
+
+				if torch.isnan(emb).any():
+					print("Emb nan", idx)
+					print(emb.data)
+			all_embs = torch.concatenate(embs, dim=1)
+
+			# Combine numeric features and categorical embeddings
+			new_input = torch.concatenate([features, all_embs], dim=1)
+		else:
+			new_input = features
 
 		# Spatial Encoding
 		if self.pos_enc == "early":

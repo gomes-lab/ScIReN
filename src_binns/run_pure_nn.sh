@@ -1,25 +1,63 @@
-# Runs pure-NN training on GPUs, interactively.
-# 1) Request job. On slurm, an example command to request 4 GPUs is:
-# srun -p full -n 1 -c 8 --time=120:00:00 --mem-per-cpu=10G --gpus 4 --pty /bin/bash -l
+#!/bin/bash
+
+# Runs pure-NN training. Usage:
+# sbatch run_pure_nn.sh
+# (To change the number of CPUs, modify the --num_CPU argument.)
+# (To use GPUs, uncomment the '#SBATCH --gpus' line, change it to the number of GPUs, and set --num_CPU to that number
+# Output will appear in a file 'slurm-N.out' where N is the job ID.
+
+# Alternatively, if you need to run this interactively:
+# 1) Request job. On slurm, an example command to request 8 CPUs is:
+# srun -p regular -n 1 -c 8 --time=120:00:00 --mem-per-cpu=10G --pty /bin/bash -l
 # 2) Run the script. (--num_CPU should be set to number of GPUs if available, otherwise the number of CPUs.)
-# ./run_interactive.sh
-# TODO Figure out what is wrong with the vertical mixing. Right now setting simple_two_intercepts only for the "bulk simulations" which are actually meaningless.
+# ./run_pure_nn.sh
+
+# ??? TODO Figure out what is wrong with the vertical mixing. Right now setting simple_two_intercepts only for the "bulk simulations" which are actually meaningless.
+
+# ================================== SLURM BOILERPLATE ======================================
+# -p specifies the partition name. On AIDA cluster, use "-p full" if using GPU; otherwise use "-p regular".
+#SBATCH -p regular
+#SBATCH --exclude=c0020,c0002
+
+# Name the job so it's meaningful in the job list
+#SBATCH -J pure_nn
+# If you wanted to request GPUs, uncomment out this line.
+# #SBATCH --gpus 4
+# Request 4 CPU cores (8 hyperthreads).
+#SBATCH -c 8
+# Specify the resources should be assigned to a single task on one node.
+#SBATCH -N 1 -n 1
+# Amount of RAM needed
+#SBATCH --mem=80GB
+# Walltime limit (72 hours)
+#SBATCH -t 72:00:00
 
 
-# TUNING: STANDARDIZE OUTPUT+INPUT
+# Load modules to match compile-time environment
+# module purge
+source ~/.bashrc
+# module load cuda
+# module load mkl
+
+# Activate environment
+source .venv/bin/activate
+
+
+# TUNING: Pure NN, Smooth L1 loss, ten features
 for LR in 1e-4 1e-3 1e-2 1e-1
 do
-    for FOLD in 1 2 3 4 5
+    for WD in 0 1e-4 1e-3
     do
-        for SEED in 0 1 2
+        for FOLD in 1 2 3 4 5
         do
-            python3 binns_DDP.py --data_seed 12345 --n_datapoints 400 --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-                --lr $LR --optimizer AdamW --weight_decay 0 \
-                --seed $SEED --init default --standardize_output --standardize_input \
+            SEED=$FOLD
+            python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
+                --optimizer AdamW --lr $LR --weight_decay $WD --seed $SEED \
+                --features ten --standardize_output \
                 --n_epochs 200 --patience 100 --model nn_only --vertical_mixing original \
-                --activation leaky_relu --use_bn --categorical one_hot --pos_enc none \
-                --losses l2 --loss_weighting manual --lambdas 1 \
-                --num_CPU 4 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "NNONLY_GRID2_ONEHOT_L2"
+                --num_layers 3 --residual --activation leaky_relu --use_bn \
+                --losses smooth_l1 --lambdas 1 \
+                --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "NNONLY_TEN"
         done
     done
 done

@@ -23,7 +23,7 @@ from mlp import GNN_BINN, Spatial_BINN, mlp_wrapper, nn_only, BINN_Hybrid
 from torch.optim.swa_utils import AveragedModel, SWALR
 from pe_gcn_model import GridCellSpatialRelationEncoder
 from spatial_utils import *
-from losses import binns_loss, compute_param_matching_loss, compute_param_violation_loss
+from losses import binns_loss
 import visualization_utils
 
 # sys.path.append('C:/Users/hx293/Research_Data/BINN/')
@@ -86,8 +86,12 @@ data_dir_output = '../OUTPUT_DATA/'
 # TRAINED_MODEL_PATH = "../OUTPUT_DATA/neural_network/20250324-225001_BINN_TENFEATURES_HARDSIGMOID_TUNING_lr=1e-03_fold=1_seed=1/opt_nn_20250324-225001_BINN_TENFEATURES_HARDSIGMOID_TUNING_lr=1e-03_fold=1_seed=1.pt"
 
 # KAN with 10 features
-TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250326-134936_KAN_HARDDIAGONAL_TWOSTAGE_lr=1e-02_fold=1_seed=1/opt_nn_20250326-134936_KAN_HARDDIAGONAL_TWOSTAGE_lr=1e-02_fold=1_seed=1.pt"
-
+# TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250401-163608_KAN_RESIDUAL_lr=1e-02_fold=1_seed=1/opt_nn_20250401-163608_KAN_RESIDUAL_lr=1e-02_fold=1_seed=1.pt"
+# TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250404-062248_KAN_ONELAYER_lr=1e-02_fold=1_seed=1/opt_nn_20250404-062248_KAN_ONELAYER_lr=1e-02_fold=1_seed=1.pt"
+# TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250405-202356_KAN_ONELAYER_DEBUG_lr=1e-02_fold=1_seed=1/opt_nn_20250405-202356_KAN_ONELAYER_DEBUG_lr=1e-02_fold=1_seed=1.pt"
+# TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250407-111943_KAN_ONELAYER_TEMP0.1_lr=1e-02_fold=1_seed=1/opt_nn_20250407-111943_KAN_ONELAYER_TEMP0.1_lr=1e-02_fold=1_seed=1.pt"
+# TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250407-220156_KAN_REPROATTEMPT_NOUPDATEGRID_lr=1e-02_fold=1_seed=1/opt_nn_20250407-220156_KAN_REPROATTEMPT_NOUPDATEGRID_lr=1e-02_fold=1_seed=1.pt"
+TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250409-134512_KAN_REPROATTEMPT_TWOSTAGE32_DEBUG_lr=1e-02_fold=1_seed=1/checkpoint_20250409-134512_KAN_REPROATTEMPT_TWOSTAGE32_DEBUG_lr=1e-02_fold=1_seed=1.pt"
 # NAM models. NOTE These are out of date and I need to double-check they still work.
 # NAM model per input-output pair
 # TRAINED_MODEL_PATH = "/mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/OUTPUT_DATA/neural_network/20250305-233914_NAM_DEBUGGING_lr=1e-03_fold=1_seed=1/opt_nn_20250305-233914_NAM_DEBUGGING_lr=1e-03_fold=1_seed=1.pt"
@@ -1169,9 +1173,9 @@ with torch.no_grad():
 		# testing the regularization function
 		model.mlp.attribute()
 		model.mlp.node_attribute()
-		model.mlp.reg("edge_backward", 1, 1, 0, 0)
-		pruned_model = model.mlp.prune(node_th=0.03, edge_th=0.03)
-		pruned_model.plot(in_vars=var4nn, out_vars=para_names, varscale=0.1)
+		# model.mlp.reg("edge_backward", 1, 1, 0, 0)
+		pruned_model = model.mlp.prune(node_th=0.03, edge_th=0.03)  # node_th=0.03, edge_th=0.03)
+		pruned_model.plot(in_vars=var4nn, out_vars=para_names, scale=5, varscale=0.1)
 		plt.savefig(os.path.join(PLOT_DIR, "kan_plot.png"))
 		plt.close()
 		exit(1)

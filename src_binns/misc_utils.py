@@ -289,7 +289,12 @@ def get_model(args, var4nn, var_idx_to_emb, device, para_index, train_x, train_y
 						"num_layers": args.num_layers,
 						"residual": args.residual,
 						"para_index": para_index,
-						"feature_dropout": args.feature_dropout}
+						"feature_dropout": args.feature_dropout,
+						"kan_grid": args.kan_grid,
+						"kan_grid_margin": args.kan_grid_margin,
+						"kan_noise": args.kan_noise,
+						"kan_base_fun": args.kan_base_fun,
+						"kan_affine_trainable": args.kan_affine_trainable}
 
 	elif args.model == 'binn_hybrid':
 		model_class = BINN_Hybrid
@@ -380,13 +385,16 @@ def get_optimizer_and_scheduler(model, args):
 		optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 	elif args.optimizer == "SGD":
 		optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+	elif args.optimizer == "LBFGS":
+		# From the KAN repo https://github.com/KindXiaoming/pykan/blob/master/kan/MultKAN.py#L1498
+		optimizer = torch.optim.LBFGS(model.parameters(), lr=args.lr, history_size=10, line_search_fn="strong_wolfe", tolerance_grad=1e-32, tolerance_change=1e-32)  #, tolerance_ys=1e-32)
 	else:
 		raise ValueError("Invalid args.optimizer")
 	# print("GETTING OPTIMIZER", list(model.parameters()))
 
 	# If desired, add a learning rate scheduler that decays the learning rate throughout training
 	if args.scheduler == "reduce_on_plateau":
-		scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)  #, mode="max")
+		scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.2)  #, mode="max")
 	elif args.scheduler == "step":
 		scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
 	elif args.scheduler == "cosine":

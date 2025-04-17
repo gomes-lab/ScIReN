@@ -68,6 +68,13 @@ def compute_param_violation_loss(unconstrained_params):
 	return torch.sum(torch.clamp(torch.abs(unconstrained_params) - 3.0, min=0))
 
 
+def compute_unconstrained_param_loss(unconstrained_params):
+	"""
+	If using hardsigmoid param_constraint, penalizes unconstrained values far away from zero.
+	"""
+	return (unconstrained_params ** 2).mean()
+
+
 def compute_param_matching_loss(pred_para, true_para):
 	"""
 	Simple L2 loss on the parameters. This is cheating but can be used for debugging.
