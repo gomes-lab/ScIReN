@@ -1,0 +1,3 @@
+[submodule "src_binns/pykan"]
+	path = src_binns/pykan
+	url = https://github.com/joshuafan/pykan.git
