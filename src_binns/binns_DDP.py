@@ -102,7 +102,7 @@ parser.add_argument("--kan_grid", type=int, default=3, help="Number of grid inte
 parser.add_argument("--kan_update_grid", type=int, default=1, help="Whether to update grids for KAN every epoch (default true)")
 parser.add_argument("--kan_grid_margin", type=float, default=1.0, help="How much margin to use (in units of input range) when creating grids for KAN. Only used if kan_update_grid is 1.")
 parser.add_argument("--kan_noise", type=float, default=0.3, help="Noise scale for KAN")
-parser.add_argument("--kan_base_fun", type=str, default="silu", choices=["silu", "identity"], help="Base function for KAN")
+parser.add_argument("--kan_base_fun", type=str, default="silu", choices=["silu", "identity", "silu_identity"], help="Base function for KAN")
 parser.add_argument("--kan_affine_trainable", action='store_true')
 
 # Process-based model settings
@@ -178,7 +178,7 @@ parser.add_argument("--relobralo_temp", type=float, default=0.1, help="Softmax t
 parser.add_argument("--relobralo_saudade", type=float, default=0.999, help="Saudade (1 minus probability of looking back to epoch 0)")
 
 # Positional encoding / GNN
-parser.add_argument("--features", type=str, choices=["all", "all_including_lonlat", "ten"], default="all", help="Which features to use. Default `all` includes all features except lon/lat. To include lon/lat explicitly, use `all_including_lonlat`. `ten` is 10 handcrafted features")
+parser.add_argument("--features", type=str, choices=["all", "all_including_lonlat", "ten", "eight"], default="all", help="Which features to use. Default `all` includes all features except lon/lat. To include lon/lat explicitly, use `all_including_lonlat`. `ten` is 10 handcrafted features. `eight` is same as ten but excluding vegetation (biological) features.")
 parser.add_argument("--pos_enc", type=str, default='none', choices=['none', 'early', 'late'],
 					help="How lon/lat features are encoded. 'none' means not used. 'early' means that positional encoding is concatenated with other features. 'late' means that it is only used as an error term for the latent parameters.")
 parser.add_argument("--graph_conv", type=str, default="gcn", choices=["gcn", "gat", "gcn1", "gat1"], help="For GNN, which graph conv to use")
@@ -642,6 +642,8 @@ if args.features in ["all", "all_including_lonlat"]:
 elif args.features == "ten":
 	# Ten handcrafted features
 	var4nn = ["BIO1", "BIO12", "Clay_Content_avg", "Sand_Content_avg", "Bulk_Density_avg", "SWC_v_Wilting_Point_avg", "pH_Water_avg", "CEC_avg", "cesm2_npp", "cesm2_vegc"]
+elif args.features == "eight":
+	var4nn = ["BIO1", "BIO12", "Clay_Content_avg", "Sand_Content_avg", "Bulk_Density_avg", "SWC_v_Wilting_Point_avg", "pH_Water_avg", "CEC_avg"]
 else:
 	raise ValueError("Invalid features")
 
@@ -1714,7 +1716,9 @@ def worker(rank, world_size, job_id, port):
 						model_without_ddp.mlp.act_fun[i].grid.data /= world_size
 						dist.all_reduce(model_without_ddp.mlp.act_fun[i].coef, op=dist.ReduceOp.SUM)
 						model_without_ddp.mlp.act_fun[i].coef.data /= world_size
-
+						if model_without_ddp.mlp.base_fun == "silu_identity":
+							dist.all_reduce(model_without_ddp.mlp.act_fun[i].silu_input_offset, op=dist.ReduceOp.SUM)
+							model_without_ddp.mlp.act_fun[i].silu_input_offset.data /= world_size
 					dist.barrier()  # MAKE SURE THIS DOES NOT CAUSE ISSUES. (Old run - this was every batch outside the if statement)
 
 
@@ -1732,7 +1736,9 @@ def worker(rank, world_size, job_id, port):
 				batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0, one_param_only=args.one_param_only, PRODA_para=batch_proda_para)
 
 			# Check if batch_pred_para is nan or inf
-			if torch.isnan(batch_pred_para).any() or torch.isinf(batch_pred_para).any():
+			if batch_y_hat is None or batch_pred_para is None:
+				whether_break = torch.tensor(1).to(device)
+			elif torch.isnan(batch_pred_para).any() or torch.isinf(batch_pred_para).any():
 				whether_break = torch.tensor(1).to(device)
 				for ipara in range(batch_pred_para.shape[0]):
 					if torch.isnan(batch_pred_para[ipara]).any() or torch.isinf(batch_pred_para[ipara]).any():
@@ -2363,16 +2369,16 @@ def worker(rank, world_size, job_id, port):
 				# Produce edge/node importance scores
 				model_without_ddp.mlp.attribute()
 				model_without_ddp.mlp.node_attribute()
-				
-				# Plot the unpruned model
-				model_without_ddp.mlp.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=para_names, scale=5, varscale=0.1)
-				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_kan_plot.png"))
-				plt.close()
 
 				# Plot the pruned model
 				pruned_model = model_without_ddp.mlp.prune(node_th=0.03, edge_th=0.03)
-				pruned_model.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=para_names, scale=5, varscale=0.1)
+				pruned_model.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=para_names, scale=5, varscale=0.15)
 				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_kan_plot_pruned.png"))
+				plt.close()
+
+				# Plot the unpruned model
+				model_without_ddp.mlp.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=para_names, scale=5, varscale=0.15)
+				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_kan_plot.png"))
 				plt.close()
 
 			# Scatters of true-vs-predicted SOC (grid).
@@ -2771,9 +2777,9 @@ def worker(rank, world_size, job_id, port):
 		dist.destroy_process_group()
 		return
 	if whether_break.item() == 1:
-		print(f"Rank {rank}: Exiting after training due to NaN encountered in any process.")
-		dist.destroy_process_group()
-		return
+		print(f"Rank {rank}: Stopped training due to NaN encountered in any process.")
+		# dist.destroy_process_group()
+		# return
 
 	# Ensure all processes reach the end
 	dist.barrier()

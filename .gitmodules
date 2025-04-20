@@ -1,3 +1,6 @@
 [submodule "src_binns/pykan"]
 	path = src_binns/pykan
 	url = https://github.com/joshuafan/pykan.git
+[submodule "src_binns/q10hybrid"]
+	path = src_binns/q10hybrid
+	url = https://github.com/joshuafan/q10hybrid.git

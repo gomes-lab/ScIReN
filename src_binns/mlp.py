@@ -395,7 +395,7 @@ class mlp_wrapper(nn.Module):
 		# check if mlp output is nan
 		if torch.isnan(mlp_output).any() or torch.isinf(mlp_output).any():
 			print("mlp_output was nan", mlp_output)
-			exit(1)
+			return None, None
 
 		# Clamp temp_sigmoid to be within a range
 		clamped_temp_sigmoid = self.min_temp + (self.max_temp - self.min_temp) * F.sigmoid(self.temp_sigmoid)  # 10 + 90*self.sigmoid(self.temp_sigmoid)   #10 + 99 * self.sigmoid(self.temp_sigmoid) # try with a smaller range

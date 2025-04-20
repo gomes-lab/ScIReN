@@ -72,10 +72,10 @@ do
                 --seed $SEED --init default --min_temp 1 --max_temp 1 \
                 --n_epochs 200 --patience 100 --model kan \
                 --num_layers 1 --features ten \
-                --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff --lambdas 1 1 1000 1 2 0 \
+                --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff --lambdas 1 1 1000 1 2 $LAM \
                 --param_constraint hardsigmoid \
-                --kan_grid 6 --kan_update_grid 1 --kan_grid_margin 1.0 --kan_base_fun identity --kan_affine_trainable \
-                --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "KAN_ONELAYER_GRIDMARGIN" --plot
+                --kan_grid 3 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun silu_identity --kan_affine_trainable \
+                --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "KAN_ONELAYER_SILUIDENTITY3" --plot
         done
     done
 done

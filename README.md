@@ -45,23 +45,22 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+## Git submodules
 
-### (OLD STUFF, CAN PROBABLY IGNORE) Alternate commands to install
+The KAN and q10hybrid folders are submodules. To clone them use
 
-If installing the `requirements.txt` file did not work, you can try manually installing packages.
 ```
-pip install numpy scipy pandas matplotlib scikit-learn geopandas mat73 netCDF4
-pip install torch torchvision torchaudio 
-pip install torch_geometric
+git submodule update --init --recursive
 ```
 
-You need to download the PRODA parameters from [this link](https://drive.google.com/file/d/1AGDlybz35n3gHqyNilVthVzOaBkNZAXr/view?usp=sharing), place in the `ENSEMBLE/INPUT_DATA` directory, and unzip. One way to download this is using `gdown`:
+To get changes from the remote submodules, cd to the submodule directory and run
 ```
-pip install gdown
-cd ENSEMBLE/INPUT_DATA
-gdown 1AGDlybz35n3gHqyNilVthVzOaBkNZAXr
-unzip PRODA_Results_Subset.zip
+git fetch
+git merge origin/main
 ```
+
+
+
 
 
 ## Running Instructions
@@ -76,6 +75,7 @@ chmod +x run_binn.sh  # If execute permission not enabled
 The script `src_binns/run_binn_slurm.sh` contains an example of how to train on 4 GPUs on a server with the Slurm scheduler.
 
 The script `src_binns/run_retrieval.sh` runs the retrieval test described in the BINN paper. NOT FULLY TESTED YET.
+
 
 ## Code summary
 
@@ -121,3 +121,22 @@ The covariates and biogeochemical parameters are listed in [this document](https
 ## Additional tips
 
 Do this to avoid commiting images in Jupyter Notebooks in git: https://stackoverflow.com/a/74753885
+
+
+
+### (OLD STUFF, CAN PROBABLY IGNORE) Alternate commands to install
+
+If installing the `requirements.txt` file did not work, you can try manually installing packages.
+```
+pip install numpy scipy pandas matplotlib scikit-learn geopandas mat73 netCDF4
+pip install torch torchvision torchaudio 
+pip install torch_geometric
+```
+
+You need to download the PRODA parameters from [this link](https://drive.google.com/file/d/1AGDlybz35n3gHqyNilVthVzOaBkNZAXr/view?usp=sharing), place in the `ENSEMBLE/INPUT_DATA` directory, and unzip. One way to download this is using `gdown`:
+```
+pip install gdown
+cd ENSEMBLE/INPUT_DATA
+gdown 1AGDlybz35n3gHqyNilVthVzOaBkNZAXr
+unzip PRODA_Results_Subset.zip
+```
