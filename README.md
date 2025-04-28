@@ -58,9 +58,15 @@ To get changes from the remote submodules, cd to the submodule directory and run
 git fetch
 git merge origin/main
 ```
+or
+```
+git submodule update --remote
+```
 
-
-
+To push changes, first push changes to the submodule, then do `git add <submodule>` in the main directory, commit it, then run
+```
+git push --recurse-submodules=check
+```
 
 
 ## Running Instructions
@@ -118,9 +124,77 @@ The script `src_binns/run_retrieval.sh` runs the retrieval test described in the
 
 The covariates and biogeochemical parameters are listed in [this document](https://docs.google.com/document/d/1dAlGbuwKkIg7-ai9ZPGSKIP7rKdKj8mUQi29TObQlUI/edit?usp=sharing).
 
-## Additional tips
+## Additional tips / notes
 
 Do this to avoid commiting images in Jupyter Notebooks in git: https://stackoverflow.com/a/74753885
+
+Save pip environment:
+```
+pip freeze > requirements.txt
+```
+
+## Git submodule notes
+
+Source: https://git-scm.com/book/en/v2/Git-Tools-Submodules
+
+Add existing Git repository as submodule 
+```
+git submodule add https://github.com/chaconinc/DbConnector
+```
+
+Creates a new file `.gitmodules` and a new file for the submodule.
+
+Clone project with submodules:
+```
+git clone https://github.com/chaconinc/MainProject  # Main project
+git submodule update --init --recursive
+```
+
+Pull upstream changes from submodule remote: go to submodule directory
+```
+git fetch
+git merge origin/master (or origin/main)
+```
+
+Alternative to the above: from the MAIN directory, this command goes into submodules and fetches/updates.
+```
+git submodule update --remote DbConnector
+```
+
+Automatically show submodule changes when you run `git diff`:
+```
+git config --global diff.submodule log
+```
+
+Pulling upstream changes from project remote: suppose a collaborator made changes to a submodule and I need to pull them.
+```
+git pull
+git submodule update --init --recursive
+```
+
+Alternative:
+```
+git pull --recurse-submodules
+```
+
+If the other person changed the url of the submodule:
+```
+# copy the new URL to your local config
+$ git submodule sync --recursive
+# update the submodule from the new URL
+$ git submodule update --init --recursive
+```
+
+Pushing: when pushing the main repository, tell Git to always check if submodules have been pushed properly.
+```
+git config push.recurseSubmodules check
+```
+This means that if I run `git push`, it actually runs `git push --recurse-submodules=check`
+
+If the submodule wasn't pushed, go into the submodule and commit/push your local changes.
+
+
+
 
 
 

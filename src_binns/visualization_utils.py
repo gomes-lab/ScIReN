@@ -18,7 +18,7 @@ def get_git_revision_hash():
     return subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
 
 
-def plot_multiple_losses(filename, losses, labels, splits):
+def plot_multiple_losses(filename, losses, labels, splits, y_ranges=None):
     """
     Creates multiple plots (one for each loss type).
     Each plot contains a curve for each split (train/validation).
@@ -43,6 +43,8 @@ def plot_multiple_losses(filename, losses, labels, splits):
             ax.plot(np.arange(len(loss_curve)), loss_curve, label=splits[curve_idx])
         ax.set_xlabel("Epoch #")
         ax.set_ylabel(loss_type)
+        if y_ranges[plot_idx] is not None:
+            ax.set_ylim(y_ranges[plot_idx])
         ax.set_title(loss_type)
         ax.legend()
 

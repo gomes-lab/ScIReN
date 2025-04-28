@@ -102,8 +102,13 @@ parser.add_argument("--kan_grid", type=int, default=3, help="Number of grid inte
 parser.add_argument("--kan_update_grid", type=int, default=1, help="Whether to update grids for KAN every epoch (default true)")
 parser.add_argument("--kan_grid_margin", type=float, default=1.0, help="How much margin to use (in units of input range) when creating grids for KAN. Only used if kan_update_grid is 1.")
 parser.add_argument("--kan_noise", type=float, default=0.3, help="Noise scale for KAN")
-parser.add_argument("--kan_base_fun", type=str, default="silu", choices=["silu", "identity", "silu_identity"], help="Base function for KAN")
+parser.add_argument("--kan_base_fun", type=str, default="silu", choices=["silu", "identity", "silu_identity", "zero"], help="Base function for KAN")
 parser.add_argument("--kan_affine_trainable", action='store_true')
+
+# Dropkan related
+parser.add_argument("--kan_drop_rate", type=float, default=0.0, help="Drop rate for DropKAN")
+parser.add_argument("--kan_drop_mode", type=str, choices=['postspline', 'postact', 'postact_input', 'dropout'], default='postact', help="Drop mode: 'postspline' the drop mask is applied to the layer's postsplines, 'postact' the drop mask is applied to the layer's postacts, 'dropout' applies a standard dropout layer to the inputs.")
+parser.add_argument("--kan_drop_scale", action='store_true', help='If true, the retained postsplines/postacts are scaled by a factor of 1/(1-drop_rate)')
 
 # Process-based model settings
 parser.add_argument("--vertical_mixing", type=str, default='original', choices=['original', 'simple_one_intercept', 'simple_two_intercepts'], help="""Vertical mixing matrix parameterization. Original explicitly models diffusion.
@@ -164,7 +169,7 @@ parser.add_argument("--clip_value", type=float, default=-1, help="Clip value for
 # Losses and loss weights
 parser.add_argument("--losses", nargs="+", choices=["l1", "smooth_l1", "l2", "param_reg", "param_violation", "unconstrained_param", "param_matching", "jacobian",
 													"jacobian_sparsity", "spectral", "lipmlp", "cure", "senn_robustness", "senn_l1", "senn_sparsity", 
-													"nam_l2", "nam_entropy", "kan_l1", "kan_entropy", "kan_coef", "kan_coefdiff",
+													"nam_l2", "nam_entropy", "kan_l1", "kan_entropy", "kan_coef", "kan_coefdiff", "kan_coefdiff2",
 													"spatial_error", "spatial_emb_smoothness", "param_smoothness", "residual"], default=["smooth_l1", "param_reg"],
 					help="Losses to use (can list any number). Note jacobian_sparsity cannot be optimized (non-differentiable): it is just something we track.")
 parser.add_argument("--loss_weighting", default="manual", choices=["manual", "relobralo", "IMTL", "two_stage"])
@@ -1777,6 +1782,7 @@ def worker(rank, world_size, job_id, port):
 			kan_entropy_loss = np.nan
 			kan_coef_loss = np.nan
 			kan_coefdiff_loss = np.nan
+			kan_coefdiff2_loss = np.nan
 			senn_robustness_loss = np.nan
 			senn_l1_loss = np.nan
 			senn_sparsity = np.nan
@@ -1914,12 +1920,12 @@ def worker(rank, world_size, job_id, port):
 				frac_variance_explained = variance_explained / variance_explained.sum(dim=0, keepdim=True)  # [n_features, n_outputs]. For each output, feature fractions sum to 1
 				p_log_p = -frac_variance_explained * torch.log(frac_variance_explained)  # p(x) log p(x) elementwise
 				nam_entropy_loss = p_log_p.sum(dim=0).mean()
-			if {"kan_l1", "kan_entropy", "kan_coef", "kan_coefdiff"} & set(args.losses):
+			if {"kan_l1", "kan_entropy", "kan_coef", "kan_coefdiff", "kan_coefdiff2"} & set(args.losses):
 				assert args.model == "kan"
 
 				# NOTE: the lamb values passed are completely unused, as we direclty obtain the individual loss components and weight them later.
 				# For default weights see https://github.com/KindXiaoming/pykan/blob/master/kan/MultKAN.py#L1411
-				kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., return_indiv=True)
+				kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss, kan_coefdiff2_loss = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., return_indiv=True)
 					# model_without_ddp.mlp.get_reg(reg_metric='node_influence_on_output', lamb_l1=0., lamb_entropy=1., lamb_coef=0., lamb_coefdiff=0.)
 
 			if "senn_robustness" in args.losses:
@@ -1954,6 +1960,7 @@ def worker(rank, world_size, job_id, port):
 						"kan_entropy": kan_entropy_loss,
 						"kan_coef": kan_coef_loss,
 						"kan_coefdiff": kan_coefdiff_loss,
+						"kan_coefdiff2": kan_coefdiff2_loss,
 						"senn_robustness": senn_robustness_loss,
 						"senn_l1": senn_l1_loss,
 						"senn_sparsity": senn_sparsity,
@@ -2168,7 +2175,7 @@ def worker(rank, world_size, job_id, port):
 					assert args.model == "kan"
 
 					# NOTE: the lamb values passed are completely unused, as we direclty obtain the individual loss components and weight them later.
-					kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., return_indiv=True)
+					kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss, kan_coefdiff2_loss = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., return_indiv=True)
 
 				if "senn_robustness" in args.losses:
 					senn_robustness_loss = model_without_ddp.senn_robustness_loss()
@@ -2372,12 +2379,12 @@ def worker(rank, world_size, job_id, port):
 
 				# Plot the pruned model
 				pruned_model = model_without_ddp.mlp.prune(node_th=0.03, edge_th=0.03)
-				pruned_model.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=para_names, scale=5, varscale=0.15)
+				pruned_model.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=para_names, scale=5, varscale=0.13)
 				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_kan_plot_pruned.png"))
 				plt.close()
 
 				# Plot the unpruned model
-				model_without_ddp.mlp.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=para_names, scale=5, varscale=0.15)
+				model_without_ddp.mlp.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=para_names, scale=5, varscale=0.13)
 				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_kan_plot.png"))
 				plt.close()
 
@@ -2808,11 +2815,12 @@ def worker(rank, world_size, job_id, port):
 		plot_losses = [[train_metrics_history[~np.any(np.isnan(train_metrics_history), axis=1), 2].flatten().tolist(),
 				 	    val_metrics_history[~np.any(np.isnan(val_metrics_history), axis=1), 2].flatten().tolist()]]  # NSE first
 		plot_labels = ["NSE"] + [f"{loss} loss" for loss in args.losses]
+		y_ranges = [(0, 2)] + [None for loss in args.losses]
 		plot_splits = ["train", "validation"]
 		for loss_idx in range(len(args.losses)):
 			plot_losses.append([train_loss_history[:, loss_idx].tolist(),
 								val_loss_history[:, loss_idx].tolist()])
-		visualization_utils.plot_multiple_losses(os.path.join(PLOT_DIR, "all_losses.png"), plot_losses, plot_labels, plot_splits)
+		visualization_utils.plot_multiple_losses(os.path.join(PLOT_DIR, "all_losses.png"), plot_losses, plot_labels, plot_splits, y_ranges)
 
 
 		# # Plot loss curves throughout training. Normalize each curve relative to its mean,

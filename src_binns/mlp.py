@@ -158,7 +158,8 @@ class mlp_wrapper(nn.Module):
 				 losses=["l1", "param_reg"], device="cpu", train_x=None,
 				 min_temp=10, max_temp=109, init="xavier_uniform", width=128,
 				 para_index=None, feature_dropout=0, num_layers=4, residual=False,
-				 kan_grid=3, kan_grid_margin=0.0, kan_noise=0.3, kan_base_fun="silu", kan_affine_trainable=False):
+				 kan_grid=3, kan_grid_margin=0.0, kan_noise=0.3, kan_base_fun="silu", kan_affine_trainable=False,
+				 kan_drop_rate=0.0, kan_drop_mode="postact", kan_drop_scale=True):
 		"""
 		var_idx_to_emb is a dictionary mapping from categorical variable index to either
 		(1) Embedding layer (if one_hot is False)
@@ -312,7 +313,8 @@ class mlp_wrapper(nn.Module):
 			self.mlp = kan.KAN(width=layer_sizes, grid=kan_grid, k=3, seed=42, device=device, residual=residual,
 					  		   input_size=len(self.non_categorical_indices), noise_scale=kan_noise,
 							   base_fun=kan_base_fun, affine_trainable=kan_affine_trainable, grid_eps=1.0, 
-							   grid_margin=kan_grid_margin)
+							   grid_margin=kan_grid_margin, drop_rate=kan_drop_rate, drop_mode=kan_drop_mode,
+							   drop_scale=kan_drop_scale)
 			# self.mlp.speed()  # Disable symbolic branch
 		else:
 			raise ValueError("Unsupported base_model")
