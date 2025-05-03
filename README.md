@@ -24,6 +24,17 @@ Install required packages
 pip install -r requirements.txt
 ```
 
+NOTE: If this did not work, you can try installing packages manually, e.g.
+```
+pip install numpy scipy pandas matplotlib scikit-learn geopandas mat73 xarray netCDF4 alibi joblib
+pip install torch torchvision torchaudio 
+pip install torch_geometric
+cd src_binns/pykan
+pip install -e .
+cd ../q10hybrid
+pip install -e .
+```
+
 To use graph neural network variant (work in progress), you may need to install these libraries as well. These are not needed for normal BINN.
 ```
 pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
@@ -193,19 +204,30 @@ This means that if I run `git push`, it actually runs `git push --recurse-submod
 
 If the submodule wasn't pushed, go into the submodule and commit/push your local changes.
 
+## Optuna notes
 
+Install Optuna dashboard
+```
+pip install optuna-dashboard
+optuna-dashboard sqlite:///./logs/20250430_synth4_kan_layers=2_constraint=softplus/optuna.db --port 8081
+
+# If this is being run on remote server on a compute node c0011 (different from head node):
+ssh -N -J jyf6@aida.cac.cornell.edu jyf6@c0011 -L 8081:localhost:8081
+# If this is being run on a remote server (head node)
+ssh -N jyf6@aida.cac.cornell.edu -L 8081:localhost:8081
+# If this is run locally, ignore the above.
+# In all cases, go to local browser.
+http://127.0.0.1:8081/
+
+
+```
 
 
 
 
 ### (OLD STUFF, CAN PROBABLY IGNORE) Alternate commands to install
 
-If installing the `requirements.txt` file did not work, you can try manually installing packages.
-```
-pip install numpy scipy pandas matplotlib scikit-learn geopandas mat73 netCDF4
-pip install torch torchvision torchaudio 
-pip install torch_geometric
-```
+
 
 You need to download the PRODA parameters from [this link](https://drive.google.com/file/d/1AGDlybz35n3gHqyNilVthVzOaBkNZAXr/view?usp=sharing), place in the `ENSEMBLE/INPUT_DATA` directory, and unzip. One way to download this is using `gdown`:
 ```
