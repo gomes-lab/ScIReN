@@ -1,11 +1,11 @@
 #!/bin/bash
-#PBS -A UOKL0017
+#PBS -A UCOR0092
 #PBS -N BINN_pureNN
 #PBS -q main
 #PBS -l walltime=12:00:00
 #PBS -l select=1:ncpus=128
 
-# Usage: qsub run_binn_pbs.sh
+# Usage: qsub pbs_scripts/run_purenn.sh
 # Use scratch for temporary files to avoid space limits in /tmp
 export TMPDIR="/glade/scratch/$USER/temp"
 mkdir -p $TMPDIR
