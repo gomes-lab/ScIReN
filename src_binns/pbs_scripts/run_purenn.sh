@@ -27,14 +27,20 @@ do
     do
         for FOLD in 1 2 3 4 5
         do
+            if [ $FOLD -eq 1 -a $LR = 1e-2 ]; then
+                PLOT_STR="--plot"
+            else
+                PLOT_STR=""
+            fi
             SEED=$FOLD
+
             python3 binns_DDP.py --data_seed 12345 --split grid2 --cross_val_idx $FOLD --n_folds 5 \
                 --optimizer AdamW --lr $LR --weight_decay $WD --seed $SEED \
                 --features ten --standardize_output \
                 --n_epochs 200 --patience 100 --model nn_only --vertical_mixing original \
                 --num_layers 3 --residual --activation leaky_relu --use_bn \
                 --losses smooth_l1 --lambdas 1 \
-                --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "PURENN_FULL"
+                --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "PURENN_FULL" $PLOT_STR
         done
     done
 done

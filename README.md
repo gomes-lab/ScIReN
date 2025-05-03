@@ -238,5 +238,3 @@ unzip PRODA_Results_Subset.zip
 ```
 
 
-## NCAR notes
-ssh -X joshuaf@derecho.hpc.ucar.edu
