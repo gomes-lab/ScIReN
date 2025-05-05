@@ -1397,7 +1397,8 @@ def ddp_setup(rank, world_size, port):
 		print("CUDA_VISIBLE_DEVICES", os.environ["CUDA_VISIBLE_DEVICES"])
 
 	# Set number of threads *per worker*. Should equal floor(CPUs/processes)
-	torch.set_num_threads(math.floor(torch.get_num_threads() / world_size))
+	# torch.set_num_threads(math.floor(torch.get_num_threads() / world_size))
+	torch.set_num_threads(math.floor(cpu_count / world_size))  # TODO This line works on NCAR
 
 	# Environment variables
 	os.environ['RANK'] = str(rank)

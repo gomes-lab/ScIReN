@@ -6,13 +6,13 @@
 #PBS -l select=1:ncpus=128
 
 # Usage: qsub pbs_scripts/run_purenn.sh
-# Use scratch for temporary files to avoid space limits in /tmp
-export TMPDIR="/glade/scratch/$USER/temp"
-mkdir -p $TMPDIR
-# Load modules to match compile-time environment
-module purge
-module load conda
-module load cuda
+# # Use scratch for temporary files to avoid space limits in /tmp
+# export TMPDIR="/glade/scratch/$USER/temp"
+# mkdir -p $TMPDIR
+# # Load modules to match compile-time environment
+# module purge
+# module load conda
+# module load cuda
 
 # Activate environment (virtualenv version)
 cd /glade/work/joshuaf/BINNS/src_binns
@@ -40,7 +40,8 @@ do
                 --n_epochs 200 --patience 100 --model nn_only --vertical_mixing original \
                 --num_layers 3 --residual --activation leaky_relu --use_bn \
                 --losses smooth_l1 --lambdas 1 \
-                --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "PURENN_FULL" $PLOT_STR
+                --num_CPU 128 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "PURENN_FULL" $PLOT_STR
+            exit
         done
     done
 done
