@@ -140,7 +140,9 @@ parser.add_argument("--val_ratio", type=float, default=0.1, help="Fraction of da
 parser.add_argument("--test_ratio", type=float, default=0.1, help="Fraction of datapoints in test set. Only used if not doing cross-validation.")
 parser.add_argument("--batching", type=str, default='random', choices=['random', 'block'],
 					help='How to generate minibatches. If `block`, samples examples from contiguous spatial block for each batch.')
-parser.add_argument("--synthetic_labels", action='store_true', help="Whether to use synthetic SOC labels (generated from running CLM5 on PRODA parameters)")
+parser.add_argument("--labels", type=str, default='real', choices=['real', 'synthetic_proda', 'synthetic_function'], help="Whether to use real labels, synthetic SOC labels generated from PRODA parameters, or synthetic SOC labels generated from synthetic parameters, which are generated using prescribed functional relationships.")
+parser.add_argument("--label_noise", type=float, default=0., help="epsilon, where we multiply SOC labels by N(1, epsilon). Only used if args.labels is synthetic_proda or synthetic_function.")
+parser.add_argument("--function_sparsity", type=float, default=0.1, help="If args.labels is synthetic function, what fraction of possible relationships actually exist.")
 
 # Transformations
 parser.add_argument("--standardize_input", action='store_true', help="If set, standardize numeric features to mean 0, std 1. Otherwise, features vary between 0 and 1.")
@@ -841,21 +843,23 @@ current_PRODA_para = np.clip(current_PRODA_para, a_min=0, a_max=1)
 #############################
 # PRODA soc simulation data #
 #############################
-# Check if synthetic labels were already precomputed and saved
-os.makedirs(os.path.join(data_dir_input, "synthetic_labels"), exist_ok=True)
-if args.representative_sample:
-	synthetic_label_path = os.path.join(data_dir_input, "synthetic_labels/synthetic_soc_representative.npy")
-elif args.n_datapoints != -1:
-	synthetic_label_path = os.path.join(data_dir_input, f"synthetic_labels/synthetic_soc_datapoints={args.n_datapoints}_seed={args.seed}.npy")
-else:
-	synthetic_label_path = os.path.join(data_dir_input, "synthetic_labels/synthetic_soc_full.npy")
+# Fetch directory where cached labels are saved
+if args.labels != "real":
+	# If using synthetic datasets, save the labels to a directory
+	label_dir = os.path.join(data_dir_input, f"labels_{args.labels}_seed={args.seed}")
+	if args.representative_sample:
+		label_dir += "_representative"
+	elif args.n_datapoints != -1:
+		label_dir += "_datapoints={args.n_datapoints}"
+	os.makedirs(label_dir, exist_ok=True)
 
-if os.path.exists(synthetic_label_path):  # If synthetic labels available, load them
-	PRODA_soc_simu = np.load(synthetic_label_path)
-else:  # Otherwise compute synthetic labels from the PRODA parameters
-	PRODA_soc_simu = np.ones((len(current_data_profile_id), 200))*np.nan
-
-	if args.synthetic_labels:
+if args.labels == "synthetic_proda":
+	synthetic_label_path = os.path.join(label_dir, "synthetic_soc.npy")
+	if os.path.exists(synthetic_label_path):  # If synthetic labels available, load them
+		PRODA_soc_simu = np.load(synthetic_label_path)
+		current_data_y = PRODA_soc_simu
+	else:   # Otherwise compute synthetic labels from the PRODA parameters
+		PRODA_soc_simu = np.ones((len(current_data_profile_id), 200))*np.nan
 
 		start_time = time.time()
 		for i in range(len(current_data_profile_id)):
@@ -900,6 +904,143 @@ else:  # Otherwise compute synthetic labels from the PRODA parameters
 		# If using synthetic labels, treat the simulated SOC as the true labels
 		current_data_y = PRODA_soc_simu
 		np.save(synthetic_label_path, PRODA_soc_simu)
+
+elif args.labels == "synthetic_function":
+	synthetic_label_path = os.path.join(label_dir, "synthetic_soc.npy")
+	if os.path.exists(synthetic_label_path) or False:
+		PRODA_soc_simu = np.load(synthetic_label_path)
+		current_data_y = PRODA_soc_simu
+		current_PRODA_para = np.load(os.path.join(label_dir, "synthetic_para.npy"))
+		sym_mask = np.load(os.path.join(label_dir, "functional_relationships.npy"))
+		relationship_mask = torch.tensor(sym_mask != 0, dtype=int)  # 1 if relationship exists between input i and output j
+
+	else:
+		print("synthetic_function", label_dir)
+
+		# Construct a symbolic-only "KAN" that prescribes the true relationships between
+		# input features and biogeochemical parameters. We mainly use the KAN infrastructure
+		# for its plotting functionality.
+		# Assume no categorical features for now.
+		import kan
+		true_kan = kan.KAN(width=[len(var4nn), len(para_names)], device="cpu",
+					  	   input_size=len(var4nn), base_fun="identity")
+		with torch.no_grad():
+
+			# Set act_fun[0].mask to 0 to completely ignore the spline/learnable portion and only 
+			# use the symbolic portion.
+			true_kan.act_fun[0].mask = torch.zeros_like(true_kan.act_fun[0].mask)
+			true_kan.save_acts = True
+
+			# Create a matrix of each possible input-output pair. 0 means no relationship,
+			# 1=linear, 2=quadratic, 3=exp, 4=log, 5=relu. 
+			sym_mask = np.random.choice([0, 1, 2, 3, 4, 5], size=(len(var4nn), len(para_names)), p=[0.8, 0.04, 0.04, 0.04, 0.04, 0.04])  # p=[0.9, 0.02, 0.02, 0.02, 0.02, 0.02])
+			relationship_mask = torch.tensor(sym_mask != 0, dtype=int)  # 1 if relationship exists between input i and output j
+			functions = [lambda x: x*0,
+						lambda x: x,
+						lambda x: x**2,
+						lambda x: torch.log2(x + 2.5),
+						lambda x: 2**x,
+						lambda x: F.relu(x)]
+			for i in range(sym_mask.shape[0]):
+				for j in range(sym_mask.shape[1]):
+					true_kan.fix_symbolic(0, i, j, fun_name=functions[sym_mask[i, j]], random=True, fit_params_bool=False, verbose=False)
+			true_kan.symbolic_fun[0].mask = relationship_mask.T  # Transpose because Symbolic_KANLayer's mask is [out_dim, in_dim] 
+
+			# Obtain parameters based on prescribed functional relationships.
+			# Then rescale their range to [0.2, 0.8].
+			input_features = torch.tensor(current_data_x[:, 0:len(var4nn), 0, 0], dtype=torch.float32)  # This is the way to extract input features from current_data_x
+			prescribed_para = true_kan(input_features)
+
+			# Calculate factors to scale/shift affine coefficients so all outputs are in range [0.2, 0.8].
+			scale_by = 0.6 / (prescribed_para.max(dim=0).values - prescribed_para.min(dim=0).values)
+			total_shift = 0.2 - 0.6 * prescribed_para.min(dim=0).values / (prescribed_para.max(dim=0).values - prescribed_para.min(dim=0).values)
+			shift_by = total_shift / relationship_mask.sum(dim=0)
+			constant_para = (relationship_mask.sum(dim=0) == 0)  # parameters with no functional relationships (constant)
+
+			# Scale/shift the affine coefficients
+			true_kan.symbolic_fun[0].affine[:, :, 2] = true_kan.symbolic_fun[0].affine[:, :, 2] * scale_by[:, None]
+			true_kan.symbolic_fun[0].affine[constant_para, :, 2] = 1.0  # torch.nan_to_num(true_kan.symbolic_fun[0].affine[:, :, 2], nan=1.0, posinf=1.0, neginf=1.0)
+			true_kan.symbolic_fun[0].affine[:, :, 3] = true_kan.symbolic_fun[0].affine[:, :, 3] * scale_by[:, None] + shift_by[:, None]
+			true_kan.symbolic_fun[0].affine[constant_para, :, 3] = 0.0  # torch.nan_to_num(true_kan.symbolic_fun[0].affine[:, :, 3], nan=0.0, posinf=0.0, neginf=0.0)
+
+			# Now get the prescribed scaled parameters
+			current_PRODA_para = true_kan(input_features)
+
+			# for parameters with no functional relationships, set them to 0.5
+			current_PRODA_para[:, constant_para] = 0.5
+
+			# Plot true functional relationships
+			true_kan.attribute()
+			true_kan.node_attribute()
+			true_kan.plot(folder=os.path.join(label_dir, "splines"), in_vars=var4nn, out_vars=para_names, scale=5, varscale=0.13)
+			plt.savefig(os.path.join(label_dir, f"TRUE_kan_plot.png"))
+			plt.close()
+
+			# Save picture of functional relationships. Source: https://stackoverflow.com/questions/69986007/matplotlib-imshow-with-1-color-for-each-discrete-value
+			fig, ax = plt.subplots()
+			cmap = plt.colormaps.get_cmap('Set2', 7)
+			im = ax.imshow(sym_mask, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
+			ax.set_xticks(np.arange(len(para_names)))
+			ax.set_yticks(np.arange(len(var4nn)))
+			ax.set_xticklabels(para_names, rotation='vertical')
+			ax.set_yticklabels(var4nn)
+			cbar = fig.colorbar(im, ticks=np.arange(0, 6), orientation="horizontal")
+			cbar.ax.set_xticklabels(['None', 'Linear', 'Quadratic', 'Log', 'Exponential', 'Relu'])
+			fig.legend()
+			plt.tight_layout()
+			plt.savefig(os.path.join(label_dir, "functional_relationships.png"))
+			plt.close()
+
+			# Use these synthetic parameters to generate SOC
+			PRODA_soc_simu = np.ones((len(current_data_profile_id), 200))*np.nan
+			start_time = time.time()
+			for i in range(len(current_data_profile_id)):
+				# Get the current profile's data
+				current_data_x_simu = current_data_x[i, :, :, :]
+				current_data_z_simu = current_data_z[i, :]
+				current_PRODA_para_simu = current_PRODA_para[i, :]
+
+				# Convert the data to tensor, reshape to shape [1, 60, 12, 13] and [1, 21]
+				current_data_x_simu = torch.tensor(current_data_x_simu, dtype=torch.float32).unsqueeze(0)
+				current_data_z_simu = torch.tensor(current_data_z_simu, dtype=torch.float32).unsqueeze(0)
+				current_PRODA_para_simu = torch.tensor(current_PRODA_para_simu, dtype=torch.float32).unsqueeze(0)
+
+				# Run the simulation
+				PRODA_soc_simu[i, :] = fun_model_simu(current_PRODA_para_simu, current_data_x_simu, current_data_z_simu, args.vertical_mixing, args.vectorized)
+
+				# If any simulation is over 1,000,000 gC/m2, set it to nan
+				if np.any(PRODA_soc_simu[i, :] > 1000000):
+					print(">>>>>>>>>>>>>>>>>>>>>>>> Extreme simulated SOC. Coordinates", current_data_c[i, :])
+					print("PRODA params", current_PRODA_para[i, :])
+					valid_loc = ~np.isnan(current_data_z[i, :])
+					print("Depths", current_data_z[i, valid_loc])
+					print("SOC simu", PRODA_soc_simu[i, valid_loc])
+					print("SOC obs", current_data_y[i, valid_loc])
+
+			# Drop the profiles with all nan values
+			valid_profile_loc = np.where(np.all(np.isnan(PRODA_soc_simu), axis=1) == False)[0]
+			current_data_y = current_data_y[valid_profile_loc, :]
+			current_data_z = current_data_z[valid_profile_loc, :]
+			current_data_c = current_data_c[valid_profile_loc, :]
+			current_data_x = current_data_x[valid_profile_loc, :, :, :]
+			current_data_profile_id = current_data_profile_id[valid_profile_loc]
+			current_PRODA_para = current_PRODA_para[valid_profile_loc, :]
+			PRODA_soc_simu = PRODA_soc_simu[valid_profile_loc, :]
+			obs_upper_depth_matrix = obs_upper_depth_matrix[valid_profile_loc, :]
+			obs_lower_depth_matrix = obs_lower_depth_matrix[valid_profile_loc, :]
+
+			print("Time taken to run PRODA soc simu", time.time() - start_time)
+			print("Shape of PRODA soc simu", PRODA_soc_simu.shape)
+			print("Shape of current data x", current_data_x.shape, current_PRODA_para.shape)
+
+			# Treat the simulated SOC as the true labels
+			current_data_y = PRODA_soc_simu
+			np.save(synthetic_label_path, PRODA_soc_simu)
+			np.save(os.path.join(label_dir, "synthetic_para.npy"), current_PRODA_para)
+			np.save(os.path.join(label_dir, "functional_relationships.npy"), sym_mask)
+			torch.save(true_kan, os.path.join(label_dir, "true_kan.pth"))
+			print("Finished synthetic data generation")
+
 
 
 ###############################################################
@@ -2076,6 +2217,7 @@ def worker(rank, world_size, job_id, port):
 				kan_entropy_loss = np.nan
 				kan_coef_loss = np.nan
 				kan_coefdiff_loss = np.nan
+				kan_coefdiff2_loss = np.nan
 				senn_robustness_loss = np.nan
 				senn_l1_loss = np.nan
 				senn_sparsity = np.nan
@@ -2172,7 +2314,7 @@ def worker(rank, world_size, job_id, port):
 					p_log_p = -frac_variance_explained * torch.log(frac_variance_explained)  # p(x) log p(x) elementwise
 					nam_entropy_loss = p_log_p.sum(dim=0).mean()
 
-				if {"kan_l1", "kan_entropy", "kan_coef", "kan_coefdiff"} & set(args.losses):
+				if {"kan_l1", "kan_entropy", "kan_coef", "kan_coefdiff", "kan_coefdiff2"} & set(args.losses):
 					assert args.model == "kan"
 
 					# NOTE: the lamb values passed are completely unused, as we direclty obtain the individual loss components and weight them later.
@@ -2204,6 +2346,7 @@ def worker(rank, world_size, job_id, port):
 							"kan_entropy": kan_entropy_loss,
 							"kan_coef": kan_coef_loss,
 							"kan_coefdiff": kan_coefdiff_loss,
+							"kan_coefdiff2": kan_coefdiff2_loss,
 							"senn_robustness": senn_robustness_loss,
 							"senn_l1": senn_l1_loss,
 							"senn_sparsity": senn_sparsity,
@@ -2379,7 +2522,7 @@ def worker(rank, world_size, job_id, port):
 				model_without_ddp.mlp.node_attribute()
 
 				# Plot the pruned model
-				pruned_model = model_without_ddp.mlp.prune(node_th=0.03, edge_th=0.03)
+				pruned_model = model_without_ddp.mlp.prune()  # node_th=0.03, edge_th=0.03)
 				pruned_model.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=para_names, scale=5, varscale=0.13)
 				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_kan_plot_pruned.png"))
 				plt.close()
@@ -2388,6 +2531,42 @@ def worker(rank, world_size, job_id, port):
 				model_without_ddp.mlp.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=para_names, scale=5, varscale=0.13)
 				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_kan_plot.png"))
 				plt.close()
+			
+				if args.labels == "synthetic_function" and args.num_layers == 1:
+					# If functional relationships are known, compare KAN's predicted relationships with ground-truth relationships
+					# Save picture of functional relationships. Source: https://stackoverflow.com/questions/69986007/matplotlib-imshow-with-1-color-for-each-discrete-value
+					fig, axeslist = plt.subplots(1, 2, figsize=(12, 6))
+
+					predicted_relationships = pruned_model.act_fun[0].mask
+					from sklearn.metrics import f1_score, precision_score, recall_score
+					f1 = f1_score(relationship_mask.flatten(), predicted_relationships.flatten())
+					prec = precision_score(relationship_mask.flatten(), predicted_relationships.flatten())
+					rec = recall_score(relationship_mask.flatten(), predicted_relationships.flatten())
+					im = axeslist[0].imshow(predicted_relationships)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
+					axeslist[0].set_xticks(np.arange(len(para_names)))
+					axeslist[0].set_yticks(np.arange(len(var4nn)))
+					axeslist[0].set_xticklabels(para_names, rotation='vertical')
+					axeslist[0].set_yticklabels(var4nn)
+					axeslist[0].set_title(f"Predicted by KAN (F1: {f1:.3f}, Preciison: {prec:.3f}, Recall: {rec:.3f})")
+
+					# cmap = plt.colormaps.get_cmap('Set2', 7)
+					im = axeslist[1].imshow(relationship_mask)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
+					axeslist[1].set_xticks(np.arange(len(para_names)))
+					axeslist[1].set_yticks(np.arange(len(var4nn)))
+					axeslist[1].set_xticklabels(para_names, rotation='vertical')
+					axeslist[1].set_yticklabels(var4nn)
+					axeslist[1].set_title("Ground-truth")
+
+					cbar = fig.colorbar(im, ticks=np.arange(0, 2), orientation="horizontal")
+					cbar.ax.set_xticklabels(['No', 'Yes'])
+					# fig.legend()
+					plt.tight_layout()
+					plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_functional_relationships.png"))
+					plt.close()
+
+
+					# TODO Try plotting functional relationships of NN?
+
 
 			# Scatters of true-vs-predicted SOC (grid).
 			# Each row represents a layer (or all layers), each column represents a split (train/val)
