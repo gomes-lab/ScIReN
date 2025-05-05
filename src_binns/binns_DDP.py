@@ -2511,7 +2511,7 @@ def worker(rank, world_size, job_id, port):
 		allrank_train_mae, allrank_train_mse, allrank_train_NSE = allrank_train_mae.item(), allrank_train_mse.item(), allrank_train_NSE.item() 
 		allrank_val_mae, allrank_val_mse, allrank_val_NSE = allrank_val_mae.item(), allrank_val_mse.item(), allrank_val_NSE.item()
 
-		if args.plot and (iepoch % 10 == 0) and rank == 0:
+		if args.plot and (iepoch % 50 == 0) and rank == 0:
 			print("Creating plots", datetime.now(), flush=True)
 
 			# KAN-specific visualizations
@@ -2537,7 +2537,6 @@ def worker(rank, world_size, job_id, port):
 					fig, axeslist = plt.subplots(1, 2, figsize=(12, 6))
 
 					predicted_relationships = pruned_model.act_fun[0].mask
-					print("Pred rel shape", predicted_relationships.shape)
 					from sklearn.metrics import f1_score, precision_score, recall_score
 					f1 = f1_score(relationship_mask.flatten(), predicted_relationships.flatten())
 					prec = precision_score(relationship_mask.flatten(), predicted_relationships.flatten())
