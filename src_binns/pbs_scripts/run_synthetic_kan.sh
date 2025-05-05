@@ -1,18 +1,18 @@
-: '#!/bin/bash
+#!/bin/bash
 #PBS -A UCOR0092
 #PBS -N BINN_syntheticfunction_KAN
 #PBS -q main
 #PBS -l walltime=12:00:00
 #PBS -l select=1:ncpus=128
 
-# Usage: qsub pbs_scripts/run_synthetic_KAN.sh
+# Usage: qsub pbs_scripts/run_synthetic_kan.sh
 # Use scratch for temporary files to avoid space limits in /tmp
-export TMPDIR="/glade/scratch/$USER/temp"
-mkdir -p $TMPDIR
+# export TMPDIR="/glade/scratch/$USER/temp"
+# mkdir -p $TMPDIR
 # Load modules to match compile-time environment
-module purge
-module load conda
-module load cuda
+# module purge
+# module load conda
+# module load cuda
 
 # Activate environment (virtualenv version)
 cd /glade/work/joshuaf/BINNS/src_binns
@@ -44,7 +44,8 @@ do
                     --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 1 1000 0 $LAM1 $LAM2 $LAM2 \
                     --param_constraint hardsigmoid \
                     --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun zero --kan_affine_trainable \
-                    --num_CPU 128 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "KAN_SYNTHETICFUNCTION_GRID3" $PLOT_STR
+                    --num_CPU 128 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "KAN_SYNTHETICFUNCTION_GRID30" $PLOT_STR
+                exit
             done
         done
     done

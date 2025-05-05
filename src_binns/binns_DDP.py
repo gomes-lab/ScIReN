@@ -141,7 +141,7 @@ parser.add_argument("--test_ratio", type=float, default=0.1, help="Fraction of d
 parser.add_argument("--batching", type=str, default='random', choices=['random', 'block'],
 					help='How to generate minibatches. If `block`, samples examples from contiguous spatial block for each batch.')
 parser.add_argument("--labels", type=str, default='real', choices=['real', 'synthetic_proda', 'synthetic_function'], help="Whether to use real labels, synthetic SOC labels generated from PRODA parameters, or synthetic SOC labels generated from synthetic parameters, which are generated using prescribed functional relationships.")
-parser.add_argument("--label_noise", type=float, default=0., help="epsilon, where we multiply SOC labels by N(1, epsilon). Only used if args.labels is synthetic_proda or synthetic_function.")
+parser.add_argument("--label_noise_std", type=float, default=0., help="epsilon, where we multiply SOC labels by N(1, epsilon). Only used if args.labels is synthetic_proda or synthetic_function.")
 parser.add_argument("--function_sparsity", type=float, default=0.1, help="If args.labels is synthetic function, what fraction of possible relationships actually exist.")
 
 # Transformations
@@ -978,7 +978,7 @@ elif args.labels == "synthetic_function":
 
 			# Save picture of functional relationships. Source: https://stackoverflow.com/questions/69986007/matplotlib-imshow-with-1-color-for-each-discrete-value
 			fig, ax = plt.subplots()
-			cmap = plt.colormaps.get_cmap('Set2', 7)
+			cmap = plt.get_cmap('Set2', 7)
 			im = ax.imshow(sym_mask, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
 			ax.set_xticks(np.arange(len(para_names)))
 			ax.set_yticks(np.arange(len(var4nn)))
@@ -986,7 +986,7 @@ elif args.labels == "synthetic_function":
 			ax.set_yticklabels(var4nn)
 			cbar = fig.colorbar(im, ticks=np.arange(0, 6), orientation="horizontal")
 			cbar.ax.set_xticklabels(['None', 'Linear', 'Quadratic', 'Log', 'Exponential', 'Relu'])
-			fig.legend()
+			# fig.legend()
 			plt.tight_layout()
 			plt.savefig(os.path.join(label_dir, "functional_relationships.png"))
 			plt.close()
@@ -1032,6 +1032,11 @@ elif args.labels == "synthetic_function":
 			print("Time taken to run PRODA soc simu", time.time() - start_time)
 			print("Shape of PRODA soc simu", PRODA_soc_simu.shape)
 			print("Shape of current data x", current_data_x.shape, current_PRODA_para.shape)
+			
+			# Label noise
+			if args.label_noise_std > 0:
+				eps = torch.nn.init.trunc_normal_(torch.empty(PRODA_soc_simu.shape, requires_grad=False), mean=0, std=args.label_noise_std, a=-0.95, b=0.95)
+				PRODA_soc_simu = PRODA_soc_simu * (1 + eps).detach().cpu().numpy()
 
 			# Treat the simulated SOC as the true labels
 			current_data_y = PRODA_soc_simu
