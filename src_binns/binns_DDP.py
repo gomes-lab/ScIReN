@@ -906,6 +906,8 @@ if args.labels == "synthetic_proda":
 		np.save(synthetic_label_path, PRODA_soc_simu)
 
 elif args.labels == "synthetic_function":
+	print("loading synthetic_function", label_dir, flush=True)
+
 	synthetic_label_path = os.path.join(label_dir, "synthetic_soc.npy")
 	if os.path.exists(synthetic_label_path) or False:
 		PRODA_soc_simu = np.load(synthetic_label_path)
@@ -915,7 +917,7 @@ elif args.labels == "synthetic_function":
 		relationship_mask = torch.tensor(sym_mask != 0, dtype=int)  # 1 if relationship exists between input i and output j
 
 	else:
-		print("synthetic_function", label_dir)
+		print("computing synthetic_function", label_dir, flush=True)
 
 		# Construct a symbolic-only "KAN" that prescribes the true relationships between
 		# input features and biogeochemical parameters. We mainly use the KAN infrastructure
