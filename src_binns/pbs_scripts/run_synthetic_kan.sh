@@ -15,8 +15,8 @@
 # module load cuda
 
 # # Activate environment (virtualenv version)
-# cd /glade/work/joshuaf/BINNS/src_binns
-# source .venv/bin/activate
+cd /glade/work/joshuaf/BINNS/src_binns
+source .venv/bin/activate
 
 # (Conda version)
 # conda activate BINN_310_CPU'

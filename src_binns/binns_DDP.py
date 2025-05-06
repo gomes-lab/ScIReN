@@ -87,7 +87,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--note", type=str, default="", help="Optional name to give to the model")
 parser.add_argument("--model", type=str, default="old_mlp", choices=['old_mlp', 'new_mlp', 'lipmlp', 'senn', 'nam', 'nam_joint', 'nam_joint2', 'nag', 'kan', 'gnn', 'spatial', 'nn_only', 'binn_hybrid'], help="Model type")
 parser.add_argument("--width", type=int, default=128, help="Size of hidden layers (new_mlp or nn_only)")
-parser.add_argument("--num_layers", type=int, default=4, help="Size of hidden layers (new_mlp or nn_only)")
+parser.add_argument("--num_layers", type=int, default=3, help="Size of hidden layers (new_mlp or nn_only)")
 parser.add_argument("--residual", action='store_true', help="Whether to add residual connections in neural network portion (MLP)")
 parser.add_argument("--categorical", type=str, default="embedding", choices=["embedding", "one_hot"], help="How to embed categorical variables")
 parser.add_argument("--embed_dim", type=int, default=5, help="Embedding dim for each categorical variable (if using embeddings)")
@@ -122,7 +122,7 @@ parser.add_argument("--para_to_predict", type=str, default="all", choices=["all"
 # Sigmoid temp and initialization
 parser.add_argument("--min_temp", type=float, default=10., help="Min temp for sigmoid")
 parser.add_argument("--max_temp", type=float, default=109., help="Max temp for sigmoid")
-parser.add_argument("--init", type=str, default="xavier_uniform", choices=["default", "xavier_uniform", "kaiming_uniform"], help="Initialization for weights. For xavier_uniform/kaiming_uniform, biases are initialized to zero.")
+parser.add_argument("--init", type=str, default="default", choices=["default", "xavier_uniform", "kaiming_uniform"], help="Initialization for weights. For xavier_uniform/kaiming_uniform, biases are initialized to zero.")
 
 # Data split
 parser.add_argument("--data_seed", type=int, default=-1, help="Random seed for splitting data. -1 means use same as args.seed")
@@ -157,9 +157,9 @@ parser.add_argument("--momentum", type=float, default=0.9, help="Momentum (SGD O
 parser.add_argument("--noise_std", type=float, default=0., help="How much noise to add to NN weights during each optimizer step")
 parser.add_argument("--jacobian_noise_std", type=float, default=0., help="If set, compute the Jacobian at perturbed inputs.")
 parser.add_argument("--batch_size", type=int, default=32)
-parser.add_argument("--n_epochs", type=int, default=100)
+parser.add_argument("--n_epochs", type=int, default=200)
 parser.add_argument("--bias_only_epochs", type=int, default=0, help="Number of epochs where we train ONLY FINAL-LAYER BIAS. This helps initialize params to a good value globally.")
-parser.add_argument("--patience", type=int, default=20)
+parser.add_argument("--patience", type=int, default=100)
 parser.add_argument("--one_param_only", action='store_true', help='If set, target updating only one param per batch')
 parser.add_argument("--save_freq", type=int, default=5, help="How often (epochs) to save the latest checkpoint, in case the job crashes")
 

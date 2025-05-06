@@ -77,7 +77,7 @@ do
                     --optimizer AdamW --lr $LR --weight_decay 0 --seed $SEED \
                     --features ten \
                     --init default --min_temp $TEMP --max_temp $TEMP \
-                    --n_epochs 200 --patience 100 --model new_mlp  \
+                    --n_epochs 200 --patience 100 --model new_mlp \
                     --num_layers 3 --residual --activation leaky_relu --use_bn \
                     --losses smooth_l1 unconstrained_param --lambdas 1 $PREG --param_constraint hardsigmoid \
                     --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "BINN_HARDSIGMOID_TEN_NEW" --plot
