@@ -14,18 +14,18 @@
 # module load conda
 # module load cuda
 
-# Activate environment (virtualenv version)
-cd /glade/work/joshuaf/BINNS/src_binns
-source .venv/bin/activate
+# # Activate environment (virtualenv version)
+# cd /glade/work/joshuaf/BINNS/src_binns
+# source .venv/bin/activate
 
 # (Conda version)
 # conda activate BINN_310_CPU'
 
-for LR in 1e-2 1e-1
+for LR in 1e-2
 do
-    for LAM1 in 0.01 0.1 1
+    for LAM1 in 1
     do
-        for LAM2 in 10 100 1000
+        for LAM3 in 1000
         do
             for FOLD in 1
             do
@@ -35,16 +35,18 @@ do
                     PLOT_STR=""
                 fi
                 SEED=$FOLD
+                LAM2=$(echo "$LAM1*2" | bc)
+                echo $LAM2
 
-                python3 binns_DDP.py --data_seed 12345 --split grid2 --cross_val_idx $FOLD --n_folds 5 \
+                python3 binns_DDP.py --data_seed 12345 --split grid2  --cross_val_idx $FOLD --representative_sample --n_folds 5 \
                     --lr $LR --optimizer AdamW --batch_size 32 \
                     --seed $SEED --init default --min_temp 1 --max_temp 1 \
                     --n_epochs 200 --patience 100 --model kan \
-                    --num_layers 1 --features ten --labels synthetic_function \
-                    --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 1 1000 0 $LAM1 $LAM2 $LAM2 \
+                    --num_layers 1 --features ten --para_to_predict four --labels synthetic_function  --label_noise_std 0 \
+                    --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 1 1000 $LAM1 $LAM2 0 $LAM3 \
                     --param_constraint hardsigmoid \
-                    --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun zero --kan_affine_trainable \
-                    --num_CPU 128 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "KAN_SYNTHETICFUNCTION_GRID30" $PLOT_STR
+                    --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable \
+                    --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "KAN_SYNTHETICFUNCTION_GRID30" $PLOT_STR
                 exit
             done
         done
