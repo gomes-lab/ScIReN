@@ -340,15 +340,16 @@ else:
 # Parameter indices that the neural network predicts. Usually we predict all the parameters, but for
 # the retrieval test we may prescribe some and only predict 4 or 15 most sensitive parameters. 
 if args.para_to_predict == "all":  # All parameters
-	para_index = np.arange(0, len(para_names))
+	para_index = np.arange(0, len(para_names), dtype=int)
 elif args.para_to_predict == "four":
 	assert len(para_names) == 21
-	para_index = np.array([3, 9, 14, 19])
+	para_index = np.array([3, 9, 14, 19], dtype=int)
 elif args.para_to_predict == "fifteen":
 	assert len(para_names) == 21
-	para_index = np.array([0, 2, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20])
+	para_index = np.array([0, 2, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20], dtype=int)
 else:
 	raise ValueError("Invalid value of --para_to_predict")
+predicted_para_names = np.array(para_names)[para_index].tolist()
 
 # Soil depths info
 # width between two interfaces
@@ -846,7 +847,7 @@ current_PRODA_para = np.clip(current_PRODA_para, a_min=0, a_max=1)
 # Fetch directory where cached labels are saved
 if args.labels != "real":
 	# If using synthetic datasets, save the labels to a directory
-	label_dir = os.path.join(data_dir_input, f"labels_{args.labels}_seed={args.seed}")
+	label_dir = os.path.join(data_dir_input, f"labels_{args.labels}_para={args.para_to_predict}_seed={args.seed}")
 	if args.representative_sample:
 		label_dir += "_representative"
 	elif args.n_datapoints != -1:
@@ -909,7 +910,7 @@ elif args.labels == "synthetic_function":
 	print("loading synthetic_function", label_dir, flush=True)
 
 	synthetic_label_path = os.path.join(label_dir, "synthetic_soc.npy")
-	if os.path.exists(synthetic_label_path) or False:
+	if os.path.exists(synthetic_label_path) and False:
 		PRODA_soc_simu = np.load(synthetic_label_path)
 		current_data_y = PRODA_soc_simu
 		current_PRODA_para = np.load(os.path.join(label_dir, "synthetic_para.npy"))
@@ -924,7 +925,7 @@ elif args.labels == "synthetic_function":
 		# for its plotting functionality.
 		# Assume no categorical features for now.
 		import kan
-		true_kan = kan.KAN(width=[len(var4nn), len(para_names)], device="cpu",
+		true_kan = kan.KAN(width=[len(var4nn), len(para_index)], device="cpu",
 					  	   input_size=len(var4nn), base_fun="identity")
 		with torch.no_grad():
 
@@ -935,14 +936,31 @@ elif args.labels == "synthetic_function":
 
 			# Create a matrix of each possible input-output pair. 0 means no relationship,
 			# 1=linear, 2=quadratic, 3=exp, 4=log, 5=relu. 
-			sym_mask = np.random.choice([0, 1, 2, 3, 4, 5], size=(len(var4nn), len(para_names)), p=[0.8, 0.04, 0.04, 0.04, 0.04, 0.04])  # p=[0.9, 0.02, 0.02, 0.02, 0.02, 0.02])
+			sym_mask = np.random.choice([0, 1, 2, 3, 4, 5], size=(len(var4nn), len(para_index)), p=[0.8, 0.04, 0.04, 0.04, 0.04, 0.04])  # p=[0.9, 0.02, 0.02, 0.02, 0.02, 0.02])
+			# sym_mask = np.zeros((len(var4nn), len(para_names)), dtype=int)
+			# sym_mask[:, para_index] = relationship_types
 			relationship_mask = torch.tensor(sym_mask != 0, dtype=int)  # 1 if relationship exists between input i and output j
-			functions = [lambda x: x*0,
-						lambda x: x,
-						lambda x: x**2,
-						lambda x: torch.log2(x + 2.5),
-						lambda x: 2**x,
-						lambda x: F.relu(x)]
+			print("Rel mask", relationship_mask.shape)
+			# functions = [lambda x: x*0,
+			# 			lambda x: x,
+			# 			lambda x: x**2,
+			# 			lambda x: torch.log2(x + 2.5),
+			# 			lambda x: 2**x,
+			# 			lambda x: F.relu(x)]
+			
+			def zero(x):
+				return x*0
+			def linear(x):
+				return x
+			def quadratic(x):
+				return x**2
+			def log(x):
+				return torch.log2(x + 2.5)
+			def exp(x):
+				return 2**x
+			def relu(x):
+				return F.relu(x)
+			functions = [zero, linear, quadratic, log, exp, relu]
 			for i in range(sym_mask.shape[0]):
 				for j in range(sym_mask.shape[1]):
 					true_kan.fix_symbolic(0, i, j, fun_name=functions[sym_mask[i, j]], random=True, fit_params_bool=False, verbose=False)
@@ -966,15 +984,17 @@ elif args.labels == "synthetic_function":
 			true_kan.symbolic_fun[0].affine[constant_para, :, 3] = 0.0  # torch.nan_to_num(true_kan.symbolic_fun[0].affine[:, :, 3], nan=0.0, posinf=0.0, neginf=0.0)
 
 			# Now get the prescribed scaled parameters
-			current_PRODA_para = true_kan(input_features)
+			prescribed_para = true_kan(input_features)
 
 			# for parameters with no functional relationships, set them to 0.5
-			current_PRODA_para[:, constant_para] = 0.5
+			prescribed_para[:, constant_para] = 0.5
+			current_PRODA_para = torch.ones((len(current_data_profile_id), len(para_names))) * 0.5
+			current_PRODA_para[:, para_index] = prescribed_para
 
 			# Plot true functional relationships
 			true_kan.attribute()
 			true_kan.node_attribute()
-			true_kan.plot(folder=os.path.join(label_dir, "splines"), in_vars=var4nn, out_vars=para_names, scale=5, varscale=0.13)
+			true_kan.plot(folder=os.path.join(label_dir, "splines"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.13)
 			plt.savefig(os.path.join(label_dir, f"TRUE_kan_plot.png"))
 			plt.close()
 
@@ -982,9 +1002,9 @@ elif args.labels == "synthetic_function":
 			fig, ax = plt.subplots()
 			cmap = plt.get_cmap('Set2', 7)
 			im = ax.imshow(sym_mask, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
-			ax.set_xticks(np.arange(len(para_names)))
+			ax.set_xticks(np.arange(len(predicted_para_names)))
 			ax.set_yticks(np.arange(len(var4nn)))
-			ax.set_xticklabels(para_names, rotation='vertical')
+			ax.set_xticklabels(predicted_para_names, rotation='vertical')
 			ax.set_yticklabels(var4nn)
 			cbar = fig.colorbar(im, ticks=np.arange(0, 6), orientation="horizontal")
 			cbar.ax.set_xticklabels(['None', 'Linear', 'Quadratic', 'Log', 'Exponential', 'Relu'])
@@ -1620,7 +1640,7 @@ def worker(rank, world_size, job_id, port):
 		# go to the else branch (don't create the ConstantParameters model, create the full model)
 		model_class = ConstantParameters
 		model_kwargs = {
-			"num_params": len(para_names),
+			"num_params": len(predicted_para_names),
 			"vertical_mixing": args.vertical_mixing,
 			"param_constraint": args.param_constraint,
 			"min_temp": args.min_temp,
@@ -2023,7 +2043,7 @@ def worker(rank, world_size, job_id, port):
 				if iepoch % 50 == 0 and ibatch == 1 and args.plot:
 					print("Plotting Jacobian")
 					for example_idx in [0, 1, 2]:
-						visualization_utils.plot_matrix(jacobian[example_idx, :, :], row_labels=para_names, col_labels=var4nn,
+						visualization_utils.plot_matrix(jacobian[example_idx, :, :], row_labels=predicted_para_names, col_labels=var4nn,
 														filename=os.path.join(PLOT_DIR, f"epoch{iepoch}_jacobian_{example_idx}.png"),
 														title=f"Parameter-Feature Jacobian: Epoch {iepoch}, Example {example_idx}")
 
@@ -2519,7 +2539,7 @@ def worker(rank, world_size, job_id, port):
 		allrank_train_mae, allrank_train_mse, allrank_train_NSE = allrank_train_mae.item(), allrank_train_mse.item(), allrank_train_NSE.item() 
 		allrank_val_mae, allrank_val_mse, allrank_val_NSE = allrank_val_mae.item(), allrank_val_mse.item(), allrank_val_NSE.item()
 
-		if args.plot and (iepoch % 50 == 0) and rank == 0:
+		if args.plot and (iepoch % 5 == 0) and rank == 0:
 			print("Creating plots", datetime.now(), flush=True)
 
 			# KAN-specific visualizations
@@ -2530,12 +2550,12 @@ def worker(rank, world_size, job_id, port):
 
 				# Plot the pruned model
 				pruned_model = model_without_ddp.mlp.prune()  # node_th=0.03, edge_th=0.03)
-				pruned_model.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=para_names, scale=5, varscale=0.13)
+				pruned_model.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.13)
 				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_kan_plot_pruned.png"))
 				plt.close()
 
 				# Plot the unpruned model
-				model_without_ddp.mlp.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=para_names, scale=5, varscale=0.13)
+				model_without_ddp.mlp.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.13)
 				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_kan_plot.png"))
 				plt.close()
 			
@@ -2545,22 +2565,23 @@ def worker(rank, world_size, job_id, port):
 					fig, axeslist = plt.subplots(1, 2, figsize=(12, 6))
 
 					predicted_relationships = pruned_model.act_fun[0].mask
+					print("Rel mask", relationship_mask.shape, predicted_relationships.shape)
 					from sklearn.metrics import f1_score, precision_score, recall_score
 					f1 = f1_score(relationship_mask.flatten(), predicted_relationships.flatten())
 					prec = precision_score(relationship_mask.flatten(), predicted_relationships.flatten())
 					rec = recall_score(relationship_mask.flatten(), predicted_relationships.flatten())
 					im = axeslist[0].imshow(predicted_relationships)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
-					axeslist[0].set_xticks(np.arange(len(para_names)))
+					axeslist[0].set_xticks(np.arange(len(predicted_para_names)))
 					axeslist[0].set_yticks(np.arange(len(var4nn)))
-					axeslist[0].set_xticklabels(para_names, rotation='vertical')
+					axeslist[0].set_xticklabels(predicted_para_names, rotation='vertical')
 					axeslist[0].set_yticklabels(var4nn)
 					axeslist[0].set_title(f"Predicted by KAN (F1: {f1:.3f}, Preciison: {prec:.3f}, Recall: {rec:.3f})")
 
 					# cmap = plt.colormaps.get_cmap('Set2', 7)
 					im = axeslist[1].imshow(relationship_mask)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
-					axeslist[1].set_xticks(np.arange(len(para_names)))
+					axeslist[1].set_xticks(np.arange(len(predicted_para_names)))
 					axeslist[1].set_yticks(np.arange(len(var4nn)))
-					axeslist[1].set_xticklabels(para_names, rotation='vertical')
+					axeslist[1].set_xticklabels(predicted_para_names, rotation='vertical')
 					axeslist[1].set_yticklabels(var4nn)
 					axeslist[1].set_title("Ground-truth")
 

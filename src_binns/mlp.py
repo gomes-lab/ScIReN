@@ -410,7 +410,8 @@ class mlp_wrapper(nn.Module):
 		# Pass biogeochemical parameters through sigmoid, constraining them between [0, 1]
 		self.unconstrained_params = mlp_output / clamped_temp_sigmoid
 		constrained_params = self.sigmoid(self.unconstrained_params)
-		if PRODA_para is None or len(self.para_index) == constrained_params.shape[1]:  # If we are predicting all params, don't need to copy PRODA_para
+
+		if PRODA_para is None:  #  or len(self.para_index) == constrained_params.shape[1]:  # If we are predicting all params, don't need to copy PRODA_para
 			 # If PRODA parameters not provided, neural network must output all params
 			if self.vertical_mixing == 'simple_two_intercepts':
 				assert np.array_equal(self.para_index, np.arange(22))
