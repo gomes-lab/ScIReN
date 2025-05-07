@@ -934,50 +934,66 @@ elif args.labels == "synthetic_function":
 			true_kan.act_fun[0].mask = torch.zeros_like(true_kan.act_fun[0].mask)
 			true_kan.save_acts = True
 
-			# Create a matrix of each possible input-output pair. 0 means no relationship,
-			# 1=linear, 2=quadratic, 3=exp, 4=log, 5=relu. 
-			sym_mask = np.random.choice([0, 1, 2, 3, 4, 5], size=(len(var4nn), len(para_index)), p=[0.8, 0.04, 0.04, 0.04, 0.04, 0.04])  # p=[0.9, 0.02, 0.02, 0.02, 0.02, 0.02])
-			# sym_mask = np.zeros((len(var4nn), len(para_names)), dtype=int)
-			# sym_mask[:, para_index] = relationship_types
+			# Make each parameter (column) depend on two inputs.
+			sym_mask = np.zeros((len(var4nn), len(predicted_para_names)), dtype=int)
+			rng = np.random.default_rng(seed=args.data_seed)
+			for col_idx in range(len(predicted_para_names)):
+				# Choose 2 random inputs to depend on
+				row_indices = rng.permutation(len(var4nn))[:2]
+
+				# For these 2 inputs, assign a random relationship type (between 1 and 5 inclusive)
+				# 1=linear, 2=quadratic, 3=exp, 4=log, 5=relu.
+				sym_mask[row_indices, col_idx] = rng.integers(low=1, high=6, size=row_indices.shape)
+			print("Sym mask", sym_mask)
 			relationship_mask = torch.tensor(sym_mask != 0, dtype=int)  # 1 if relationship exists between input i and output j
-			print("Rel mask", relationship_mask.shape)
-			# functions = [lambda x: x*0,
-			# 			lambda x: x,
-			# 			lambda x: x**2,
-			# 			lambda x: torch.log2(x + 2.5),
-			# 			lambda x: 2**x,
-			# 			lambda x: F.relu(x)]
-			
-			def zero(x):
+
+			# Explicitly defining functions since lambda functions cannot be pickled
+			def zero_fn(x):
 				return x*0
-			def linear(x):
+			def linear_fn(x):
 				return x
-			def quadratic(x):
+			def quadratic_fn(x):
 				return x**2
-			def log(x):
+			def log_fn(x):
 				return torch.log2(x + 2.5)
-			def exp(x):
+			def exp_fn(x):
 				return 2**x
-			def relu(x):
-				return F.relu(x)
-			functions = [zero, linear, quadratic, log, exp, relu]
+			def abs_fn(x):
+				return torch.abs(x)
+			functions = [zero_fn, linear_fn, quadratic_fn, log_fn, exp_fn, abs_fn]
 			for i in range(sym_mask.shape[0]):
 				for j in range(sym_mask.shape[1]):
 					true_kan.fix_symbolic(0, i, j, fun_name=functions[sym_mask[i, j]], random=True, fit_params_bool=False, verbose=False)
 			true_kan.symbolic_fun[0].mask = relationship_mask.T  # Transpose because Symbolic_KANLayer's mask is [out_dim, in_dim] 
 
 			# Obtain parameters based on prescribed functional relationships.
-			# Then rescale their range to [0.2, 0.8].
 			input_features = torch.tensor(current_data_x[:, 0:len(var4nn), 0, 0], dtype=torch.float32)  # This is the way to extract input features from current_data_x
 			prescribed_para = true_kan(input_features)
 
-			# Calculate factors to scale/shift affine coefficients so all outputs are in range [0.2, 0.8].
+			# Rescale so that each function's output is mean 0, std 1
+			postacts = true_kan.spline_postacts[0]  # [batch, out_dim, in_dim]
+			postacts_mean = postacts.mean(dim=0)
+			postacts_std = postacts.std(dim=0)
+
+			# rationale: if (cx+d) has mean mu, std sigma, then (cx+d - mu) / sigma has mean 0, std 1
+			# thus c becomes c/sigma, and d becomes (d-mu)/sigma
+			true_kan.symbolic_fun[0].affine[:, :, 2] = true_kan.symbolic_fun[0].affine[:, :, 2] / postacts_std
+			true_kan.symbolic_fun[0].affine[:, :, 2] = torch.nan_to_num(true_kan.symbolic_fun[0].affine[:, :, 2], nan=1.0, posinf=1.0, neginf=1.0)
+			true_kan.symbolic_fun[0].affine[:, :, 3] = (true_kan.symbolic_fun[0].affine[:, :, 3] - postacts_mean) / postacts_std
+			true_kan.symbolic_fun[0].affine[:, :, 3] = torch.nan_to_num(true_kan.symbolic_fun[0].affine[:, :, 3], nan=0.0, posinf=0.0, neginf=0.0)
+
+			# get the parameters based on rescale KAN
+			prescribed_para = true_kan(input_features)
+
+			# # verify that the postacts are mean 0, std 1
+			# scaled_postacts = true_kan.spline_postacts[0]
+			# print("Scaled postacts", scaled_postacts.mean(dim=0), scaled_postacts.std(dim=0))
+
+			# Further scale/shift affine coefficients so all outputs are in range [0.2, 0.8].
 			scale_by = 0.6 / (prescribed_para.max(dim=0).values - prescribed_para.min(dim=0).values)
 			total_shift = 0.2 - 0.6 * prescribed_para.min(dim=0).values / (prescribed_para.max(dim=0).values - prescribed_para.min(dim=0).values)
 			shift_by = total_shift / relationship_mask.sum(dim=0)
-			constant_para = (relationship_mask.sum(dim=0) == 0)  # parameters with no functional relationships (constant)
-
-			# Scale/shift the affine coefficients
+			constant_para = (relationship_mask.sum(dim=0) == 0)  # parameters with no functional relationships (constant). should not contain anything now.
 			true_kan.symbolic_fun[0].affine[:, :, 2] = true_kan.symbolic_fun[0].affine[:, :, 2] * scale_by[:, None]
 			true_kan.symbolic_fun[0].affine[constant_para, :, 2] = 1.0  # torch.nan_to_num(true_kan.symbolic_fun[0].affine[:, :, 2], nan=1.0, posinf=1.0, neginf=1.0)
 			true_kan.symbolic_fun[0].affine[:, :, 3] = true_kan.symbolic_fun[0].affine[:, :, 3] * scale_by[:, None] + shift_by[:, None]
@@ -1000,14 +1016,14 @@ elif args.labels == "synthetic_function":
 
 			# Save picture of functional relationships. Source: https://stackoverflow.com/questions/69986007/matplotlib-imshow-with-1-color-for-each-discrete-value
 			fig, ax = plt.subplots()
-			cmap = plt.get_cmap('Set2', 7)
+			cmap = plt.get_cmap('Set2', 6)
 			im = ax.imshow(sym_mask, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
 			ax.set_xticks(np.arange(len(predicted_para_names)))
 			ax.set_yticks(np.arange(len(var4nn)))
 			ax.set_xticklabels(predicted_para_names, rotation='vertical')
 			ax.set_yticklabels(var4nn)
 			cbar = fig.colorbar(im, ticks=np.arange(0, 6), orientation="horizontal")
-			cbar.ax.set_xticklabels(['None', 'Linear', 'Quadratic', 'Log', 'Exponential', 'Relu'])
+			cbar.ax.set_xticklabels(['None', 'Linear', 'Quadratic', 'Log', 'Exponential', 'Abs'])
 			# fig.legend()
 			plt.tight_layout()
 			plt.savefig(os.path.join(label_dir, "functional_relationships.png"))
@@ -2539,7 +2555,7 @@ def worker(rank, world_size, job_id, port):
 		allrank_train_mae, allrank_train_mse, allrank_train_NSE = allrank_train_mae.item(), allrank_train_mse.item(), allrank_train_NSE.item() 
 		allrank_val_mae, allrank_val_mse, allrank_val_NSE = allrank_val_mae.item(), allrank_val_mse.item(), allrank_val_NSE.item()
 
-		if args.plot and (iepoch % 5 == 0) and rank == 0:
+		if args.plot and (iepoch % 25 == 0) and rank == 0:
 			print("Creating plots", datetime.now(), flush=True)
 
 			# KAN-specific visualizations
@@ -2549,7 +2565,7 @@ def worker(rank, world_size, job_id, port):
 				model_without_ddp.mlp.node_attribute()
 
 				# Plot the pruned model
-				pruned_model = model_without_ddp.mlp.prune()  # node_th=0.03, edge_th=0.03)
+				pruned_model = model_without_ddp.mlp.prune(edge_quantile_th=0.2)  # node_th=0.03, edge_th=0.03)
 				pruned_model.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.13)
 				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_kan_plot_pruned.png"))
 				plt.close()
@@ -2559,42 +2575,90 @@ def worker(rank, world_size, job_id, port):
 				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_kan_plot.png"))
 				plt.close()
 			
-				if args.labels == "synthetic_function" and args.num_layers == 1:
-					# If functional relationships are known, compare KAN's predicted relationships with ground-truth relationships
-					# Save picture of functional relationships. Source: https://stackoverflow.com/questions/69986007/matplotlib-imshow-with-1-color-for-each-discrete-value
-					fig, axeslist = plt.subplots(1, 2, figsize=(12, 6))
+			# Test functional relationship retrieval
+			if args.labels == "synthetic_function":
+				# Feature importance by Jacobian
+				jacobian = model_without_ddp.get_jacobian()  # [batch, n_params, n_inputs]
+				avg_jacobian_magnitude = jacobian.abs().mean(dim=0).T  # transpose to [n_inputs, n_params]
+				threshold = torch.quantile(avg_jacobian_magnitude, 0.8)
+				predicted_relationships_jacobian = (avg_jacobian_magnitude >= threshold).int().cpu().detach().numpy()
 
-					predicted_relationships = pruned_model.act_fun[0].mask
-					print("Rel mask", relationship_mask.shape, predicted_relationships.shape)
+				# Special predictor function to use NN (alibi library)
+				from alibi.explainers import ALE, PartialDependenceVariance, plot_ale, plot_pd_variance
+				@torch.no_grad()
+				def predictor(X: np.ndarray) -> np.ndarray:
+					assert model_without_ddp.mlp.training == False, "Model must be in eval mode"
+					X = torch.as_tensor(X, device=device)
+					return model_without_ddp.mlp(X).cpu().numpy()
+
+				# Feature importance: log PDP Variance scores
+				with warnings.catch_warnings():  # suppress warnings inside alibi code
+					warnings.simplefilter("ignore")
+					cached_nn_input = model_without_ddp.new_input
+					pd_variance = PartialDependenceVariance(predictor=predictor,
+															feature_names=var4nn,
+															target_names=predicted_para_names)
+					exp_importance = pd_variance.explain(cached_nn_input.detach().cpu().numpy(), method='importance')
+					importance_scores = exp_importance.data['feature_importance'].T  # transpose to [n_inputs, n_params]
+					threshold = np.quantile(importance_scores, 0.8)
+					predicted_relationships_pdv = (importance_scores >= threshold).astype(int)
+
+					# # Plot PDP variance
+					# plot_pd_variance(exp=exp_importance)
+					# plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_pd_variance.png"))
+					# plt.close()
+
+					# # Accumulated Local Effects plot (similar to partial dependence plot
+					# # but better with correlated features)
+					# ale = ALE(predictor, feature_names=var4nn, target_names=predicted_para_names)
+					# exp = ale.explain(cached_nn_input.detach().cpu().numpy())
+					# plot_ale(exp)
+					# plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_ale.png"))
+					# plt.close()
+
+				predicted_relationships_all = {"Jacobian": predicted_relationships_jacobian,
+								   			   "Partial Dependence Variance": predicted_relationships_pdv}
+
+				if args.model == "kan" and args.num_layers == 1:
+					# If using one-layer KAN, read off functional relationships with mask
+					predicted_relationships_kan = pruned_model.act_fun[0].mask
+					predicted_relationships_all["KAN"] = predicted_relationships_kan
+				
+				# If functional relationships are known, compare KAN's predicted relationships with ground-truth relationships
+				# Save picture of functional relationships. Source: https://stackoverflow.com/questions/69986007/matplotlib-imshow-with-1-color-for-each-discrete-value
+				fig, axeslist = plt.subplots(1, len(predicted_relationships_all)+2, figsize=(6*(len(predicted_relationships_all)+1), 6))
+				im = axeslist[0].imshow(avg_jacobian_magnitude.cpu().detach().numpy())  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
+				axeslist[0].set_xticks(np.arange(len(predicted_para_names)))
+				axeslist[0].set_yticks(np.arange(len(var4nn)))
+				axeslist[0].set_xticklabels(predicted_para_names, rotation='vertical')
+				axeslist[0].set_yticklabels(var4nn)
+				axeslist[0].set_title("Avg Jacobian mag")
+				fig.colorbar(im, orientation="vertical", ax=axeslist[0])
+
+				cmap = plt.get_cmap('viridis', 2)
+				for pred_idx, (pred_method, pred_rel) in enumerate(predicted_relationships_all.items()):
 					from sklearn.metrics import f1_score, precision_score, recall_score
-					f1 = f1_score(relationship_mask.flatten(), predicted_relationships.flatten())
-					prec = precision_score(relationship_mask.flatten(), predicted_relationships.flatten())
-					rec = recall_score(relationship_mask.flatten(), predicted_relationships.flatten())
-					im = axeslist[0].imshow(predicted_relationships)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
-					axeslist[0].set_xticks(np.arange(len(predicted_para_names)))
-					axeslist[0].set_yticks(np.arange(len(var4nn)))
-					axeslist[0].set_xticklabels(predicted_para_names, rotation='vertical')
-					axeslist[0].set_yticklabels(var4nn)
-					axeslist[0].set_title(f"Predicted by KAN (F1: {f1:.3f}, Preciison: {prec:.3f}, Recall: {rec:.3f})")
+					f1 = f1_score(relationship_mask.flatten(), pred_rel.flatten())
+					prec = precision_score(relationship_mask.flatten(), pred_rel.flatten())
+					rec = recall_score(relationship_mask.flatten(), pred_rel.flatten())
+					im = axeslist[pred_idx+1].imshow(pred_rel, cmap=cmap)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
+					axeslist[pred_idx+1].set_xticks(np.arange(len(predicted_para_names)))
+					axeslist[pred_idx+1].set_yticks(np.arange(len(var4nn)))
+					axeslist[pred_idx+1].set_xticklabels(predicted_para_names, rotation='vertical')
+					axeslist[pred_idx+1].set_yticklabels(var4nn)
+					axeslist[pred_idx+1].set_title(f"Predicted by {pred_method}\n(F1: {f1:.3f}, Precision: {prec:.3f}, Recall: {rec:.3f})")
+				im = axeslist[-1].imshow(relationship_mask, cmap=cmap)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
+				axeslist[-1].set_xticks(np.arange(len(predicted_para_names)))
+				axeslist[-1].set_yticks(np.arange(len(var4nn)))
+				axeslist[-1].set_xticklabels(predicted_para_names, rotation='vertical')
+				axeslist[-1].set_yticklabels(var4nn)
+				axeslist[-1].set_title("Ground-truth")
 
-					# cmap = plt.colormaps.get_cmap('Set2', 7)
-					im = axeslist[1].imshow(relationship_mask)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
-					axeslist[1].set_xticks(np.arange(len(predicted_para_names)))
-					axeslist[1].set_yticks(np.arange(len(var4nn)))
-					axeslist[1].set_xticklabels(predicted_para_names, rotation='vertical')
-					axeslist[1].set_yticklabels(var4nn)
-					axeslist[1].set_title("Ground-truth")
-
-					cbar = fig.colorbar(im, ticks=np.arange(0, 2), orientation="horizontal")
-					cbar.ax.set_xticklabels(['No', 'Yes'])
-					# fig.legend()
-					plt.tight_layout()
-					plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_functional_relationships.png"))
-					plt.close()
-
-
-					# TODO Try plotting functional relationships of NN?
-
+				cbar = fig.colorbar(im, ticks=np.arange(0, 2), orientation="vertical", ax=axeslist[-1])
+				cbar.ax.set_yticklabels(['No', 'Yes'])
+				plt.tight_layout()
+				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_functional_relationships.png"))
+				plt.close()
 
 			# Scatters of true-vs-predicted SOC (grid).
 			# Each row represents a layer (or all layers), each column represents a split (train/val)
@@ -3705,6 +3769,107 @@ def worker(rank, world_size, job_id, port):
 				titles.extend([f'Train: {para_name}', f'Val: {para_name}', f'Test: {para_name}', f'Grid: {para_name}'])
 			visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, f"FINAL_para_scatters.png"), y_hats, ys, titles, cols=4)
 
+		# KAN-specific visualizations
+		if args.model == "kan" and not args.residual:  # TODO pruning doesn't work for residual?
+			# Produce edge/node importance scores
+			best_guess_model.mlp.attribute()
+			best_guess_model.mlp.node_attribute()
+
+			# Plot the pruned model
+			pruned_model = best_guess_model.mlp.prune(edge_quantile_th=0.2)  # node_th=0.03, edge_th=0.03)
+			pruned_model.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.13)
+			plt.savefig(os.path.join(PLOT_DIR, f"FINAL_kan_plot_pruned.png"))
+			plt.close()
+
+			# Plot the unpruned model
+			best_guess_model.mlp.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.13)
+			plt.savefig(os.path.join(PLOT_DIR, f"FINAL_kan_plot.png"))
+			plt.close()
+		
+		# Test functional relationship retrieval
+		if args.labels == "synthetic_function":
+			# Feature importance by Jacobian
+			jacobian = best_guess_model.get_jacobian()  # [batch, n_params, n_inputs]
+			avg_jacobian_magnitude = jacobian.abs().mean(dim=0).T  # transpose to [n_inputs, n_params]
+			threshold = torch.quantile(avg_jacobian_magnitude, 0.8)
+			predicted_relationships_jacobian = (avg_jacobian_magnitude >= threshold).int().cpu().detach().numpy()
+
+			# Special predictor function to use NN (alibi library)
+			from alibi.explainers import ALE, PartialDependenceVariance, plot_ale, plot_pd_variance
+			@torch.no_grad()
+			def predictor(X: np.ndarray) -> np.ndarray:
+				assert best_guess_model.mlp.training == False, "Model must be in eval mode"
+				X = torch.as_tensor(X, device=device)
+				return best_guess_model.mlp(X).cpu().numpy()
+
+			# Feature importance: log PDP Variance scores
+			with warnings.catch_warnings():  # suppress warnings inside alibi code
+				warnings.simplefilter("ignore")
+				cached_nn_input = best_guess_model.new_input
+				pd_variance = PartialDependenceVariance(predictor=predictor,
+														feature_names=var4nn,
+														target_names=predicted_para_names)
+				exp_importance = pd_variance.explain(cached_nn_input.detach().cpu().numpy(), method='importance')
+				importance_scores = exp_importance.data['feature_importance'].T  # transpose to [n_inputs, n_params]
+				threshold = np.quantile(importance_scores, 0.8)
+				predicted_relationships_pdv = (importance_scores >= threshold).astype(int)
+
+				# Plot PDP variance
+				plot_pd_variance(exp=exp_importance)
+				plt.savefig(os.path.join(PLOT_DIR, f"FINAL_pd_variance.png"))
+				plt.close()
+
+				# Accumulated Local Effects plot (similar to partial dependence plot
+				# but better with correlated features)
+				ale = ALE(predictor, feature_names=var4nn, target_names=predicted_para_names)
+				exp = ale.explain(cached_nn_input.detach().cpu().numpy())
+				plot_ale(exp)
+				plt.savefig(os.path.join(PLOT_DIR, f"FINAL_ale.png"))
+				plt.close()
+
+			predicted_relationships_all = {"Jacobian": predicted_relationships_jacobian,
+										   "Partial Dependence Variance": predicted_relationships_pdv}
+
+			if args.model == "kan" and args.num_layers == 1:
+				# If using one-layer KAN, read off functional relationships with mask
+				predicted_relationships_kan = pruned_model.act_fun[0].mask
+				predicted_relationships_all["KAN"] = predicted_relationships_kan
+			
+			# If functional relationships are known, compare KAN's predicted relationships with ground-truth relationships
+			# Save picture of functional relationships. Source: https://stackoverflow.com/questions/69986007/matplotlib-imshow-with-1-color-for-each-discrete-value
+			fig, axeslist = plt.subplots(1, len(predicted_relationships_all)+2, figsize=(6*(len(predicted_relationships_all)+1), 6))
+			im = axeslist[0].imshow(avg_jacobian_magnitude.cpu().detach().numpy())  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
+			axeslist[0].set_xticks(np.arange(len(predicted_para_names)))
+			axeslist[0].set_yticks(np.arange(len(var4nn)))
+			axeslist[0].set_xticklabels(predicted_para_names, rotation='vertical')
+			axeslist[0].set_yticklabels(var4nn)
+			axeslist[0].set_title("Avg Jacobian mag")
+			fig.colorbar(im, orientation="vertical", ax=axeslist[0])
+
+			cmap = plt.get_cmap('viridis', 2)
+			for pred_idx, (pred_method, pred_rel) in enumerate(predicted_relationships_all.items()):
+				from sklearn.metrics import f1_score, precision_score, recall_score
+				f1 = f1_score(relationship_mask.flatten(), pred_rel.flatten())
+				prec = precision_score(relationship_mask.flatten(), pred_rel.flatten())
+				rec = recall_score(relationship_mask.flatten(), pred_rel.flatten())
+				im = axeslist[pred_idx+1].imshow(pred_rel, cmap=cmap)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
+				axeslist[pred_idx+1].set_xticks(np.arange(len(predicted_para_names)))
+				axeslist[pred_idx+1].set_yticks(np.arange(len(var4nn)))
+				axeslist[pred_idx+1].set_xticklabels(predicted_para_names, rotation='vertical')
+				axeslist[pred_idx+1].set_yticklabels(var4nn)
+				axeslist[pred_idx+1].set_title(f"Predicted by {pred_method}\n(F1: {f1:.3f}, Precision: {prec:.3f}, Recall: {rec:.3f})")
+			im = axeslist[-1].imshow(relationship_mask, cmap=cmap)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
+			axeslist[-1].set_xticks(np.arange(len(predicted_para_names)))
+			axeslist[-1].set_yticks(np.arange(len(var4nn)))
+			axeslist[-1].set_xticklabels(predicted_para_names, rotation='vertical')
+			axeslist[-1].set_yticklabels(var4nn)
+			axeslist[-1].set_title("Ground-truth")
+
+			cbar = fig.colorbar(im, ticks=np.arange(0, 2), orientation="vertical", ax=axeslist[-1])
+			cbar.ax.set_yticklabels(['No', 'Yes'])
+			plt.tight_layout()
+			plt.savefig(os.path.join(PLOT_DIR, f"FINAL_functional_relationships.png"))
+			plt.close()
 		print("-----------------Model Prediction Finished at " + str(datetime.now()) + "-----------------")
 
 	# end if rank == 0:

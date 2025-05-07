@@ -23,9 +23,9 @@ source .venv/bin/activate
 
 for LR in 1e-2
 do
-    for LAM1 in 1
+    for LAM1 in 1 10 100
     do
-        for LAM3 in 1000
+        for LAM3 in 100 1000 10000
         do
             for FOLD in 1
             do
@@ -38,16 +38,15 @@ do
                 LAM2=$(echo "$LAM1*2" | bc)
                 echo $LAM2
 
-                python3 binns_DDP.py --data_seed 12345 --split grid2  --cross_val_idx $FOLD --representative_sample --n_folds 5 \
-                    --lr $LR --optimizer AdamW --batch_size 32 \
+                python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
+                    --optimizer AdamW --lr $LR --weight_decay 0 \
                     --seed $SEED --init default --min_temp 1 --max_temp 1 \
-                    --n_epochs 200 --patience 100 --model kan \
-                    --num_layers 1 --features ten --para_to_predict four --labels synthetic_function  --label_noise_std 0 \
+                    --features ten --para_to_predict all --labels synthetic_function --label_noise_std 0 \
+                    --model kan --num_layers 1 \
+                    --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable \
                     --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 1 1000 $LAM1 $LAM2 0 $LAM3 \
                     --param_constraint hardsigmoid \
-                    --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable \
-                    --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "KAN_SYNTHETICFUNCTION_GRID30" $PLOT_STR
-                exit
+                    --num_CPU 1 --use_ddp 1 --job_scheduler pbs --time_limit 11.5 --note "KAN_SYNTHETICFUNCTION_GRID30_ALL" $PLOT_STR
             done
         done
     done
