@@ -2623,7 +2623,7 @@ def worker(rank, world_size, job_id, port):
 								   			 "Partial Dependence Variance": pdv_importances}
 				if args.model == "kan" and args.num_layers == 1:
 					# If using one-layer KAN, read off functional relationships with mask
-					kan_importances = model_without_ddp.mlp.act_fun[0].edge_scores[0].permute(1, 0).detach().cpu().numpy()
+					kan_importances = model_without_ddp.mlp.edge_scores[0].permute(1, 0).detach().cpu().numpy()
 					predicted_importances_all["KAN"] = kan_importances / kan_importances.sum(axis=0, keepdims=True)
 
 				# If functional relationships are known, compare KAN's predicted relationships with ground-truth relationships
@@ -2644,7 +2644,7 @@ def worker(rank, world_size, job_id, port):
 					# prec = precision_score(relationship_mask.flatten(), pred_rel.flatten())
 					# rec = recall_score(relationship_mask.flatten(), pred_rel.flatten())
 					relationship_kl = misc_utils.kl_divergence(true_relationships, pred_rel)
-					relationship_l2 = math.sqrt((true_relationships - pred_rel) ** 2).sum()
+					relationship_l2 = math.sqrt(((true_relationships - pred_rel) ** 2).sum())
 					im = axeslist[pred_idx].imshow(pred_rel, cmap=cmap, vmin=0, vmax=1)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
 					axeslist[pred_idx].set_xticks(np.arange(len(predicted_para_names)))
 					axeslist[pred_idx].set_yticks(np.arange(len(var4nn)))
@@ -3237,7 +3237,7 @@ def worker(rank, world_size, job_id, port):
 											"Partial Dependence Variance": pdv_importances}
 			if args.model == "kan" and args.num_layers == 1:
 				# If using one-layer KAN, read off functional relationships with mask
-				kan_importances = pruned_model.act_fun[0].edge_scores[0].permute(1, 0).detach().cpu().numpy()
+				kan_importances = best_guess_model.mlp.edge_scores[0].permute(1, 0).detach().cpu().numpy()
 				predicted_importances_all["KAN"] = kan_importances / kan_importances.sum(axis=0, keepdims=True)
 			# if args.model == "kan" and args.num_layers == 1:
 			# 	# If using one-layer KAN, read off functional relationships with mask
@@ -3261,7 +3261,7 @@ def worker(rank, world_size, job_id, port):
 			cmap = plt.get_cmap('Greens')
 			for pred_idx, (pred_method, pred_rel) in enumerate(predicted_importances_all.items()):
 				relationship_kl = misc_utils.kl_divergence(true_relationships, pred_rel)
-				relationship_l2 = math.sqrt((true_relationships - pred_rel) ** 2).sum()
+				relationship_l2 = math.sqrt(((true_relationships - pred_rel) ** 2).sum())
 				im = axeslist[pred_idx].imshow(pred_rel, cmap=cmap, vmin=0, vmax=1)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
 				axeslist[pred_idx].set_xticks(np.arange(len(predicted_para_names)))
 				axeslist[pred_idx].set_yticks(np.arange(len(var4nn)))
