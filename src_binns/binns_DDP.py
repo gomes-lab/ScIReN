@@ -1502,7 +1502,15 @@ grid_PRODA_para = np.clip(grid_PRODA_para, a_min=0, a_max=1)
 predict_data_x = torch.tensor(predict_data_x, dtype=torch.float32)
 predict_data_z = torch.tensor(predict_data_z, dtype=torch.float32)
 predict_data_c = torch.tensor(predict_data_c, dtype=torch.float32)
-grid_PRODA_para = torch.tensor(grid_PRODA_para, dtype=torch.float32)
+if args.labels == "synthetic_function":
+	# Get the prescribed parameters
+	grid_features = torch.tensor(predict_data_x[:, 0:len(var4nn), 0, 0], dtype=torch.float32)
+	prescribed_para = true_kan(grid_features)
+	prescribed_para[:, constant_para] = 0.5  # for parameters with no functional relationships, set them to 0.5
+	grid_PRODA_para = torch.ones((predict_data_x.shape[0], len(para_names))) * 0.5
+	grid_PRODA_para[:, para_index] = prescribed_para
+else:
+	grid_PRODA_para = torch.tensor(grid_PRODA_para, dtype=torch.float32)
 
 # Helper function to combine the training data into a single tensor
 class MergeDataset(Dataset):
