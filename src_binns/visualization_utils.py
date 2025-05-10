@@ -136,11 +136,12 @@ def plot_single_scatter(ax, x, y, x_label, y_label, title, should_align=True):
             r2 = r2_score(y, y_pred)
         corr = np.corrcoef(x, y)[0, 1]
         mae = mean_absolute_error(x, y)
-        rmse =  math.sqrt(mean_squared_error(x, y))
+        mse = mean_squared_error(x, y)
+        # rmse =  math.sqrt(mean_squared_error(x, y))
 
         # Plot stats, regression line, labels
         if should_align:
-            stats_string = '(R^2={:.3f}, RMSE={:.3f}, Corr={:.3f})'.format(r2, rmse, corr)
+            stats_string = '(R^2={:.3f}, MSE={:.3f}, MAE={:.3f}, Corr={:.3f})'.format(r2, mse, mae, corr)
         else:
             stats_string = '(R^2={:.3f}, Corr={:.3f})'.format(r2, corr)
         ax.plot(x, regression_line, 'r', label=regression_equation + ' ' + stats_string) # ' (R^2={:.2f}, Corr={:.2f}, MAPE={:.2f})'.format(r2, corr, mape))
