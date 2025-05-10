@@ -3215,7 +3215,7 @@ def worker(rank, world_size, job_id, port):
 														target_names=predicted_para_names)
 				exp_importance = pd_variance.explain(cached_nn_input.detach().cpu().numpy(), method='importance')
 				importance_scores = exp_importance.data['feature_importance'].T  # transpose to [n_inputs, n_params]
-				pdv_importances = importance_scores / importance_scores.sum(dim=0, keepdims=True)
+				pdv_importances = importance_scores / importance_scores.sum(axis=0, keepdims=True)
 				# threshold = np.quantile(importance_scores, 0.8)
 				# predicted_relationships_pdv = (importance_scores >= threshold).astype(int)
 
