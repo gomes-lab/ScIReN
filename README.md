@@ -209,7 +209,7 @@ If the submodule wasn't pushed, go into the submodule and commit/push your local
 Install Optuna dashboard
 ```
 pip install optuna-dashboard
-optuna-dashboard sqlite:///./logs/20250502_extrapolate_ta_nn_layers=2_constraint=softplus/optuna.db --port 8081
+optuna-dashboard sqlite:///./logs/20250509_abs_kan_layers=2_constraint=relu/optuna.db --port 8081
 
 # If this is being run on remote server on a compute node c0011 (different from head node):
 ssh -N -J jyf6@aida.cac.cornell.edu jyf6@c0011 -L 8081:localhost:8081

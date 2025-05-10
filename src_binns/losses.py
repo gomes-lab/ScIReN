@@ -56,7 +56,8 @@ def binns_loss(y_pred, y_true, pred_para, plot_path=""):
 	l1_loss = torch.nn.functional.l1_loss(soc_simu_vector, soc_true_vector, reduction='mean')
 	smooth_l1_loss = torch.nn.functional.smooth_l1_loss(soc_simu_vector, soc_true_vector, reduction='mean')
 	l2_loss = torch.nn.functional.mse_loss(soc_simu_vector, soc_true_vector, reduction='mean')
-	return l1_loss, smooth_l1_loss, l2_loss, param_reg_loss, modeling_inefficiency
+	corr = torch.corrcoef(torch.stack((soc_simu_vector, soc_true_vector)))[0, 1]
+	return l1_loss, smooth_l1_loss, l2_loss, param_reg_loss, modeling_inefficiency, corr
 # end binns loss
 
 

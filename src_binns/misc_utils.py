@@ -410,3 +410,22 @@ def get_optimizer_and_scheduler(model, args):
 	else:
 		raise ValueError("Invalid args.scheduler")
 	return optimizer, scheduler
+
+
+def kl_divergence(true, pred):
+	"""
+	Assumes each COLUMN of true/pred is a prob dist, numpy
+	"""
+	kl = (true * np.log(1e-6 + true / pred)).sum(axis=0).mean()
+	return kl
+
+
+def compute_metrics(true, pred):
+	from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+	non_nan = ~np.isnan(true) & ~np.isnan(pred)
+	true, pred = true[non_nan], pred[non_nan]
+	r2 = r2_score(true, pred)
+	mse = mean_squared_error(true, pred)
+	mae = mean_absolute_error(true, pred)
+	corr = np.corrcoef(true, pred)[0, 1]
+	return r2, mse, mae, corr
