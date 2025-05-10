@@ -2566,7 +2566,7 @@ def worker(rank, world_size, job_id, port):
 		allrank_train_mae, allrank_train_mse, allrank_train_NSE = allrank_train_mae.item(), allrank_train_mse.item(), allrank_train_NSE.item() 
 		allrank_val_mae, allrank_val_mse, allrank_val_NSE = allrank_val_mae.item(), allrank_val_mse.item(), allrank_val_NSE.item()
 
-		if args.plot and (iepoch % 25 == 0) and rank == 0:
+		if args.plot and (iepoch % 50 == 0) and rank == 0:
 			print("Creating plots", datetime.now(), flush=True)
 
 			# KAN-specific visualizations
@@ -3307,7 +3307,7 @@ def worker(rank, world_size, job_id, port):
 		if not os.path.isfile(results_summary_file):
 			with open(results_summary_file, mode='w') as f:
 				csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-				csv_writer.writerow(['job_id', 'command', 'data_string', 'lr', 'weight_decay', 'seed', 'model_path', 'val_MSE', 'val_MAE', 'val_corr', 'val_NSE', 'test_MSE', 'test_MAE', 'test_NSE', 'test_corr', 'test_para_NSE', 'test_para_corr', 'relationship_kl', 'relationship_l2'])
+				csv_writer.writerow(['job_id', 'command', 'data_string', 'lr', 'weight_decay', 'seed', 'model_path', 'val_MSE', 'val_MAE', 'val_NSE', 'val_corr', 'test_MSE', 'test_MAE', 'test_NSE', 'test_corr', 'test_para_NSE', 'test_para_corr', 'relationship_kl', 'relationship_l2'])
 		command_string = " ".join(sys.argv)
 		data_string = f"Fold {args.cross_val_idx} {args.split} (data_seed = {args.data_seed}, n_datapoints = {args.n_datapoints})"
 
@@ -3315,7 +3315,7 @@ def worker(rank, world_size, job_id, port):
 		with open(results_summary_file, mode='a+') as f:
 			csv_writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
 			best_model_path = data_dir_output + 'neural_network/' + job_id + '/opt_nn_' + job_id  + '.pt'
-			csv_writer.writerow([job_id, command_string, data_string, args.lr, args.weight_decay, args.seed, best_model_path, val_mse.item(), val_mae.item(), 1-val_NSE.item(), test_mse.item(), test_mae.item(), 1-test_NSE.item(), 1-test_para_NSE.item(), test_para_corr.item(), default_kl, default_l2])
+			csv_writer.writerow([job_id, command_string, data_string, args.lr, args.weight_decay, args.seed, best_model_path, val_mse.item(), val_mae.item(), 1-val_NSE.item(), val_corr.item(), test_mse.item(), test_mae.item(), 1-test_NSE.item(), test_corr.item(), 1-test_para_NSE.item(), test_para_corr.item(), default_kl, default_l2])
 
 
 
