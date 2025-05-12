@@ -3249,6 +3249,12 @@ def worker(rank, world_size, job_id, port):
 				# If using one-layer KAN, read off functional relationships with mask
 				kan_importances = best_guess_model.mlp.edge_scores[0].permute(1, 0).detach().cpu().numpy()
 				predicted_importances_all["KAN"] = kan_importances / kan_importances.sum(axis=0, keepdims=True)
+
+				# set importances of pruend edges to zero
+				kan_pruned_importances = kan_importances.copy()
+				kan_pruned_importances[best_guess_model.mlp.act_fun[0].mask == 0] = 0.
+				predicted_importances_all["KAN_pruned"] = kan_pruned_importances
+
 			# if args.model == "kan" and args.num_layers == 1:
 			# 	# If using one-layer KAN, read off functional relationships with mask
 			# 	predicted_relationships_kan = pruned_model.act_fun[0].mask

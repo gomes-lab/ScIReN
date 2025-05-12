@@ -21,11 +21,11 @@
 # (Conda version)
 # conda activate BINN_310_CPU'
 
-for LR in 1e-2 1e-1
+for LR in 1e-2
 do
-    for LAM1 in 1 10 100
+    for LAM1 in 10 1
     do
-        for LAM3 in 100 1000
+        for LAM3 in 1000 100
         do
             for FOLD in 1
             do
@@ -43,10 +43,10 @@ do
                     --seed $SEED --init default --min_temp 1 --max_temp 1 \
                     --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0 \
                     --model kan --num_layers 1 \
-                    --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable \
+                    --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable --kan_absolute_deviation \
                     --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 1000 $LAM1 $LAM1 0 $LAM3 \
                     --param_constraint hardsigmoid \
-                    --num_CPU 1 --use_ddp 1 --job_scheduler pbs --time_limit 11.5 --note "SYNTHETIC_KAN_FOUR_NOPARAMREG" $PLOT_STR
+                    --num_CPU 1 --use_ddp 1 --job_scheduler pbs --time_limit 11.5 --note "SYNTHETIC_KAN_FOUR_NOPARAMREG_ABSDEV_debug" $PLOT_STR
             done
         done
     done
