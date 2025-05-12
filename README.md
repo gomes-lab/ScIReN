@@ -89,6 +89,11 @@ chmod +x run_binn.sh  # If execute permission not enabled
 ./run_binn.sh
 ```
 
+If running locally on Mac:
+```
+export PYTORCH_ENABLE_MPS_FALLBACK=1
+```
+
 The script `src_binns/run_binn_slurm.sh` contains an example of how to train on 4 GPUs on a server with the Slurm scheduler.
 
 The script `src_binns/run_retrieval.sh` runs the retrieval test described in the BINN paper. NOT FULLY TESTED YET.
@@ -204,23 +209,7 @@ This means that if I run `git push`, it actually runs `git push --recurse-submod
 
 If the submodule wasn't pushed, go into the submodule and commit/push your local changes.
 
-## Optuna notes
 
-Install Optuna dashboard
-```
-pip install optuna-dashboard
-optuna-dashboard sqlite:///./logs/20250509_abs_kan_layers=2_constraint=relu/optuna.db --port 8081
-
-# If this is being run on remote server on a compute node c0011 (different from head node):
-ssh -N -J jyf6@aida.cac.cornell.edu jyf6@c0011 -L 8081:localhost:8081
-# If this is being run on a remote server (head node)
-ssh -N jyf6@aida.cac.cornell.edu -L 8081:localhost:8081
-# If this is run locally, ignore the above.
-# In all cases, go to local browser.
-http://127.0.0.1:8081/
-
-
-```
 
 
 
