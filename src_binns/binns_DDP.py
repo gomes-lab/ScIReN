@@ -104,6 +104,7 @@ parser.add_argument("--kan_grid_margin", type=float, default=1.0, help="How much
 parser.add_argument("--kan_noise", type=float, default=0.3, help="Noise scale for KAN")
 parser.add_argument("--kan_base_fun", type=str, default="silu", choices=["silu", "identity", "silu_identity", "zero"], help="Base function for KAN")
 parser.add_argument("--kan_affine_trainable", action='store_true')
+parser.add_argument("--kan_absolute_deviation", action='store_true')
 
 # Dropkan related
 parser.add_argument("--kan_drop_rate", type=float, default=0.0, help="Drop rate for DropKAN")
@@ -914,9 +915,9 @@ elif args.labels == "synthetic_function":
 		PRODA_soc_simu = np.load(synthetic_label_path)
 		current_data_y = PRODA_soc_simu
 		current_PRODA_para = np.load(os.path.join(label_dir, "synthetic_para.npy"))
-		sym_mask = np.load(os.path.join(label_dir, "functional_relationships.npy"))
-		relationship_mask = torch.tensor(sym_mask != 0, dtype=int)  # 1 if relationship exists between input i and output j
-
+		sym_mask = np.load(os.path.join(label_dir, "relationship_types.npy"))
+		true_relationships = np.load(os.path.join(label_dir, "true_relationships.npy"))
+		# relationship_mask = torch.tensor(sym_mask != 0, dtype=int)  # 1 if relationship exists between input i and output j
 	else:
 		print("computing synthetic_function", label_dir, flush=True)
 
@@ -1083,7 +1084,8 @@ elif args.labels == "synthetic_function":
 			current_data_y = PRODA_soc_simu
 			np.save(synthetic_label_path, PRODA_soc_simu)
 			np.save(os.path.join(label_dir, "synthetic_para.npy"), current_PRODA_para)
-			np.save(os.path.join(label_dir, "functional_relationships.npy"), sym_mask)
+			np.save(os.path.join(label_dir, "relationship_types.npy"), sym_mask)
+			np.save(os.path.join(label_dir, "true_relationships.npy"), true_relationships)
 			torch.save(true_kan, os.path.join(label_dir, "true_kan.pth"))
 			print("Finished synthetic data generation")
 
@@ -2587,7 +2589,7 @@ def worker(rank, world_size, job_id, port):
 				plt.close()
 			
 			# Test functional relationship retrieval
-			if args.labels == "synthetic_function":
+			if args.labels == "synthetic_function" and args.model != "nn_only":
 				# Feature importance by Jacobian
 				jacobian = model_without_ddp.get_jacobian()  # [batch, n_params, n_inputs]
 				avg_jacobian_magnitude = jacobian.abs().mean(dim=0).detach().cpu().numpy().T  # transpose to [n_inputs, n_params]
@@ -3199,7 +3201,7 @@ def worker(rank, world_size, job_id, port):
 			plt.close()
 
 		# Test functional relationship retrieval
-		if args.labels == "synthetic_function":
+		if args.labels == "synthetic_function" and args.model != "nn_only":
 			# Feature importance by Jacobian
 			jacobian = best_guess_model.get_jacobian(cached_nn_input)  # [batch, n_params, n_inputs]
 			avg_jacobian_magnitude = jacobian.abs().mean(dim=0).detach().cpu().numpy().T  # transpose to [n_inputs, n_params]

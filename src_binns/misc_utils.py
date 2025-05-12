@@ -297,7 +297,8 @@ def get_model(args, var4nn, var_idx_to_emb, device, para_index, train_x, train_y
 						"kan_affine_trainable": args.kan_affine_trainable,
 						"kan_drop_rate": args.kan_drop_rate,
 						"kan_drop_mode": args.kan_drop_mode,
-						"kan_drop_scale": args.kan_drop_scale}
+						"kan_drop_scale": args.kan_drop_scale,
+						"kan_absolute_deviation": args.kan_absolute_deviation}
 
 	elif args.model == 'binn_hybrid':
 		model_class = BINN_Hybrid
