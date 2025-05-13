@@ -54,9 +54,9 @@ do
                     --seed 1 --init default --min_temp 1 --max_temp 1 \
                     --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0 \
                     --model kan --num_layers 1 --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable --kan_absolute_deviation \
-                    --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 1000 $LAM1 $LAM2 0 $LAM3 \
-                    --param_constraint hardsigmoid \
-                    --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note SYNTHETIC_KAN_FOUR_FULLTUNING --plot
+                    --losses smooth_l1 param_reg kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0  $LAM1 $LAM2 0 $LAM3 \
+                    --param_constraint sigmoid \
+                    --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note SYNTHETIC_KAN_FOUR_SIGMOID_FULLTUNING --plot
 
                 done
             done
