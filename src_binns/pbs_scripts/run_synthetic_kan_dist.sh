@@ -3,7 +3,7 @@
 #PBS -N KAN_SYNTHETICFUNCTION_FIFTEEN_TUNING
 #PBS -q main
 #PBS -l walltime=12:00:00
-#PBS -l select=1:ncpus=1
+#PBS -l select=1:ncpus=8
 
 # Usage: qsub pbs_scripts/run_synthetic_kan.sh
 # Use scratch for temporary files to avoid space limits in /tmp
@@ -48,7 +48,7 @@ do
                     --model kan --num_layers 1 --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable --kan_absolute_deviation \
                     --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 1000 $LAM1 $LAM2 0 $LAM3 \
                     --param_constraint hardsigmoid \
-                    --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note SYNTHETIC_KAN_FOUR_FULLTUNING --plot
+                    --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note SYNTHETIC_KAN_FOUR_FULLTUNING_DIST --plot
                 exit
             done
         done
