@@ -310,7 +310,7 @@ class mlp_wrapper(nn.Module):
 		elif base_model == "kan":
 			import kan
 			# grid_eps = 1: use evenly-spaced grid
-			self.mlp = kan.KAN(width=layer_sizes, grid=kan_grid, k=3, seed=42, device=device, residual=residual,
+			self.mlp = kan.KAN(width=layer_sizes, grid=kan_grid, k=3, seed=torch.initial_seed(), device=device, residual=residual,
 					  		   input_size=len(self.non_categorical_indices), noise_scale=kan_noise,
 							   base_fun=kan_base_fun, affine_trainable=kan_affine_trainable, grid_eps=1.0, 
 							   grid_margin=kan_grid_margin, drop_rate=kan_drop_rate, drop_mode=kan_drop_mode,

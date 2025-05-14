@@ -2629,8 +2629,9 @@ def worker(rank, world_size, job_id, port):
 					# plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_ale.png"))
 					# plt.close()
 
-				predicted_importances_all = {"Jacobian": jacobian_importances,
-								   			 "Partial Dependence Variance": pdv_importances}
+				method_str = "StdHybrid" if args.model == "new_mlp" else "KAN 1-layer"
+				predicted_importances_all = {f"{method_str} (Jacobian)": jacobian_importances,
+											 f"{method_str} (Partial Dependence Variance)": pdv_importances}
 				if args.model == "kan" and args.num_layers == 1:
 					# If using one-layer KAN, read off functional relationships with mask
 					kan_importances = model_without_ddp.mlp.edge_scores[0].permute(1, 0).detach().cpu().numpy()
