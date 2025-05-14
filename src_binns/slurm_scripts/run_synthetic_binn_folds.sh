@@ -11,7 +11,7 @@
 #SBATCH --exclude=c0020,c0002
 
 # Name the job so it's meaningful in the job list
-#SBATCH -J synthetic_binn_tuming
+#SBATCH -J synthetic_bin_folds
 # Request 4 GPUs 
 # #SBATCH --gpus 4
 # Request 4 CPU cores (9 hyperthreads).
@@ -27,9 +27,9 @@
 cd /mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/src_binns
 source .venv/bin/activate
 
-for LR in 1e-3
+for LR in 1e-4
 do
-    for WD in 0
+    for WD in 1e-4
     do
         for TEMP in 1
         do

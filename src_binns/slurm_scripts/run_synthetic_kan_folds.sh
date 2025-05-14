@@ -32,11 +32,11 @@ source .venv/bin/activate
 
 for LR in 1e-2
 do
-    for LAM1 in 10
+    for LAM1 in 1
     do
-        for LAM2 in 10
+        for LAM2 in 1
         do
-            for LAM3 in 100
+            for LAM3 in 1000
             do
                 for FOLD in 1 2 3 4 5
                 do
