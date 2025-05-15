@@ -105,7 +105,7 @@ parser.add_argument("--kan_noise", type=float, default=0.3, help="Noise scale fo
 parser.add_argument("--kan_base_fun", type=str, default="silu", choices=["silu", "identity", "silu_identity", "zero"], help="Base function for KAN")
 parser.add_argument("--kan_affine_trainable", action='store_true')
 parser.add_argument("--kan_absolute_deviation", action='store_true')
-parser.add_argument("--kan_flat_entropy", action='store_true')
+parser.add_argument("--kan_flat_entropy", type=int, default=1)  #action='store_true')
 
 # Dropkan related
 parser.add_argument("--kan_drop_rate", type=float, default=0.0, help="Drop rate for DropKAN")
