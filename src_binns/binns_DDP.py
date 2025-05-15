@@ -105,6 +105,7 @@ parser.add_argument("--kan_noise", type=float, default=0.3, help="Noise scale fo
 parser.add_argument("--kan_base_fun", type=str, default="silu", choices=["silu", "identity", "silu_identity", "zero"], help="Base function for KAN")
 parser.add_argument("--kan_affine_trainable", action='store_true')
 parser.add_argument("--kan_absolute_deviation", action='store_true')
+parser.add_argument("--kan_flat_entropy", action='store_true')
 
 # Dropkan related
 parser.add_argument("--kan_drop_rate", type=float, default=0.0, help="Drop rate for DropKAN")
@@ -2123,7 +2124,8 @@ def worker(rank, world_size, job_id, port):
 
 				# NOTE: the lamb values passed are completely unused, as we direclty obtain the individual loss components and weight them later.
 				# For default weights see https://github.com/KindXiaoming/pykan/blob/master/kan/MultKAN.py#L1411
-				kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss, kan_coefdiff2_loss = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., return_indiv=True)
+				kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss, kan_coefdiff2_loss = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., 
+																																return_indiv=True, flat_entropy=args.kan_flat_entropy)
 					# model_without_ddp.mlp.get_reg(reg_metric='node_influence_on_output', lamb_l1=0., lamb_entropy=1., lamb_coef=0., lamb_coefdiff=0.)
 
 			if "senn_robustness" in args.losses:
@@ -2374,7 +2376,8 @@ def worker(rank, world_size, job_id, port):
 					assert args.model == "kan"
 
 					# NOTE: the lamb values passed are completely unused, as we direclty obtain the individual loss components and weight them later.
-					kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss, kan_coefdiff2_loss = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., return_indiv=True)
+					kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss, kan_coefdiff2_loss = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., 
+																													 				return_indiv=True, flat_entropy=args.kan_flat_entropy)
 
 				if "senn_robustness" in args.losses:
 					senn_robustness_loss = model_without_ddp.senn_robustness_loss()
@@ -2629,7 +2632,7 @@ def worker(rank, world_size, job_id, port):
 					# plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_ale.png"))
 					# plt.close()
 
-				method_str = "StdHybrid" if args.model == "new_mlp" else "KAN 1-layer"
+				method_str = "Blackbox-Hybrid" if args.model == "new_mlp" else f"KAN {args.num_layers}-layer"
 				predicted_importances_all = {f"{method_str} (Jacobian)": jacobian_importances,
 											 f"{method_str} (Partial Dependence Variance)": pdv_importances}
 				if args.model == "kan" and args.num_layers == 1:
