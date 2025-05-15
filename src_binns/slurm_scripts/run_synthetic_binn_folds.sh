@@ -35,7 +35,7 @@ do
         do
             for PREG in 0
             do
-                for FOLD in 2 3 4 5
+                for FOLD in 1 2 3 4 5
                 do
                     if [ $FOLD -eq 1 -a $LR = 1e-2 ]; then
                         PLOT_STR="--plot"

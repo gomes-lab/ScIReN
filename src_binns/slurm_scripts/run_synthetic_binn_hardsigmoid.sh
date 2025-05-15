@@ -62,7 +62,7 @@ done
 
 # for LR in 1e-4 1e-3 1e-2 1e-1
 # do
-#     for WD in 1e-4 1e-3 0
+#     for WD in 0
 #     do
 #         for TEMP in 1
 #         do
