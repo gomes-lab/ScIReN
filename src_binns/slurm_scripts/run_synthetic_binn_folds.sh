@@ -50,7 +50,7 @@ do
                         --model new_mlp --num_layers 3 --residual --activation leaky_relu --use_bn \
                         --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0 \
                         --losses smooth_l1 param_reg --lambdas 1 $PREG --param_constraint sigmoid \
-                        --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "SYNTHETIC_BINN_FOUR_FOLDS" $PLOT_STR
+                        --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "SYNTHETIC_BINN_FOUR_FOLDS_v2" $PLOT_STR
                 done
             done
         done
