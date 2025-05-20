@@ -56,10 +56,6 @@ do
                 --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 1000 $LAM1 $LAM2 0 $LAM3 \
                 --param_constraint hardsigmoid \
                 --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note SYNTHETIC_KAN_FOUR_FULLTUNING --plot
-<<<<<<< HEAD
-
-=======
->>>>>>> 9cd2735 (minor)
             done
         done
     done

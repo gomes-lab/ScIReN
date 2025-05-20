@@ -36,7 +36,7 @@ do
     do
         for LAM2 in 1
         do
-            for LAM3 in 1000
+            for LAM3 in 1000 10000
             do
                 for FOLD in 1 2 3 4 5
                 do
@@ -59,7 +59,7 @@ do
                         --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable --kan_absolute_deviation \
                         --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 1000 $LAM1 $LAM2 0 $LAM3 \
                         --param_constraint hardsigmoid \
-                        --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note SYNTHETIC_KAN_FOUR_FOLDS_v2 $PLOT_STR
+                        --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note SYNTHETIC_KAN_FOUR_FOLDS_v3_1cpu $PLOT_STR
 
                 done
             done

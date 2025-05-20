@@ -1791,7 +1791,7 @@ def worker(rank, world_size, job_id, port):
 
 				# Since this is only run on one rank, it's important to use model.module, otherwise hangs may arise.
 				# https://github.com/pytorch/pytorch/issues/54059
-				temp_SOC, temp_pred_para = model.module(val_x, val_z, val_c, whether_predict=0, PRODA_para=val_proda_para.to(device))
+				temp_SOC, temp_pred_para = model.module(val_x.to(device), val_z.to(device), val_c.to(device), whether_predict=0, PRODA_para=val_proda_para.to(device))
 				print("Rank 0 finished val model before training", flush=True)
 				val_pred_soc[val_profile_id, :] = temp_SOC.detach()
 				val_pred_para[val_profile_id, :] = temp_pred_para.detach()
@@ -2632,7 +2632,7 @@ def worker(rank, world_size, job_id, port):
 					# plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_ale.png"))
 					# plt.close()
 
-				method_str = "Blackbox-Hybrid" if args.model == "new_mlp" else f"KAN {args.num_layers}-layer"
+				method_str = "Blackbox-Hybrid" if args.model == "new_mlp" else f"ScIReN {args.num_layers}-layer"
 				predicted_importances_all = {f"{method_str} (Jacobian)": jacobian_importances,
 											 f"{method_str} (Partial Dependence Variance)": pdv_importances}
 				if args.model == "kan" and args.num_layers == 1:
@@ -2643,20 +2643,8 @@ def worker(rank, world_size, job_id, port):
 				# If functional relationships are known, compare KAN's predicted relationships with ground-truth relationships
 				# Save picture of functional relationships. Source: https://stackoverflow.com/questions/69986007/matplotlib-imshow-with-1-color-for-each-discrete-value
 				fig, axeslist = plt.subplots(1, len(predicted_importances_all)+1, figsize=(6*(len(predicted_importances_all)+1), 6))
-				# im = axeslist[0].imshow(avg_jacobian_magnitude.cpu().detach().numpy())  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
-				# axeslist[0].set_xticks(np.arange(len(predicted_para_names)))
-				# axeslist[0].set_yticks(np.arange(len(var4nn)))
-				# axeslist[0].set_xticklabels(predicted_para_names, rotation='vertical')
-				# axeslist[0].set_yticklabels(var4nn)
-				# axeslist[0].set_title("Avg Jacobian mag")
-				# fig.colorbar(im, orientation="vertical", ax=axeslist[0])
-
 				cmap = plt.get_cmap('Greens')
 				for pred_idx, (pred_method, pred_rel) in enumerate(predicted_importances_all.items()):
-					# from sklearn.metrics import f1_score, precision_score, recall_score
-					# f1 = f1_score(relationship_mask.flatten(), pred_rel.flatten())
-					# prec = precision_score(relationship_mask.flatten(), pred_rel.flatten())
-					# rec = recall_score(relationship_mask.flatten(), pred_rel.flatten())
 					relationship_kl = misc_utils.kl_divergence(true_relationships, pred_rel)
 					relationship_l2 = math.sqrt(((true_relationships - pred_rel) ** 2).sum())
 					im = axeslist[pred_idx].imshow(pred_rel, cmap=cmap, vmin=0, vmax=1)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
@@ -2672,8 +2660,6 @@ def worker(rank, world_size, job_id, port):
 				axeslist[-1].set_yticklabels(var4nn)
 				axeslist[-1].set_title("Ground-truth")
 				fig.colorbar(im, orientation="vertical", ax=axeslist[-1])
-				# cbar = fig.colorbar(im, ticks=np.arange(0, 2), orientation="vertical", ax=axeslist[-1])
-				# cbar.ax.set_yticklabels(['No', 'Yes'])
 				plt.tight_layout()
 				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_functional_relationships.png"))
 				plt.close()
@@ -3139,6 +3125,7 @@ def worker(rank, world_size, job_id, port):
 			plt.savefig(os.path.join(PLOT_DIR, "lr_schedule.png"))
 			plt.close()
 
+
 		#######################################################
 		# Get best model's predictions on train/val/test sets
 		#######################################################
@@ -3195,7 +3182,7 @@ def worker(rank, world_size, job_id, port):
 
 			# Plot the pruned model
 			pruned_model = best_guess_model.mlp.prune()  # edge_quantile_th=0.2)  # node_th=0.03, edge_th=0.03)
-			pruned_model.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.12)
+			pruned_model.plot(folder=os.path.join(PLOT_DIR, "splines_pruned"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.12)
 			plt.savefig(os.path.join(PLOT_DIR, f"FINAL_kan_plot_pruned.png"))
 			plt.close()
 
@@ -3203,6 +3190,9 @@ def worker(rank, world_size, job_id, port):
 			best_guess_model.mlp.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.12)
 			plt.savefig(os.path.join(PLOT_DIR, f"FINAL_kan_plot.png"))
 			plt.close()
+
+		# # NOTE Try testing on the pruned model!
+		# best_guess_model.mlp.act_fun[0].mask = pruned_model.act_fun[0].mask
 
 		# Test functional relationship retrieval
 		if args.labels == "synthetic_function" and args.model != "nn_only":
@@ -3257,7 +3247,7 @@ def worker(rank, world_size, job_id, port):
 				# set importances of pruend edges to zero
 				kan_pruned_importances = kan_importances.copy()
 				kan_pruned_importances[best_guess_model.mlp.act_fun[0].mask == 0] = 0.
-				predicted_importances_all["KAN_pruned"] = kan_pruned_importances
+				predicted_importances_all["KAN_pruned"] = kan_pruned_importances / kan_pruned_importances.sum(axis=0, keepdims=True)
 
 			# if args.model == "kan" and args.num_layers == 1:
 			# 	# If using one-layer KAN, read off functional relationships with mask
