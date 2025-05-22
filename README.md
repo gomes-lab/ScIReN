@@ -1,10 +1,59 @@
 # ScIReN
 
-This code implements the method and experiments in "Scientifically-Interpretable Reasoning Network (ScIReN): Uncovering the Black Box of Nature".
+This code implements the method and experiments in "Scientifically-Interpretable Reasoning 
+Network (ScIReN): Uncovering the Black Box of Nature".
+
+
+## Dataset download
+
+The input data can be downloaded [here](https://osf.io/a643m/?view_only=f1682a62cdf84900a57b6130174ec22e). Navigate to `files`, download the file, and unzip it in the `BINNS` root directory. You can do this via commandline (from `BINNS` root directory):
+```
+wget https://osf.io/download/682ed7b80f8ae3415deac68b/?view_only=f1682a62cdf84900a57b6130174ec22e
+unzip 'index.html?view_only=f1682a62cdf84900a57b6130174ec22e'
+```
+
+## Git submodules
+
+NOTE: Reviewers - ignore this section, since the submodules are already included in the zip.
+
+The KAN and q10hybrid folders are submodules. To clone them, after cloning the main repo, use
+
+```
+git checkout sciren
+git submodule update --init --recursive
+```
+
+To fetch new changes from the remote submodules, cd to the submodule directory and run
+```
+git fetch
+git merge origin/main
+```
+or, from the main directory:
+```
+git submodule update --remote
+```
+
+Pulling upstream changes from project remote: suppose a collaborator made changes to a submodule and I need to pull them.
+```
+git pull
+git submodule update --init --recursive
+```
+or
+```
+git pull --recurse-submodules
+```
+
+To push changes, first push changes to the submodule, then do `git add <submodule>` in the main directory, commit it, then run
+```
+git push --recurse-submodules=check
+```
+
 
 ## Installation Instructions
 
 The key packages to install are PyTorch, Pytorch Lightning, Numpy, Scipy, Pandas, matplotlib, scikit-learn, geopandas, mat73, and netCDF4. Here are instructions to install the necessary packages:
+
+First ensure that submodules have been downloaded (previous section): `src_binns/q10hybrid` and `src_binns/pykan` should not be empty.
 
 Create a virtual env called ".venv", and activate it
 ```
@@ -18,7 +67,7 @@ Install pip (upgrade if needed)
 python3 -m pip install --upgrade pip
 ```
 
-Install required packages
+Install required packages.
 ```
 pip install -r requirements.txt
 ```
@@ -35,42 +84,6 @@ pip install -e .
 ```
 
 
-The input data can be downloaded [here](https://osf.io/a643m/?view_only=f1682a62cdf84900a57b6130174ec22e). You can unzip the file in the `BINNS` root directory.
-
-
-## Git submodules
-
-The KAN and q10hybrid folders are submodules. To clone them, after cloning the main repo, use
-
-```
-git submodule update --init --recursive
-```
-
-To get changes from the remote submodules, cd to the submodule directory and run
-```
-git fetch
-git merge origin/main
-```
-or, from the main directory:
-```
-git submodule update --remote
-```
-
-
-Pulling upstream changes from project remote: suppose a collaborator made changes to a submodule and I need to pull them.
-```
-git pull
-git submodule update --init --recursive
-```
-or
-```
-git pull --recurse-submodules
-```
-
-To push changes, first push changes to the submodule, then do `git add <submodule>` in the main directory, commit it, then run
-```
-git push --recurse-submodules=check
-```
 
 
 ## Running Instructions
@@ -150,6 +163,21 @@ sbatch slurm_scripts/4e_real_sciren_2layer.sh
 ## Data Notes
 
 The covariates and biogeochemical parameters are described in the Appendix.
+
+
+## Licenses
+
+This codebase is built on the following public repositories:
+
+Q10Hybrid (Apache License): https://github.com/bask0/q10hybrid
+pykan (MIT License): https://github.com/KindXiaoming/pykan
+
+In addition, the datasets used in the CLM5 experiments are drawn from this paper, which cites the original data sources (such as WoSIS and MODIS NPP):
+
+Tao F, Zhou Z, Huang Y, Li Q, Lu X, Ma S, Huang X, Liang Y, Hugelius G, Jiang L, Doughty R, Ren Z and Luo Y (2020) Deep Learning Optimizes Data-Driven Representation of Soil Organic Carbon in Earth System Model Over the Conterminous United States. Front. Big Data 3:17. doi: 10.3389/fdata.2020.00017
+Link: https://www.frontiersin.org/journals/big-data/articles/10.3389/fdata.2020.00017/full
+
+
 
 
 ## FEEL FREE TO IGNORE: Additional tips / notes
