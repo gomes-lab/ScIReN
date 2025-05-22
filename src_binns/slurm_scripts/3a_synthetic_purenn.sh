@@ -6,8 +6,8 @@
 # (To run on CPU, remove the --gpus line and set --num_CPU to the number of CPUs.)
 # Output will appear in a file 'slurm-N.out' where N is the job ID.
 
-# Request the regular partition (CPU only)
-#SBATCH -p regular
+# Request the full partition (CPU only)
+#SBATCH -p full
 #SBATCH --exclude=c0020,c0002
 
 # Name the job so it's meaningful in the job list

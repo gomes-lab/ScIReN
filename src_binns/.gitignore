@@ -3,3 +3,6 @@ __pycache__*
 *.err
 slurm_scripts/old/*
 *.mp4
+slurm_*.sh
+run_*.sh
+
