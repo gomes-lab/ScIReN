@@ -6,7 +6,9 @@ Network (ScIReN): Uncovering the Black Box of Nature".
 
 ## Dataset download
 
-The input data can be downloaded [here](https://osf.io/a643m/?view_only=f1682a62cdf84900a57b6130174ec22e). Navigate to `files`, download the file, and unzip it in the `BINNS` root directory. You can do this via commandline (from `BINNS` root directory):
+The input data can be downloaded [here](https://osf.io/a643m/?view_only=f1682a62cdf84900a57b6130174ec22e). Navigate to `files`, download the file, and unzip it in the `BINNS` root directory.
+
+Here are commands that will download and unzip:
 ```
 wget https://osf.io/download/682ed7b80f8ae3415deac68b/?view_only=f1682a62cdf84900a57b6130174ec22e
 unzip 'index.html?view_only=f1682a62cdf84900a57b6130174ec22e'
@@ -23,7 +25,7 @@ git checkout sciren
 git submodule update --init --recursive
 ```
 
-To fetch new changes from the remote submodules, cd to the submodule directory and run
+To keep submodules up-to-date with their remote versions, cd to the submodule directory and run
 ```
 git fetch
 git merge origin/main
@@ -51,8 +53,6 @@ git push --recurse-submodules=check
 
 ## Installation Instructions
 
-The key packages to install are PyTorch, Pytorch Lightning, Numpy, Scipy, Pandas, matplotlib, scikit-learn, geopandas, mat73, and netCDF4. Here are instructions to install the necessary packages:
-
 First ensure that submodules have been downloaded (previous section): `src_binns/q10hybrid` and `src_binns/pykan` should not be empty.
 
 Create a virtual env called ".venv", and activate it
@@ -72,7 +72,8 @@ Install required packages.
 pip install -r requirements.txt
 ```
 
-NOTE: If this did not work, you can try installing packages manually, e.g.
+ALTERNATIVE: If installing `requirements.txt`, you can try installing packages manually. The key packages are  PyTorch, Pytorch Lightning, Numpy, Scipy, Pandas, matplotlib, scikit-learn, geopandas, mat73, netCDF4, and alibi. For example, you can try these commands:
+
 ```
 pip install numpy scipy pandas matplotlib scikit-learn geopandas mat73 xarray netCDF4 alibi joblib
 pip install torch torchvision torchaudio 
@@ -84,13 +85,11 @@ pip install -e .
 ```
 
 
-
-
 ## Running Instructions
 
-### Tables 1-2
+### Tables 1-2: Ecosystem Respiration
 
-See `src_binns/q10hybrid/README.md` for instructions to reproduce Table 1-2.
+See `src_binns/q10hybrid/README.md` for the commands to reproduce Table 1-2.
 
 ### Table 3: Experiments with synthetic labels (predicting 4 most sensitive parameters)
 
