@@ -24,7 +24,6 @@
 #SBATCH -t 72:00:00
 
 # # Activate environment (virtualenv version)
-cd /mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/src_binns
 source .venv/bin/activate
 
 
