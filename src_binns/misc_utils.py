@@ -2,7 +2,7 @@ import collections
 import torch
 import torch.nn
 import numpy as np
-from mlp import GNN_BINN, Spatial_BINN, mlp_wrapper, nn_only, BINN_Hybrid
+from mlp import mlp_wrapper, nn_only
 
 
 @torch.no_grad()
@@ -233,7 +233,6 @@ def get_model(args, var4nn, var_idx_to_emb, device, para_index, train_x, train_y
 						"dropout_prob": args.dropout_prob,
 						"activation": args.activation,
 						"param_constraint": args.param_constraint,  
-						"losses": args.losses,
 						"device": device,
 						"min_temp": args.min_temp,
 						"max_temp": args.max_temp,
@@ -242,7 +241,6 @@ def get_model(args, var4nn, var_idx_to_emb, device, para_index, train_x, train_y
 						"num_layers": args.num_layers,
 						"residual": args.residual,
 						"para_index": para_index,
-						"feature_dropout": args.feature_dropout,
 						"kan_grid": args.kan_grid,
 						"kan_grid_margin": args.kan_grid_margin,
 						"kan_noise": args.kan_noise,
@@ -271,8 +269,6 @@ def get_model(args, var4nn, var_idx_to_emb, device, para_index, train_x, train_y
 						"use_bn": args.use_bn,
 						"dropout_prob": args.dropout_prob,
 						"activation": args.activation,
-						"losses": args.losses,
-						"device": device,
 						"output_mean": output_mean,
 						"output_std": output_std,
 						"init": args.init,

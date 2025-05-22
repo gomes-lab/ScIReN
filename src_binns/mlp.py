@@ -5,7 +5,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pe_gcn_model import GridCellSpatialRelationEncoder
 import misc_utils
-import visualization_utils
 
 
 class mlp(torch.nn.Module):
@@ -487,7 +486,7 @@ class ConstantParameters(nn.Module):
 class nn_only(nn.Module):
 	def __init__(self, input_vars, var_idx_to_emb, pos_enc, output_dim=140,
 				 base_model="new_mlp", one_hot=False, use_bn=False, dropout_prob=0.0,
-				 activation="relu", rep_grad=False,
+				 activation="relu",
 				 output_mean=None, output_std=None, train_x=None,
 				 min_temp=10, max_temp=109, init="xavier_uniform", width=128, num_layers=4, residual=False):
 		"""

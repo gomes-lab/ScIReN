@@ -12,6 +12,7 @@ import random
 import warnings
 import subprocess
 import argparse
+import torch
 from collections import OrderedDict
 import misc_utils
 from sklearn.model_selection import KFold
@@ -41,7 +42,6 @@ torch.set_default_dtype(torch.float32)
 np.set_printoptions(legacy="1.21")
 
 import os
-import torch
 from torch import nn
 from torch.utils.data import DataLoader
 import torch.distributed as dist
@@ -986,9 +986,10 @@ elif args.labels == "synthetic_function":
 			# Plot true functional relationships
 			true_kan.attribute()
 			true_kan.node_attribute()
-			true_kan.plot(folder=os.path.join(label_dir, "splines"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.13)
-			plt.savefig(os.path.join(label_dir, f"TRUE_kan_plot.png"))
-			plt.close()
+			if not os.path.exists(os.path.join(label_dir, "TRUE_kan_plot.png")):
+				true_kan.plot(folder=os.path.join(label_dir, "splines"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.13)
+				plt.savefig(os.path.join(label_dir, "TRUE_kan_plot.png"))
+				plt.close()
 
 			# Save picture of functional relationships. Source: https://stackoverflow.com/questions/69986007/matplotlib-imshow-with-1-color-for-each-discrete-value
 			fig, ax = plt.subplots()

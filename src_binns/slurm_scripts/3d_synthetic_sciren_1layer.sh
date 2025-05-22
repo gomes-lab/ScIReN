@@ -7,7 +7,7 @@
 # Output will appear in a file 'slurm-N.out' where N is the job ID.
 
 # Request the regular partition (CPU only)
-#SBATCH -p full
+#SBATCH -p regular
 #SBATCH --exclude=c0020,c0002
 
 # Name the job so it's meaningful in the job list
@@ -15,7 +15,7 @@
 # Request 4 GPUs 
 # #SBATCH --gpus 4
 # Request 4 CPU cores (8 hyperthreads).
-#SBATCH -c 8
+#SBATCH -c 1
 # Specify the resources should be assigned to a single task on one node.
 #SBATCH -N 1 -n 1
 # Request a total of 80GB RAM

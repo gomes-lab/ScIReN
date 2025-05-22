@@ -15,7 +15,7 @@
 # Request 4 GPUs 
 # #SBATCH --gpus 4
 # Request 4 CPU cores (8 hyperthreads).
-#SBATCH -c 8
+#SBATCH -c 1
 # Specify the resources should be assigned to a single task on one node.
 #SBATCH -N 1 -n 1
 # Request a total of 80GB RAM

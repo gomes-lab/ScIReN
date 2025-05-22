@@ -1,11 +1,10 @@
-# BINNS
+# ScIReN
 
-This code implements the method proposed in "Biogeochemistry-Informed Neural Network (BINN) for Improving Accuracy of Model
-Prediction and Scientific Understanding of Soil Organic Carbon" (Xu et al. 2025). 
+This code implements the method and experiments in "Scientifically-Interpretable Reasoning Network (ScIReN): Uncovering the Black Box of Nature".
 
 ## Installation Instructions
 
-The key packages to install are PyTorch, PyTorch Geometric, Numpy, Scipy, Pandas, matplotlib, scikit-learn, geopandas, mat73, and netCDF4. Here are instructions to install the necessary packages:
+The key packages to install are PyTorch, Pytorch Lightning, Numpy, Scipy, Pandas, matplotlib, scikit-learn, geopandas, mat73, and netCDF4. Here are instructions to install the necessary packages:
 
 Create a virtual env called ".venv", and activate it
 ```
@@ -28,37 +27,20 @@ NOTE: If this did not work, you can try installing packages manually, e.g.
 ```
 pip install numpy scipy pandas matplotlib scikit-learn geopandas mat73 xarray netCDF4 alibi joblib
 pip install torch torchvision torchaudio 
-pip install torch_geometric
+pip install lightning
 cd src_binns/pykan
 pip install -e .
 cd ../q10hybrid
 pip install -e .
 ```
 
-To use graph neural network variant (work in progress), you may need to install these libraries as well. These are not needed for normal BINN.
-```
-pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.5.0+cu124.html
-```
 
-The input data can be downloaded [here](https://drive.google.com/file/d/1fQYA2xxeSdu4MLOU25Ej-bQ6eUiFWvXK/view?usp=sharing). You can unzip the file in the `BINNS` root directory. One way to download the data from the commandline is using `gdown`:
+The input data can be downloaded [here](https://osf.io/a643m/?view_only=f1682a62cdf84900a57b6130174ec22e). You can unzip the file in the `BINNS` root directory.
 
-```
-pip install gdown
-gdown 1fQYA2xxeSdu4MLOU25Ej-bQ6eUiFWvXK
-unzip BINN_input_data.zip
-```
-### KAN
-
-If you want to use the KAN model, please cd into the subfolder and install its requirements and the package itself.
-```
-cd src_binns/pykan
-pip install -r requirements.txt
-pip install -e .
-```
 
 ## Git submodules
 
-The KAN and q10hybrid folders are submodules. To clone them use
+The KAN and q10hybrid folders are submodules. To clone them, after cloning the main repo, use
 
 ```
 git submodule update --init --recursive
@@ -69,9 +51,20 @@ To get changes from the remote submodules, cd to the submodule directory and run
 git fetch
 git merge origin/main
 ```
-or
+or, from the main directory:
 ```
 git submodule update --remote
+```
+
+
+Pulling upstream changes from project remote: suppose a collaborator made changes to a submodule and I need to pull them.
+```
+git pull
+git submodule update --init --recursive
+```
+or
+```
+git pull --recurse-submodules
 ```
 
 To push changes, first push changes to the submodule, then do `git add <submodule>` in the main directory, commit it, then run
@@ -81,6 +74,10 @@ git push --recurse-submodules=check
 
 
 ## Running Instructions
+
+### Tables 1-2
+
+See `src_binns/q10hybrid/README.md` for instructions to reproduce Table 1-2.
 
 ### Table 3: Experiments with synthetic labels (predicting 4 most sensitive parameters)
 
@@ -94,6 +91,12 @@ sbatch slurm_scripts/3c_synthetic_blackboxhybrid_hardsigmoid.sh
 sbatch slurm_scripts/3d_synthetic_sciren_1layer.sh
 ```
 
+Note that you should change `--num_CPU` to the number of CPUs you want to use (or GPUs if available).
+
+Each run creates a folder inside `OUTPUT_DATA/neural_network`. Inside `OUTPUT_DATA/neural_network`, there will also be a file
+called  `results_summary_{NOTE}.csv`, which contains a row for each run with that note.
+
+
 ### Table 4: Experiments with real labels 
 
 The following commands run the experiments on Slurm; see the above section for notes.
@@ -101,32 +104,15 @@ The following commands run the experiments on Slurm; see the above section for n
 sbatch slurm_scripts/4a_real_purenn.sh
 sbatch slurm_scripts/4b_real_blackboxhybrid.sh
 sbatch slurm_scripts/4c_real_blackboxhybrid_hardsigmoid.sh
-sbatch slurm_scripts/4d_sciren_1layer.sh
-sbatch slurm_scripts/4e_sciren_2layer.sh
-
+sbatch slurm_scripts/4d_real_sciren_1layer.sh
+sbatch slurm_scripts/4e_real_sciren_2layer.sh
 ```
 
-
-The script `src_binns/run_binn.sh` contains an example of how to train on 4 GPUs from command-line (interactively). Run like this:
-```
-cd src_binns
-chmod +x run_binn.sh  # If execute permission not enabled
-./run_binn.sh
-```
-
-If running locally on Mac:
-```
-export PYTORCH_ENABLE_MPS_FALLBACK=1
-```
-
-The script `src_binns/run_binn_slurm.sh` contains an example of how to train on 4 GPUs on a server with the Slurm scheduler.
-
-The script `src_binns/run_retrieval.sh` runs the retrieval test described in the BINN paper. NOT FULLY TESTED YET.
 
 
 ## Code summary
 
-* `src_binns/run_binn_interactive.sh`: contains command to run BINN training. Change `--num_CPU` to the number of GPUs, or CPUs if no GPUs are available.
+* `slurm_scripts/*.sh`: contains scripts that run each method. Change `--num_CPU` to the number of GPUs, or CPUs if no GPUs are available.
     - `--representative_sample` restricts the data to a "representative sample" of ~1000 sites. Useful for initial testing.
     - You can also choose a random subsample with `--n_datapoints 1000`
 * `src_binns/binns_DDP.py`: main train script
@@ -152,7 +138,7 @@ The script `src_binns/run_retrieval.sh` runs the retrieval test described in the
         - Process-based model: maps biogeochemical parameters + forcing → SOC predictions at 20 depths
     - `nn_only` is pure-neural network without the process-based model. Usage: `--model nn_only`
         - Directly maps input features → SOC predictions at 20 depths
-* `src_binns/fun_matrix_clm5_vectorized.py`: process-based model
+* `src_binns/fun_matrix_clm5_experimental.py`: process-based model
     - Estimates amount of carbon in 140 pools (20 depths * 7 pools per layer)
     - `a_matrix`: 140x140 matrix, containing horizontal transfers between pools of the same layer. `A[i, j]` (if `i != j`) is the flux from pool j to i. `A[i, i]` is the total flux leaving pool i.
     - `kk_matrix`: 140x140 matrix. `KK[i, i]` is the decomposition rate for pool i. Nondiagonal entries are zero.
@@ -163,9 +149,10 @@ The script `src_binns/run_retrieval.sh` runs the retrieval test described in the
 
 ## Data Notes
 
-The covariates and biogeochemical parameters are listed in [this document](https://docs.google.com/document/d/1dAlGbuwKkIg7-ai9ZPGSKIP7rKdKj8mUQi29TObQlUI/edit?usp=sharing).
+The covariates and biogeochemical parameters are described in the Appendix.
 
-## Additional tips / notes
+
+## FEEL FREE TO IGNORE: Additional tips / notes
 
 Do this to avoid commiting images in Jupyter Notebooks in git: https://stackoverflow.com/a/74753885
 
@@ -174,7 +161,7 @@ Save pip environment:
 pip freeze > requirements.txt
 ```
 
-## Git submodule notes
+### Git submodule notes
 
 Source: https://git-scm.com/book/en/v2/Git-Tools-Submodules
 
@@ -235,12 +222,7 @@ This means that if I run `git push`, it actually runs `git push --recurse-submod
 If the submodule wasn't pushed, go into the submodule and commit/push your local changes.
 
 
-
-
-
-
-### (OLD STUFF, CAN PROBABLY IGNORE) Alternate commands to install
-
+### Alternate commands to install
 
 
 You need to download the PRODA parameters from [this link](https://drive.google.com/file/d/1AGDlybz35n3gHqyNilVthVzOaBkNZAXr/view?usp=sharing), place in the `ENSEMBLE/INPUT_DATA` directory, and unzip. One way to download this is using `gdown`:
