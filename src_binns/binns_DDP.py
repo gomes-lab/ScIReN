@@ -946,7 +946,6 @@ elif args.labels == "synthetic_function":
 				# For these 2 inputs, assign a random relationship type (between 1 and 5 inclusive)
 				# 1=linear, 2=quadratic, 3=exp, 4=log, 5=relu.
 				sym_mask[row_indices, col_idx] = rng.integers(low=1, high=6, size=row_indices.shape)
-			print("Sym mask", sym_mask)
 			relationship_mask = torch.tensor(sym_mask != 0, dtype=int)  # 1 if relationship exists between input i and output j
 
 			# Explicitly defining functions since lambda functions cannot be pickled
@@ -1428,25 +1427,6 @@ predict_data_x[:, 0:20, 0:12, 12] = model_force_pred_soil_water_profile
 # create dummy z since it is not used in the prediction
 predict_data_z = np.ones((grid_env_info_num))*np.nan
 predict_data_c = np.stack([grid_env_info_US["original_lon"], grid_env_info_US["original_lat"]], axis=1)
-
-# # Drop rows with nan values
-# nan_loc = np.nanmean(predict_data_x[:, 0:len(var4nn), 0, 0], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:12, 0, 1], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:12, 0, 2], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:12, 0, 3], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:12, 0, 4], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:12, 0, 5], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:12, 0, 6], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:12, 0, 7], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:20, 0:12, 8], axis = (1, 2)) + \
-# 			np.sum(predict_data_x[:, 0:20, 0:12, 9], axis = (1, 2)) + \
-# 			np.sum(predict_data_x[:, 0:20, 0:12, 10], axis = (1, 2)) + \
-# 			np.sum(predict_data_x[:, 0:20, 0:12, 11], axis = (1, 2)) + \
-# 			np.sum(predict_data_x[:, 0:20, 0:12, 12], axis = (1, 2))
-# valid_profile_loc = np.where(np.isnan(nan_loc) == False)[0]
-# predict_data_x = predict_data_x[valid_profile_loc, :, :, :]
-# predict_data_z = predict_data_z[valid_profile_loc]
-# grid_env_info_US = grid_env_info_US.iloc[valid_profile_loc, :]
 
 print("Shape of predict data x", predict_data_x.shape)
 print("Shape of predict data z", predict_data_z.shape)
