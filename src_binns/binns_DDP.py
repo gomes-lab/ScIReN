@@ -2634,7 +2634,7 @@ def worker(rank, world_size, job_id, port):
 
 				method_str = "Blackbox-Hybrid" if args.model == "new_mlp" else f"ScIReN {args.num_layers}-layer"
 				predicted_importances_all = {f"{method_str} (Jacobian)": jacobian_importances,
-											 f"{method_str} (Partial Dependence Variance)": pdv_importances}
+											 f"{method_str}\n(Partial Dependence Variance)": pdv_importances}
 				if args.model == "kan" and args.num_layers == 1:
 					# If using one-layer KAN, read off functional relationships with mask
 					kan_importances = model_without_ddp.mlp.edge_scores[0].permute(1, 0).detach().cpu().numpy()
@@ -3253,7 +3253,7 @@ def worker(rank, world_size, job_id, port):
 			# 	# If using one-layer KAN, read off functional relationships with mask
 			# 	predicted_relationships_kan = pruned_model.act_fun[0].mask
 			# 	predicted_relationships_all["KAN"] = predicted_relationships_kan
-			DEFAULT_REL =f"KAN {args.num_layers}-layer" if f"KAN {args.num_layers}-layer" in predicted_importances_all else f"{method_str}\n(Partial Dependence Variance)"
+			DEFAULT_REL = "KAN" if "KAN" in predicted_importances_all else f"{method_str}\n(Partial Dependence Variance)"
 			default_kl = misc_utils.kl_divergence(true_relationships, predicted_importances_all[DEFAULT_REL])
 			default_l2 = math.sqrt(((true_relationships - predicted_importances_all[DEFAULT_REL]) ** 2).sum())
 

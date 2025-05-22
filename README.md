@@ -82,6 +82,31 @@ git push --recurse-submodules=check
 
 ## Running Instructions
 
+### Table 3: Experiments with synthetic labels (predicting 4 most sensitive parameters)
+
+These commands will run the experiments on Slurm. If you do not have slurm, you can replace `sbatch` with `bash`, or run them as
+`./slurm_scripts/3a_synthetic_purenn.sh`. (Also, make sure execute permissions are granted, e.g. `chmod +x slurm_scripts/3a_synthetic_purenn.sh`).
+
+```
+sbatch slurm_scripts/3a_synthetic_purenn.sh
+sbatch slurm_scripts/3b_synthetic_blackboxhybrid.sh
+sbatch slurm_scripts/3c_synthetic_blackboxhybrid_hardsigmoid.sh
+sbatch slurm_scripts/3d_synthetic_sciren_1layer.sh
+```
+
+### Table 4: Experiments with real labels 
+
+The following commands run the experiments on Slurm; see the above section for notes.
+```
+sbatch slurm_scripts/4a_real_purenn.sh
+sbatch slurm_scripts/4b_real_blackboxhybrid.sh
+sbatch slurm_scripts/4c_real_blackboxhybrid_hardsigmoid.sh
+sbatch slurm_scripts/4d_sciren_1layer.sh
+sbatch slurm_scripts/4e_sciren_2layer.sh
+
+```
+
+
 The script `src_binns/run_binn.sh` contains an example of how to train on 4 GPUs from command-line (interactively). Run like this:
 ```
 cd src_binns

@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Runs BINN training on GPUs, as a Slurm job. Usage:
-# sbatch slurm_scripts/run_synthetic_binn_hardsigmoid.sh
+# Runs Blackbox-Hybrid (hardsigmoid) training on synthetic 4-parameter dataset. Usage on Slurm:
+# sbatch slurm_scripts/3c_synthetic_blackboxhybrid_hardsigmoid.sh
 # (To change the number of GPUs, change --gpus and --num_CPU arguments to that number.)
 # (To run on CPU, remove the --gpus line and set --num_CPU to the number of CPUs.)
 # Output will appear in a file 'slurm-N.out' where N is the job ID.
@@ -11,11 +11,11 @@
 #SBATCH --exclude=c0020,c0002
 
 # Name the job so it's meaningful in the job list
-#SBATCH -J synthetic_binn_hardsigmoid_tuming
+#SBATCH -J 3c_synthetic_blackboxhybrid_hardsigmoid
 # Request 4 GPUs 
 # #SBATCH --gpus 4
-# Request 4 CPU cores (9 hyperthreads).
-#SBATCH -c 1
+# Request 4 CPU cores (8 hyperthreads).
+#SBATCH -c 8
 # Specify the resources should be assigned to a single task on one node.
 #SBATCH -N 1 -n 1
 # Request a total of 80GB RAM
@@ -23,22 +23,20 @@
 # Request a walltime limit of 72 hours
 #SBATCH -t 72:00:00
 
-# # Activate environment (virtualenv version)
+# Activate environment (virtualenv version)
 cd /mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/src_binns
 source .venv/bin/activate
 
-# (Conda version)
-# conda activate BINN_310_CPU
 
 for LR in 1e-3
 do
-    for WD in 0
+    for WD in 1e-4
     do
         for TEMP in 1
         do
             for PREG in 0
             do
-                for FOLD in 2 3 4 5
+                for FOLD in 1 2 3 4 5
                 do
                     if [ $FOLD -eq 1 -a $LR = 1e-2 ]; then
                         PLOT_STR="--plot"
@@ -53,7 +51,7 @@ do
                         --model new_mlp --num_layers 3 --residual --activation leaky_relu --use_bn \
                         --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0 \
                         --losses smooth_l1 param_reg param_violation --lambdas 1 $PREG 1000 --param_constraint hardsigmoid \
-                        --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "BINNHARDSIGMOID_SYNTHETICFUNCTION_FOUR_FOLD" $PLOT_STR
+                        --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "3C_SYNTHETIC_BLACKBOXHYBRID_HARDSIGMOID" $PLOT_STR
                 done
             done
         done
