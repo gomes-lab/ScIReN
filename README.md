@@ -8,7 +8,7 @@ Network (ScIReN): Uncovering the Black Box of Nature".
 
 The input data can be downloaded [here](https://osf.io/a643m/?view_only=f1682a62cdf84900a57b6130174ec22e). Navigate to `files`, download the file, and unzip it in the `BINNS` root directory.
 
-Here are commands that will download and unzip:
+Alternatively you can run these commands from the `BINNS` root directory:
 ```
 wget https://osf.io/download/682ed7b80f8ae3415deac68b/?view_only=f1682a62cdf84900a57b6130174ec22e
 unzip 'index.html?view_only=f1682a62cdf84900a57b6130174ec22e'
@@ -25,31 +25,7 @@ git checkout sciren
 git submodule update --init --recursive
 ```
 
-To keep submodules up-to-date with their remote versions, cd to the submodule directory and run
-```
-git fetch
-git merge origin/main
-```
-or, from the main directory:
-```
-git submodule update --remote
-```
-
-Pulling upstream changes from project remote: suppose a collaborator made changes to a submodule and I need to pull them.
-```
-git pull
-git submodule update --init --recursive
-```
-or
-```
-git pull --recurse-submodules
-```
-
-To push changes, first push changes to the submodule, then do `git add <submodule>` in the main directory, commit it, then run
-```
-git push --recurse-submodules=check
-```
-
+See below notes on how to work with submodules.
 
 ## Installation Instructions
 
