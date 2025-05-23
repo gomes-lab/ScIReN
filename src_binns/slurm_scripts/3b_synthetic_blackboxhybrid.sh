@@ -37,7 +37,7 @@ do
             do
                 for FOLD in 1 2 3 4 5
                 do
-                    if [ $FOLD -eq 1 -a $LR = 1e-4 ]; then
+                    if [ $FOLD -eq 1 ]; then
                         PLOT_STR="--plot"
                     else
                         PLOT_STR=""
@@ -50,7 +50,7 @@ do
                         --model new_mlp --num_layers 3 --residual --activation leaky_relu --use_bn \
                         --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0 \
                         --losses smooth_l1 param_reg --lambdas 1 $PREG --param_constraint sigmoid \
-                        --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "3B_SYNTHETIC_BLACKBOXHYBRID"
+                        --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "3B_SYNTHETIC_BLACKBOXHYBRID" $PLOT_STR
                 done
             done
         done

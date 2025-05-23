@@ -35,7 +35,7 @@ do
         do
             for FOLD in 1 2 3 4 5
             do
-                if [ $FOLD -eq 1 -a $LR = 1e-2 ]; then
+                if [ $FOLD -eq 1 ]; then
                     PLOT_STR="--plot"
                 else
                     PLOT_STR=""
@@ -52,7 +52,7 @@ do
                      --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable --kan_absolute_deviation \
                      --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 1000 $LAM1 $LAM2 0 $LAM3 \
                      --param_constraint hardsigmoid \
-                     --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note 4E_REAL_SCIREN_2LAYER
+                     --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note 4E_REAL_SCIREN_2LAYER $PLOT_STR
             done
         done
     done
