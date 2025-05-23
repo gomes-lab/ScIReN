@@ -89,7 +89,7 @@ pip install -e .
 
 ### Tables 1-2: Ecosystem Respiration
 
-See `src_binns/q10hybrid/README.md` for the commands to reproduce Table 1-2.
+See `src_binns/q10hybrid/README.md` for commands on reproducing Tables 1-2.
 
 ### Table 3: Experiments with synthetic labels (predicting 4 most sensitive parameters)
 
