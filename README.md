@@ -48,7 +48,7 @@ Install required packages.
 pip install -r requirements.txt
 ```
 
-ALTERNATIVE: If installing `requirements.txt`, you can try installing packages manually. The key packages are  PyTorch, Pytorch Lightning, Numpy, Scipy, Pandas, matplotlib, scikit-learn, geopandas, mat73, netCDF4, and alibi. For example, you can try these commands:
+ALTERNATIVE: If installing `requirements.txt` failed, you can try installing packages manually. The key packages are PyTorch, Pytorch Lightning, Numpy, Scipy, Pandas, matplotlib, scikit-learn, geopandas, mat73, netCDF4, and alibi. For example, you can try these commands:
 
 ```
 pip install numpy scipy pandas matplotlib scikit-learn geopandas mat73 xarray netCDF4 alibi joblib
