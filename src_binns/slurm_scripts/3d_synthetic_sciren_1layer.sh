@@ -49,7 +49,7 @@ do
                 # echo $LAM2
                 python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
                 --optimizer AdamW --lr $LR --weight_decay 0 \
-                --seed 1 --init default --min_temp 1 --max_temp 1 \
+                --seed $SEED --init default --min_temp 1 --max_temp 1 \
                 --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0 \
                 --model kan --num_layers 1 --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable --kan_absolute_deviation \
                 --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 1000 $LAM1 $LAM2 0 $LAM3 \
