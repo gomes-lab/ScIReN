@@ -6,16 +6,16 @@
 # (To run on CPU, remove the --gpus line and set --num_CPU to the number of CPUs.)
 # Output will appear in a file 'slurm-N.out' where N is the job ID.
 
-# Request the regular partition (CPU only)
+# Request the full partition (CPU only)
 #SBATCH -p full
 #SBATCH --exclude=c0020,c0002
 
 # Name the job so it's meaningful in the job list
 #SBATCH -J 3d_synthetic_sciren_1layer
 # Request 4 GPUs 
-# #SBATCH --gpus 4
+# # SBATCH --gpus v100:1
 # Request 4 CPU cores (8 hyperthreads).
-#SBATCH -c 8
+#SBATCH -c 1
 # Specify the resources should be assigned to a single task on one node.
 #SBATCH -N 1 -n 1
 # Request a total of 80GB RAM
@@ -24,7 +24,6 @@
 #SBATCH -t 72:00:00
 
 # Activate environment (virtualenv version)
-cd /mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/src_binns
 source .venv/bin/activate
 
 
@@ -36,7 +35,7 @@ do
         do
             for FOLD in 1
             do
-                if [ $FOLD -eq 1 -a $LR = 1e-2 ]; then
+                if [ $FOLD -eq 1 ]; then
                     PLOT_STR="--plot"
                 else
                     PLOT_STR=""
@@ -49,13 +48,13 @@ do
                 # LAM2=`awk -v var="$LAM1" 'BEGIN{ print 2.0 * var }'`  # $(( 2*LAM1 ))
                 # echo $LAM2
                 python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-                --optimizer AdamW --lr $LR --weight_decay 0 \
-                --seed 1 --init default --min_temp 1 --max_temp 1 \
-                --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0 \
-                --model kan --num_layers 1 --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable --kan_absolute_deviation \
-                --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 1000 $LAM1 $LAM2 0 $LAM3 \
-                --param_constraint hardsigmoid \
-                --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "3D_SYNTHETIC_SCIREN_1LAYER" --plot
+                    --optimizer AdamW --lr $LR --weight_decay 0 \
+                    --seed $SEED --init default --min_temp 1 --max_temp 1 \
+                    --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0 \
+                    --model kan --num_layers 1 --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable --kan_absolute_deviation \
+                    --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 1000 $LAM1 $LAM2 0 $LAM3 \
+                    --param_constraint hardsigmoid \
+                    --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "3D_SYNTHETIC_SCIREN_1LAYER_DEBUGCPU" $PLOT_STR
             done
         done
     done

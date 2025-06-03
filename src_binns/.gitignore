@@ -1,5 +1,8 @@
 __pycache__*
 *.out
 *.err
-slurm_*
+slurm_scripts/old/*
 *.mp4
+slurm_*.sh
+run_*.sh
+

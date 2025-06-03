@@ -6,17 +6,19 @@ Source: https://github.com/konstantinklemmer/pe-gnn/blob/main/src/model.py
 
 import numpy as np
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv, GATConv, SimpleConv, knn_graph
-from torch_geometric.utils import to_dense_adj, to_torch_coo_tensor
+
+# Commenting out these dependencies as we are not using GNN currently, only the spatial positional encoder
+# from torch_geometric.nn import GCNConv, GATConv, SimpleConv, knn_graph
+# from torch_geometric.utils import to_dense_adj, to_torch_coo_tensor
 
 import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from scipy import sparse
-import torch.nn.parallel
-import torch.utils.data
-from spatial_utils import *
+# import torch.nn.parallel
+# import torch.utils.data
+# from spatial_utils import *
 
 class LayerNorm(nn.Module):
     """
@@ -51,7 +53,7 @@ def get_activation_function(activation, context_str):
         return nn.Sigmoid()
     elif activation == 'tanh':
         return nn.Tanh()
-    elif activation == 'none':  # @joshuafan: added option for no activation function
+    elif activation == 'none':  # @NOTE: added option for no activation function
         return nn.Identity()  # Does nothing
     else:
         raise Exception("{} activation not recognized.".format(context_str))
@@ -207,7 +209,7 @@ class MultiLayerFeedForwardNN(nn.Module):
 
             self.layers.append( SingleFeedForwardNN(input_dim = self.hidden_dim,
                                                     output_dim = self.output_dim,
-                                                    dropout_rate = None,  # self.dropout_rate,  # @joshuafan: documentation claims last layer has no dropout/activation, but the code had them. Updated code to match documentation.
+                                                    dropout_rate = None,  # self.dropout_rate,  # @NOTE: documentation claims last layer has no dropout/activation, but the code had them. Updated code to match documentation.
                                                     activation = 'none',  # self.activation,
                                                     use_layernormalize = False,
                                                     skip_connection = False,
@@ -348,223 +350,224 @@ class GridCellSpatialRelationEncoder(nn.Module):
         """
         device = coords.device
         spr_embeds = self.make_input_embeds(coords)
-        spr_embeds = torch.tensor(spr_embeds, dtype=torch.float32).to(device)  # torch.FloatTensor(spr_embeds).to(device)  @joshuafan modified
+        spr_embeds = torch.tensor(spr_embeds, dtype=torch.float32).to(device)  # torch.FloatTensor(spr_embeds).to(device)  @NOTE modified
         if self.ffn is not None:
             return self.ffn(spr_embeds)
         else:
             return spr_embeds
 
-class GCN(nn.Module):
-    """
-        GCN
-    """
-    def __init__(self, num_features_in=3, num_features_out=1, k=20, graph_conv='gcn', MAT=False):
-        super(GCN, self).__init__()
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.k = k
-        self.MAT = MAT
-        if graph_conv == 'gcn':
-            self.conv1 = GCNConv(num_features_in, 32)
-            self.conv2 = GCNConv(32, 32)
-        elif graph_conv == 'gat':
-            self.conv1 = GATConv(num_features_in, 32)
-            self.conv2 = GATConv(32, 32)
-        self.fc = nn.Linear(32, num_features_out)
-        if MAT:
-          self.fc_morans = nn.Linear(32, num_features_out)
-        self.length_scale = nn.Parameter(torch.tensor(1.0), requires_grad=True)
 
-    def forward(self, x, c, ei, ew):
-        """
-        x has shape [batch, features]
-        c has shape [batch, 2] where 2 is the number of spatial coordinates (lon/lat)
-        """
-        x = x.float()
-        c = c.float()
-        if torch.is_tensor(ei) & torch.is_tensor(ew):
-          edge_index = ei
-          edge_weight = ew
-        else:
-          edge_index = knn_graph(c, k=self.k).to(self.device)
-          edge_weight = makeEdgeWeight(c, edge_index).to(self.device)
-          edge_weight = torch.exp(-1.0 * edge_weight / self.length_scale)
+# class GCN(nn.Module):
+#     """
+#         GCN
+#     """
+#     def __init__(self, num_features_in=3, num_features_out=1, k=20, graph_conv='gcn', MAT=False):
+#         super(GCN, self).__init__()
+#         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#         self.k = k
+#         self.MAT = MAT
+#         if graph_conv == 'gcn':
+#             self.conv1 = GCNConv(num_features_in, 32)
+#             self.conv2 = GCNConv(32, 32)
+#         elif graph_conv == 'gat':
+#             self.conv1 = GATConv(num_features_in, 32)
+#             self.conv2 = GATConv(32, 32)
+#         self.fc = nn.Linear(32, num_features_out)
+#         if MAT:
+#           self.fc_morans = nn.Linear(32, num_features_out)
+#         self.length_scale = nn.Parameter(torch.tensor(1.0), requires_grad=True)
 
-        h1 = F.relu(self.conv1(x, edge_index, edge_weight))
-        h1 = F.dropout(h1, training=self.training)
-        h2 = F.relu(self.conv2(h1, edge_index, edge_weight))
-        h2 = F.dropout(h2, training=self.training)
-        output = self.fc(h2)
-        if self.MAT:
-          morans_output = self.fc_morans(h2)
-          return output, morans_output
-        else:
-          return output
+#     def forward(self, x, c, ei, ew):
+#         """
+#         x has shape [batch, features]
+#         c has shape [batch, 2] where 2 is the number of spatial coordinates (lon/lat)
+#         """
+#         x = x.float()
+#         c = c.float()
+#         if torch.is_tensor(ei) & torch.is_tensor(ew):
+#           edge_index = ei
+#           edge_weight = ew
+#         else:
+#           edge_index = knn_graph(c, k=self.k).to(self.device)
+#           edge_weight = makeEdgeWeight(c, edge_index).to(self.device)
+#           edge_weight = torch.exp(-1.0 * edge_weight / self.length_scale)
 
-class PEGCN(nn.Module):
-    """
-        GCN with positional encoder and auxiliary tasks
-    """
-    def __init__(self, num_features_in=3, num_features_out=1, emb_hidden_dim=128, emb_dim=16, k=20, graph_conv='gcn', MAT=False):
-        super(PEGCN, self).__init__()
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.emb_hidden_dim = emb_hidden_dim
-        self.emb_dim = emb_dim
-        self.k = k
-        self.MAT = MAT
-        self.spenc = GridCellSpatialRelationEncoder(spa_embed_dim=emb_hidden_dim,ffn=True,min_radius=1e-06,max_radius=360)
-        self.dec = nn.Sequential(
-            nn.Linear(emb_hidden_dim, emb_hidden_dim // 2),
-            nn.Tanh(),
-            nn.Linear(emb_hidden_dim // 2, emb_hidden_dim // 4),
-            nn.Tanh(),
-            nn.Linear(emb_hidden_dim // 4, emb_dim)
-        )
-        self.graph_conv = graph_conv
-        if graph_conv == 'gcn':
-            self.conv1 = GCNConv(num_features_in + emb_dim, 32)
-            self.conv2 = GCNConv(32, 32)
-        elif graph_conv == 'gat':
-            self.conv1 = GATConv(num_features_in + emb_dim, 32)
-            self.conv2 = GATConv(32, 32)
-        self.fc = nn.Linear(32, num_features_out)
-        if MAT:
-          self.fc_morans = nn.Linear(32, num_features_out)
-        self.length_scale = nn.Parameter(torch.tensor(1.0), requires_grad=True)
+#         h1 = F.relu(self.conv1(x, edge_index, edge_weight))
+#         h1 = F.dropout(h1, training=self.training)
+#         h2 = F.relu(self.conv2(h1, edge_index, edge_weight))
+#         h2 = F.dropout(h2, training=self.training)
+#         output = self.fc(h2)
+#         if self.MAT:
+#           morans_output = self.fc_morans(h2)
+#           return output, morans_output
+#         else:
+#           return output
 
-    def forward(self, x, c, ei, ew):
-        """
-        x has shape [batch, features]
-        c has shape [batch, 2] where 2 is the number of spatial coordinates (lon/lat)
-        """
-        x = x.float()
-        c = c.float()
-        if torch.is_tensor(ei) & torch.is_tensor(ew):
-          edge_index = ei
-          edge_weight = ew
-        else:
-          edge_index = knn_graph(c, k=self.k).to(self.device)
-          edge_weight = makeEdgeWeight(c, edge_index).to(self.device)
-          edge_weight = torch.exp(-1.0 * edge_weight / self.length_scale)
-        #   if self.graph_conv == 'gat':
-        #      edge_weight = edge_weight.unsqueeze(1)  # GAT expects 'edge_features' of shape [num_edges, num_feats]
-        #      print(edge_weight.shape)
-        c = c.reshape(1, c.shape[0], c.shape[1])
-        emb = self.spenc(c.detach().cpu().numpy())
-        emb = emb.reshape(emb.shape[1],emb.shape[2])
-        emb = self.dec(emb).float()
-        x = torch.cat((x,emb),dim=1)
+# class PEGCN(nn.Module):
+#     """
+#         GCN with positional encoder and auxiliary tasks
+#     """
+#     def __init__(self, num_features_in=3, num_features_out=1, emb_hidden_dim=128, emb_dim=16, k=20, graph_conv='gcn', MAT=False):
+#         super(PEGCN, self).__init__()
+#         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#         self.emb_hidden_dim = emb_hidden_dim
+#         self.emb_dim = emb_dim
+#         self.k = k
+#         self.MAT = MAT
+#         self.spenc = GridCellSpatialRelationEncoder(spa_embed_dim=emb_hidden_dim,ffn=True,min_radius=1e-06,max_radius=360)
+#         self.dec = nn.Sequential(
+#             nn.Linear(emb_hidden_dim, emb_hidden_dim // 2),
+#             nn.Tanh(),
+#             nn.Linear(emb_hidden_dim // 2, emb_hidden_dim // 4),
+#             nn.Tanh(),
+#             nn.Linear(emb_hidden_dim // 4, emb_dim)
+#         )
+#         self.graph_conv = graph_conv
+#         if graph_conv == 'gcn':
+#             self.conv1 = GCNConv(num_features_in + emb_dim, 32)
+#             self.conv2 = GCNConv(32, 32)
+#         elif graph_conv == 'gat':
+#             self.conv1 = GATConv(num_features_in + emb_dim, 32)
+#             self.conv2 = GATConv(32, 32)
+#         self.fc = nn.Linear(32, num_features_out)
+#         if MAT:
+#           self.fc_morans = nn.Linear(32, num_features_out)
+#         self.length_scale = nn.Parameter(torch.tensor(1.0), requires_grad=True)
 
-        h1 = F.relu(self.conv1(x, edge_index, edge_weight))
-        h1 = F.dropout(h1, training=self.training)
-        h2 = F.relu(self.conv2(h1, edge_index, edge_weight))
-        h2 = F.dropout(h2, training=self.training)
-        output = self.fc(h2)
-        if self.MAT:
-          morans_output = self.fc_morans(h2)
-          return output, morans_output
-        else:
-          return output
+#     def forward(self, x, c, ei, ew):
+#         """
+#         x has shape [batch, features]
+#         c has shape [batch, 2] where 2 is the number of spatial coordinates (lon/lat)
+#         """
+#         x = x.float()
+#         c = c.float()
+#         if torch.is_tensor(ei) & torch.is_tensor(ew):
+#           edge_index = ei
+#           edge_weight = ew
+#         else:
+#           edge_index = knn_graph(c, k=self.k).to(self.device)
+#           edge_weight = makeEdgeWeight(c, edge_index).to(self.device)
+#           edge_weight = torch.exp(-1.0 * edge_weight / self.length_scale)
+#         #   if self.graph_conv == 'gat':
+#         #      edge_weight = edge_weight.unsqueeze(1)  # GAT expects 'edge_features' of shape [num_edges, num_feats]
+#         #      print(edge_weight.shape)
+#         c = c.reshape(1, c.shape[0], c.shape[1])
+#         emb = self.spenc(c.detach().cpu().numpy())
+#         emb = emb.reshape(emb.shape[1],emb.shape[2])
+#         emb = self.dec(emb).float()
+#         x = torch.cat((x,emb),dim=1)
 
-
-class SpatialSmoother(nn.Module):
-    """
-        Simple Spatial Smoothing operation
-    """
-    def __init__(self, num_features=3, k=20):
-        super(SpatialSmoother, self).__init__()
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.k = k
-        self.smoother = SimpleConv(aggr="sum", combine_root="self_loop")
-        self.length_scale = nn.Parameter(torch.tensor(1.0), requires_grad=True)
-
-    def forward(self, x, c, ei, ew):
-        """
-        x has shape [batch, features]
-        c has shape [batch, 2] where 2 is the number of spatial coordinates (lon/lat)
-        If ei (edge_index) and ew (edge_weight) are passed, they should include self-loops.
-        ei should be shape [2, num_edges] and ew should be shape [num_edges]
-        """
-        x = x.float()
-        c = c.float()
-        if torch.is_tensor(ei) & torch.is_tensor(ew):
-            edge_index = ei
-            edge_weight = ew
-        else:
-            edge_index = knn_graph(c, k=self.k).to(self.device)
-            edge_weight = makeEdgeWeight(c, edge_index).to(self.device)
-            edge_weight = torch.exp(-1.0 * (edge_weight**2) / (2*(self.length_scale**2)))
-
-        # Debug - old stuff
-        # adj = to_dense_adj(edge_index, batch=None, edge_attr=edge_weight).squeeze(0) + torch.eye(x.shape[0], device=self.device)  # [batch, batch]
-        # col_sums = adj.sum(dim=0).reshape((-1, 1))  #keepdim=True)  #.reshape((-1, 1))  # [batch, 1]
-        # # print("Adj shape", adj.shape, adj)
-        # print("Shapes", adj.shape, x.shape, c.shape, edge_index.shape, edge_weight.shape)
-        # print("In to node 0", adj[:, 0], "Out", adj[0, :])
-        # print("Node 0: indegree", adj[:, 0].sum(), "outdegree", adj[0, :].sum(), "Colsum", col_sums[0])
-        # print('===================')
-        # print("Edges to node 0")
-        # for e_idx in range(edge_index.shape[1]):
-        #     start, end = edge_index[0, e_idx].item(), edge_index[1, e_idx].item()
-        #     if end == 0:
-        #         print("From node", start, "weight", edge_weight[e_idx], "Values", x[start, :], "Coords", c[start, :])
-
-        # We want to compute an actual weighted average, so compute the SUM
-        # # of weights leading to each node.
-        in_sums = sumIncomingWeights(x.shape[0], edge_index, edge_weight) + 1  # add weight-1 self-loop
-
-        # Compute the weighted average of node value + neighbor values
-        output = self.smoother(x, edge_index, edge_weight)  # [batch, num_params]
-        output = output / in_sums
-        # print("Smoothed value at node 0", output.shape, output[0, :])
-        return output
+#         h1 = F.relu(self.conv1(x, edge_index, edge_weight))
+#         h1 = F.dropout(h1, training=self.training)
+#         h2 = F.relu(self.conv2(h1, edge_index, edge_weight))
+#         h2 = F.dropout(h2, training=self.training)
+#         output = self.fc(h2)
+#         if self.MAT:
+#           morans_output = self.fc_morans(h2)
+#           return output, morans_output
+#         else:
+#           return output
 
 
-class LossWrapper(nn.Module):
-    def __init__(self, model, task_num=1, loss='mse', uw=True, lamb=0.5, k=20, batch_size=2048):
-        super(LossWrapper, self).__init__()
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model = model
-        self.task_num = task_num
-        self.uw = uw
-        self.lamb = lamb
-        self.k = k
-        self.batch_size = batch_size
-        if task_num > 1:
-          self.log_vars = nn.Parameter(torch.zeros((task_num)))
-        if loss=="mse":
-          self.criterion = nn.MSELoss()
-        elif loss=="l1":
-          self.criterion = nn.L1Loss()
+# class SpatialSmoother(nn.Module):
+#     """
+#         Simple Spatial Smoothing operation
+#     """
+#     def __init__(self, num_features=3, k=20):
+#         super(SpatialSmoother, self).__init__()
+#         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#         self.k = k
+#         self.smoother = SimpleConv(aggr="sum", combine_root="self_loop")
+#         self.length_scale = nn.Parameter(torch.tensor(1.0), requires_grad=True)
 
-    def forward(self, input, targets, coords, edge_index, edge_weight, morans_input):
+#     def forward(self, x, c, ei, ew):
+#         """
+#         x has shape [batch, features]
+#         c has shape [batch, 2] where 2 is the number of spatial coordinates (lon/lat)
+#         If ei (edge_index) and ew (edge_weight) are passed, they should include self-loops.
+#         ei should be shape [2, num_edges] and ew should be shape [num_edges]
+#         """
+#         x = x.float()
+#         c = c.float()
+#         if torch.is_tensor(ei) & torch.is_tensor(ew):
+#             edge_index = ei
+#             edge_weight = ew
+#         else:
+#             edge_index = knn_graph(c, k=self.k).to(self.device)
+#             edge_weight = makeEdgeWeight(c, edge_index).to(self.device)
+#             edge_weight = torch.exp(-1.0 * (edge_weight**2) / (2*(self.length_scale**2)))
 
-        if self.task_num==1:
-          outputs = self.model(input, coords, edge_index, edge_weight)
-          loss = self.criterion(targets.float().reshape(-1),outputs.float().reshape(-1))
-          return loss
+#         # Debug - old stuff
+#         # adj = to_dense_adj(edge_index, batch=None, edge_attr=edge_weight).squeeze(0) + torch.eye(x.shape[0], device=self.device)  # [batch, batch]
+#         # col_sums = adj.sum(dim=0).reshape((-1, 1))  #keepdim=True)  #.reshape((-1, 1))  # [batch, 1]
+#         # # print("Adj shape", adj.shape, adj)
+#         # print("Shapes", adj.shape, x.shape, c.shape, edge_index.shape, edge_weight.shape)
+#         # print("In to node 0", adj[:, 0], "Out", adj[0, :])
+#         # print("Node 0: indegree", adj[:, 0].sum(), "outdegree", adj[0, :].sum(), "Colsum", col_sums[0])
+#         # print('===================')
+#         # print("Edges to node 0")
+#         # for e_idx in range(edge_index.shape[1]):
+#         #     start, end = edge_index[0, e_idx].item(), edge_index[1, e_idx].item()
+#         #     if end == 0:
+#         #         print("From node", start, "weight", edge_weight[e_idx], "Values", x[start, :], "Coords", c[start, :])
 
-        else:
-          outputs1, outputs2 = self.model(input, coords, edge_index, edge_weight)
-          if torch.is_tensor(morans_input):
-            targets2 = morans_input
-          else:
-            moran_weight_matrix = knn_to_adj(knn_graph(coords, k=self.k), self.batch_size)
-            with torch.enable_grad():
-              targets2 = lw_tensor_local_moran(targets, sparse.csr_matrix(moran_weight_matrix)).to(self.device)
-          if self.uw:
-            precision1 = 0.5 * torch.exp(-self.log_vars[0])
-            loss1 = self.criterion(targets.float().reshape(-1),outputs1.float().reshape(-1))
-            loss1 = torch.sum(precision1 * loss1 + self.log_vars[0], -1)
+#         # We want to compute an actual weighted average, so compute the SUM
+#         # # of weights leading to each node.
+#         in_sums = sumIncomingWeights(x.shape[0], edge_index, edge_weight) + 1  # add weight-1 self-loop
 
-            precision2 = 0.5 * torch.exp(-self.log_vars[1])
-            loss2 = self.criterion(targets2.float().reshape(-1),outputs2.float().reshape(-1))
-            loss2 = torch.sum(precision2 * loss2 + self.log_vars[1], -1)
+#         # Compute the weighted average of node value + neighbor values
+#         output = self.smoother(x, edge_index, edge_weight)  # [batch, num_params]
+#         output = output / in_sums
+#         # print("Smoothed value at node 0", output.shape, output[0, :])
+#         return output
 
-            loss = loss1 + loss2
-            loss = torch.mean(loss)
-            return loss, self.log_vars.data.tolist()
-          else:
-            loss1 = self.criterion(targets.float().reshape(-1),outputs1.float().reshape(-1))
-            loss2 = self.criterion(targets2.float().reshape(-1),outputs2.float().reshape(-1))
-            loss = loss1 + self.lamb * loss2
-            return loss        
+
+# class LossWrapper(nn.Module):
+#     def __init__(self, model, task_num=1, loss='mse', uw=True, lamb=0.5, k=20, batch_size=2048):
+#         super(LossWrapper, self).__init__()
+#         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#         self.model = model
+#         self.task_num = task_num
+#         self.uw = uw
+#         self.lamb = lamb
+#         self.k = k
+#         self.batch_size = batch_size
+#         if task_num > 1:
+#           self.log_vars = nn.Parameter(torch.zeros((task_num)))
+#         if loss=="mse":
+#           self.criterion = nn.MSELoss()
+#         elif loss=="l1":
+#           self.criterion = nn.L1Loss()
+
+#     def forward(self, input, targets, coords, edge_index, edge_weight, morans_input):
+
+#         if self.task_num==1:
+#           outputs = self.model(input, coords, edge_index, edge_weight)
+#           loss = self.criterion(targets.float().reshape(-1),outputs.float().reshape(-1))
+#           return loss
+
+#         else:
+#           outputs1, outputs2 = self.model(input, coords, edge_index, edge_weight)
+#           if torch.is_tensor(morans_input):
+#             targets2 = morans_input
+#           else:
+#             moran_weight_matrix = knn_to_adj(knn_graph(coords, k=self.k), self.batch_size)
+#             with torch.enable_grad():
+#               targets2 = lw_tensor_local_moran(targets, sparse.csr_matrix(moran_weight_matrix)).to(self.device)
+#           if self.uw:
+#             precision1 = 0.5 * torch.exp(-self.log_vars[0])
+#             loss1 = self.criterion(targets.float().reshape(-1),outputs1.float().reshape(-1))
+#             loss1 = torch.sum(precision1 * loss1 + self.log_vars[0], -1)
+
+#             precision2 = 0.5 * torch.exp(-self.log_vars[1])
+#             loss2 = self.criterion(targets2.float().reshape(-1),outputs2.float().reshape(-1))
+#             loss2 = torch.sum(precision2 * loss2 + self.log_vars[1], -1)
+
+#             loss = loss1 + loss2
+#             loss = torch.mean(loss)
+#             return loss, self.log_vars.data.tolist()
+#           else:
+#             loss1 = self.criterion(targets.float().reshape(-1),outputs1.float().reshape(-1))
+#             loss2 = self.criterion(targets2.float().reshape(-1),outputs2.float().reshape(-1))
+#             loss = loss1 + self.lamb * loss2
+#             return loss        

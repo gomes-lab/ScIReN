@@ -2,7 +2,7 @@ import collections
 import torch
 import torch.nn
 import numpy as np
-from mlp import GNN_BINN, Spatial_BINN, mlp_wrapper, nn_only, BINN_Hybrid
+from mlp import mlp_wrapper, nn_only
 
 
 @torch.no_grad()
@@ -77,53 +77,6 @@ def zero_gradients(x):
 	elif isinstance(x, collections.abc.Iterable):
 		for elem in x:
 			zero_gradients(elem)
-
-def _find_z(new_input, batch_y, batch_z, model, criterion, h):
-	'''
-	Finding the direction in the regularizer
-	'''
-	batch_x.requires_grad_()
-	outputs, h5, new_input = model.eval().partial(batch_x, batch_z, whether_predict=0, return_input=True)
-	loss_z = criterion(outputs, batch_y)
-	loss_z.backward(torch.ones(batch_y.shape).to(batch_y.device))
-	grad = new_input.grad.data + 0.0
-	norm_grad = grad.norm().item()
-	z = torch.sign(grad).detach() + 0.
-	z = 1.*(h) * (z+1e-7) / (z.reshape(z.size(0), -1).norm(dim=1)[:, None, None, None]+1e-7)
-	zero_gradients(new_input)
-	model.zero_grad()
-
-	return z, norm_grad, new_input
-
-
-# def regularizer(batch_x, batch_y, batch_z, model, criterion, h = 3.):
-# 	'''
-# 	ARCHIVED. For now, instead of using gradient of loss w.r.t. input, use gradient of params w.r.t. input.
-# 	Regularizer term in CURE
-
-# 	Returns both curvature loss
-# 	'''
-# 	with torch.no_grad():
-# 		outputs, h5, new_input = model.eval()(batch_x, batch_z, whether_predict=0, return_input=True)
-
-# 	# z is a direction of high curvature (pointing in similar direction to the gradient)
-# 	z, norm_grad, new_input = _find_z(batch_x, batch_y, batch_z, model, criterion, h)
-
-# 	new_input.requires_grad_()
-
-# 	# Compute
-# 	outputs_pos, _ = model.eval().partial_forward(new_input + z)
-# 	outputs_orig, _ = model.eval().partial_forward(new_input)
-# 	loss_pos = criterion(outputs_pos, batch_y)
-# 	loss_orig = criterion(outputs_orig, batch_y)
-# 	grad_diff = torch.autograd.grad((loss_pos-loss_orig), new_input,
-# 									 grad_outputs=torch.ones(batch_y.shape).to(batch_y.device),
-# 									 create_graph=True)[0]
-# 	reg = grad_diff.reshape(grad_diff.size(0), -1).norm(dim=1)
-# 	model.zero_grad()
-
-# 	return torch.sum(reg) / float(new_input.size(0)), norm_grad
-
 
 
 def select_depth(tensor_simu, tensor_frocing_steady_state, tensor_obs_layer_depth):
@@ -280,7 +233,6 @@ def get_model(args, var4nn, var_idx_to_emb, device, para_index, train_x, train_y
 						"dropout_prob": args.dropout_prob,
 						"activation": args.activation,
 						"param_constraint": args.param_constraint,  
-						"losses": args.losses,
 						"device": device,
 						"min_temp": args.min_temp,
 						"max_temp": args.max_temp,
@@ -289,31 +241,12 @@ def get_model(args, var4nn, var_idx_to_emb, device, para_index, train_x, train_y
 						"num_layers": args.num_layers,
 						"residual": args.residual,
 						"para_index": para_index,
-						"feature_dropout": args.feature_dropout,
 						"kan_grid": args.kan_grid,
 						"kan_grid_margin": args.kan_grid_margin,
 						"kan_noise": args.kan_noise,
 						"kan_base_fun": args.kan_base_fun,
 						"kan_affine_trainable": args.kan_affine_trainable,
-						"kan_drop_rate": args.kan_drop_rate,
-						"kan_drop_mode": args.kan_drop_mode,
-						"kan_drop_scale": args.kan_drop_scale,
 						"kan_absolute_deviation": args.kan_absolute_deviation}
-
-	elif args.model == 'binn_hybrid':
-		model_class = BINN_Hybrid
-		model_kwargs = {"input_vars": len(var4nn),
-						"var_idx_to_emb": var_idx_to_emb,
-						"vertical_mixing": args.vertical_mixing,
-						"pos_enc": args.pos_enc,
-						"base_model": "new_mlp",
-						"one_hot": (args.categorical == "one_hot"),
-						"use_bn": args.use_bn,
-						"dropout_prob": args.dropout_prob,
-						"activation": args.activation,
-						"param_constraint": args.param_constraint,
-						"losses": args.losses,
-						"device": device}
 
 	elif args.model == 'nn_only':
 		model_class = nn_only
@@ -336,8 +269,6 @@ def get_model(args, var4nn, var_idx_to_emb, device, para_index, train_x, train_y
 						"use_bn": args.use_bn,
 						"dropout_prob": args.dropout_prob,
 						"activation": args.activation,
-						"losses": args.losses,
-						"device": device,
 						"output_mean": output_mean,
 						"output_std": output_std,
 						"init": args.init,
@@ -345,35 +276,6 @@ def get_model(args, var4nn, var_idx_to_emb, device, para_index, train_x, train_y
 						"num_layers": args.num_layers,
 						"residual": args.residual}
 
-	elif args.model == 'gnn':
-		model_class = GNN_BINN
-		model_kwargs = {"input_vars": len(var4nn),
-						"var_idx_to_emb": var_idx_to_emb,
-						"vertical_mixing": args.vertical_mixing,
-						"pos_enc": args.pos_enc,
-						"k": args.k,
-						"one_hot": (args.categorical == "one_hot"),
-						"use_bn": args.use_bn,
-						"dropout_prob": args.dropout_prob,
-						"activation": args.activation,
-						"param_constraint": args.param_constraint,
-						"losses": args.losses,
-						"graph_conv": args.graph_conv,
-						"device": device}
-	elif args.model == 'spatial':
-		model_class = Spatial_BINN
-		model_kwargs = {"input_vars": len(var4nn),
-						"var_idx_to_emb": var_idx_to_emb,
-						"vertical_mixing": args.vertical_mixing,
-						"pos_enc": args.pos_enc,
-						"k": args.k,
-						"one_hot": (args.categorical == "one_hot"),
-						"use_bn": args.use_bn,
-						"dropout_prob": args.dropout_prob,
-						"activation": args.activation,
-						"param_constraint": args.param_constraint,
-						"losses": args.losses,
-						"device": device}
 	else:
 		raise ValueError("Invalid args.model")
 

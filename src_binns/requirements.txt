@@ -137,7 +137,7 @@ pycparser==2.22
 pydantic==2.11.3
 pydantic_core==2.33.1
 Pygments==2.19.1
--e git+ssh://git@github.com/joshuafan/pykan.git@be2108d4f4b298761944859714b86914fe6e67dd#egg=pykan
+-e file:./pykan
 pyogrio==0.10.0
 pyparsing==3.2.1
 pyproj==3.7.1
@@ -147,7 +147,7 @@ pytorch-lightning==2.5.1
 pytz==2025.1
 PyYAML==6.0.2
 pyzmq==26.4.0
--e git+ssh://git@github.com/joshuafan/q10hybrid.git@8478ed46159f42b45947dac1a136a4f07d7cd4ef#egg=q10hybrid
+-e file:./q10hybrid
 referencing==0.36.2
 regex==2024.11.6
 requests==2.32.3
@@ -185,7 +185,6 @@ tinycss2==1.4.0
 tokenizers==0.21.1
 tomli==2.2.1
 torch==2.2.2
-torch-geometric==2.6.1
 torchmetrics==1.7.1
 tornado==6.4.2
 tqdm==4.66.2

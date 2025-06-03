@@ -6,8 +6,8 @@
 # (To run on CPU, remove the --gpus line and set --num_CPU to the number of CPUs.)
 # Output will appear in a file 'slurm-N.out' where N is the job ID.
 
-# Request the regular partition (CPU only)
-#SBATCH -p regular
+# Request the full partition (CPU only)
+#SBATCH -p full
 #SBATCH --exclude=c0020,c0002
 
 # Name the job so it's meaningful in the job list
@@ -15,7 +15,7 @@
 # Request 4 GPUs 
 # #SBATCH --gpus 4
 # Request 4 CPU cores (8 hyperthreads).
-#SBATCH -c 8
+#SBATCH -c 1
 # Specify the resources should be assigned to a single task on one node.
 #SBATCH -N 1 -n 1
 # Request a total of 80GB RAM
@@ -24,7 +24,6 @@
 #SBATCH -t 72:00:00
 
 # Activate environment (virtualenv version)
-cd /mnt/beegfs/bulk/mirror/jyf6/datasets/BINNS/src_binns
 source .venv/bin/activate
 
 
@@ -38,7 +37,7 @@ do
             do
                 for FOLD in 1 2 3 4 5
                 do
-                    if [ $FOLD -eq 1 -a $LR = 1e-4 ]; then
+                    if [ $FOLD -eq 1 ]; then
                         PLOT_STR="--plot"
                     else
                         PLOT_STR=""
@@ -51,7 +50,7 @@ do
                         --model new_mlp --num_layers 3 --residual --activation leaky_relu --use_bn \
                         --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0 \
                         --losses smooth_l1 param_reg --lambdas 1 $PREG --param_constraint sigmoid \
-                        --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "3B_SYNTHETIC_BLACKBOXHYBRID"
+                        --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "3B_SYNTHETIC_BLACKBOXHYBRID" $PLOT_STR
                 done
             done
         done
