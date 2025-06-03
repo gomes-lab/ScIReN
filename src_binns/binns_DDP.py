@@ -196,7 +196,12 @@ def set_seeds(seed):
 	if torch.cuda.is_available():
 		torch.cuda.manual_seed(seed)
 	torch.backends.cudnn.deterministic = True
-	torch.backends.cudnn.benchmark = True
+
+	# Below two lines help reproducibility but may harm performance
+	# https://docs.pytorch.org/docs/stable/notes/randomness.html
+	torch.backends.cudnn.benchmark = False
+	torch.use_deterministic_algorithms(True)
+
 
 # Set seeds for reproducibility
 set_seeds(args.seed)
