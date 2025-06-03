@@ -24,6 +24,7 @@ import visualization_utils
 # Set HDF5_DISABLE_VERSION_CHECK to suppress version mismatch error
 import os
 os.environ['HDF5_DISABLE_VERSION_CHECK'] = '2'
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'  # Needed to run lstsq (in pykan/spline.py) deterministically
 
 from datetime import datetime, timedelta
 import pandas as pd
@@ -908,7 +909,7 @@ elif args.labels == "synthetic_function":
 		# Assume no categorical features for now.
 		import kan
 		true_kan = kan.KAN(width=[len(var4nn), len(para_index)], device="cpu",
-					  	   input_size=len(var4nn), base_fun="identity")
+						   input_size=len(var4nn), base_fun="identity", seed=args.data_seed)  # TODO This sets global pytorch/numpy seeds! Maybe it shouldn't
 		with torch.no_grad():
 
 			# Set act_fun[0].mask to 0 to completely ignore the spline/learnable portion and only 
