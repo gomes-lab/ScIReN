@@ -38,7 +38,6 @@ import numpy as np
 from scipy.interpolate import pchip_interpolate
 
 print("Start binns_DDP")
-print("Step-wise training at 100")
 
 # @joshuafan: previously we set default dtype to float64 to avoid underflow in process-based model.
 # Now checking float32 with fixed process-based model.
@@ -655,7 +654,18 @@ if args.features in ["all", "all_including_lonlat"]:
 	var4nn = GEOGRAPHY_VARS + CLIMATE_VARS + SOIL_TEXTURE_VARS + SOIL_CHEMICAL_VARS + VEGETATION_VARS
 elif args.features == "ten":
 	# Ten handcrafted features
-	var4nn = ["BIO1", "BIO12", "BIO3", "BIO15", \
+	# var4nn = ['BIO1', 'BIO2', 'BIO3', 'BIO4', 'BIO5', 'BIO6', 'BIO7', 'BIO8', 'BIO9', 'BIO10', 'BIO11', 'BIO12', 'BIO13', 'BIO14', 'BIO15', 'BIO16', 'BIO17', 'BIO18', 'BIO19', \
+	# 	'Clay_Content_0cm', 'Clay_Content_30cm', 'Clay_Content_100cm', \
+	# 	'Silt_Content_0cm', 'Silt_Content_30cm', 'Silt_Content_100cm',\
+	# 	'SWC_v_Wilting_Point_0cm', 'SWC_v_Wilting_Point_30cm', 'SWC_v_Wilting_Point_100cm', \
+	# 	'pH_Water_0cm', 'pH_Water_30cm', 'pH_Water_100cm', \
+	# 	'CEC_0cm', 'CEC_30cm', 'CEC_100cm',\
+	# 	'Coarse_Fragments_v_0cm', 'Coarse_Fragments_v_30cm', 'Coarse_Fragments_v_100cm', \
+	# 	# "cesm2_npp", "cesm2_vegc", \
+	# 	'Ald_avg', 'Alo_avg',\
+	# 	'Fed_avg', 'Feo_avg', \
+	# 	]
+	var4nn = ['BIO1', 'BIO2', 'BIO3', 'BIO4', 'BIO5', 'BIO6', 'BIO7', 'BIO8', 'BIO9', 'BIO10', 'BIO11', 'BIO12', 'BIO13', 'BIO14', 'BIO15', 'BIO16', 'BIO17', 'BIO18', 'BIO19', \
 		"Clay_Content_avg", "Sand_Content_avg", "Silt_Content_avg", \
 		"Bulk_Density_avg",\
 		"SWC_v_Wilting_Point_avg", "pH_Water_avg", "CEC_avg", \
@@ -664,7 +674,6 @@ elif args.features == "ten":
 		'Ald_avg', 'Alo_avg',\
 		'Fed_avg', 'Feo_avg', \
 		]
-
 else:
 	raise ValueError("Invalid features")
 
@@ -734,52 +743,32 @@ for v in var4nn:
 
 col_max_min = np.concatenate(all_col_max_mins, axis=0)  # shape [num_columns_new, 2]
 
-# Add average values for Ald, Alo, Fed, and Feo
-env_info["0.5_Feo_avg_Alo_avg"] = (env_info["Feo_avg"] / 2 + env_info["Alo_avg"])
-env_info["0.5_Fed_avg_Ald_avg"] = (env_info["Fed_avg"] / 2 + env_info["Ald_avg"])
-# Update the max/min for the new columns
-# Feo_avg and Alo_avg
-indices_Feo = env_info.columns.get_loc("Feo_avg")
-indices_Alo = env_info.columns.get_loc("Alo_avg")
-indices_Fed = env_info.columns.get_loc("Fed_avg")
-indices_Ald = env_info.columns.get_loc("Ald_avg")
-# Get new min by adding up the min of 0.5*Feo_avg and Alo_avg
-min_temp = 0.5*col_max_min[indices_Feo, 0] + col_max_min[indices_Alo, 0]
-max_temp = 0.5*col_max_min[indices_Feo, 1] + col_max_min[indices_Alo, 1]
-new_max_min = np.array([[min_temp, max_temp]]) 
-col_max_min = np.vstack((col_max_min, new_max_min))
-# env_info["0.5_Feo_avg_Alo_avg"] = (env_info["0.5_Feo_avg_Alo_avg"] - col_max_min[-1, 0])/(col_max_min[-1, 1] - col_max_min[-1, 0])
-# Fed_avg and Ald_avg
-min_temp = 0.5*col_max_min[indices_Fed, 0] + col_max_min[indices_Ald, 0]
-max_temp = 0.5*col_max_min[indices_Fed, 1] + col_max_min[indices_Ald, 1]
-new_max_min = np.array([[min_temp, max_temp]])
-col_max_min = np.vstack((col_max_min, new_max_min))
-# env_info["0.5_Fed_avg_Ald_avg"] = (env_info["0.5_Fed_avg_Ald_avg"] - col_max_min[-1, 0])/(col_max_min[-1, 1] - col_max_min[-1, 0])
-env_info["Clay_Silt_avg"] = (env_info["Clay_Content_avg"] + env_info["Silt_Content_avg"])
-indices_Clay = env_info.columns.get_loc("Clay_Content_avg")
-indices_Silt = env_info.columns.get_loc("Silt_Content_avg")
-# Get new min by adding up the min of Clay_Content_avg and Silt_Content_avg
-min_temp = col_max_min[indices_Clay, 0] + col_max_min[indices_Silt, 0]
-max_temp = col_max_min[indices_Clay, 1] + col_max_min[indices_Silt, 1]
-new_max_min = np.array([[min_temp, max_temp]])
-col_max_min = np.vstack((col_max_min, new_max_min))
-print("max/min for Clay_Silt_avg: ", col_max_min[-1, :])
 
 
 # Update var4nn to include the new columns
 if args.features == "ten":
     # Ten handcrafted features
-	var4nn = ["BIO1", "BIO12", "BIO3", "BIO15", \
-		# "Clay_Content_avg", "Sand_Content_avg","Silt_Content_avg", \
-		"Clay_Silt_avg",\
+	var4nn = ['BIO1', 'BIO2', 'BIO3', 'BIO4', 'BIO5', 'BIO6', 'BIO7', 'BIO8', 'BIO9', 'BIO10', 'BIO11', 'BIO12', 'BIO13', 'BIO14', 'BIO15', 'BIO16', 'BIO17', 'BIO18', 'BIO19', \
+		'Clay_Content_0cm', 'Clay_Content_30cm', 'Clay_Content_100cm', \
+		'Silt_Content_0cm', 'Silt_Content_30cm', 'Silt_Content_100cm',\
+		'SWC_v_Wilting_Point_0cm', 'SWC_v_Wilting_Point_30cm', 'SWC_v_Wilting_Point_100cm', \
+		'pH_Water_0cm', 'pH_Water_30cm', 'pH_Water_100cm', \
+		'CEC_0cm', 'CEC_30cm', 'CEC_100cm',\
+		'Coarse_Fragments_v_0cm', 'Coarse_Fragments_v_30cm', 'Coarse_Fragments_v_100cm', \
+		# "cesm2_npp", "cesm2_vegc", \
+		# 'Ald_avg', 'Alo_avg',\
+		# 'Fed_avg', 'Feo_avg', \
+		]
+	
+	var4nn = ['BIO1', 'BIO2', 'BIO3', 'BIO4', 'BIO5', 'BIO6', 'BIO7', 'BIO8', 'BIO9', 'BIO10', 'BIO11', 'BIO12', 'BIO13', 'BIO14', 'BIO15', 'BIO16', 'BIO17', 'BIO18', 'BIO19', \
+		"Clay_Content_avg", "Sand_Content_avg", "Silt_Content_avg", \
 		"Bulk_Density_avg",\
 		"SWC_v_Wilting_Point_avg", "pH_Water_avg", "CEC_avg", \
 		"Coarse_Fragments_avg", \
 		# "cesm2_npp", "cesm2_vegc", \
-		# '0.5_Feo_avg_Alo_avg', \
-		# '0.5_Fed_avg_Ald_avg', \
+		# 'Ald_avg', 'Alo_avg',\
+		# 'Fed_avg', 'Feo_avg', \
 		]
-	
 
 print("Size of col_max_min: ", col_max_min.shape)
 # Scale numeric features to [0, 1] based on precomputed min/max 
@@ -1111,206 +1100,6 @@ print("Shape of test data", test_x.shape)
 
 print(datetime.now(), '------------nn data prepared------------')
 
-#---------------------------------------------------
-# Grid env info for prediction
-#---------------------------------------------------
-# load grid env info
-grid_env_info = np.genfromtxt(data_dir_input + 'wosis_2019_snap_shot/env_info_grid_with_Al_Fe.csv', delimiter = ',', skip_header = 1)
-original_lons_grid = grid_env_info[:, 0].copy()
-original_lats_grid = grid_env_info[:, 1].copy()
-
-# column names
-# environmental info of global grids 
-# Difference: does not include first 3 columns 'ProfileNum', 'ProfileID', 'LayerNum' and the last column 'R_Squared'
-# Therefore, we choose to use the original categorical column names 
-grid_env_info_names = [\
-	'Lon', 'Lat', 'Date', \
-	'Rmean', 'Rmax', 'Rmin', \
-	'ESA_Land_Cover', \
-	'ET', \
-	'IGBP', 'Climate', 'Soil_Type', 'NPPmean', 'NPPmax', 'NPPmin', \
-	'Veg_Cover', \
-	'BIO1', 'BIO2', 'BIO3', 'BIO4', 'BIO5', 'BIO6', 'BIO7', 'BIO8', 'BIO9', 'BIO10', 'BIO11', 'BIO12', 'BIO13', 'BIO14', 'BIO15', 'BIO16', 'BIO17', 'BIO18', 'BIO19', \
-	'Abs_Depth_to_Bedrock', \
-	'Bulk_Density_0cm', 'Bulk_Density_30cm', 'Bulk_Density_100cm',\
-	'CEC_0cm', 'CEC_30cm', 'CEC_100cm', \
-	'Clay_Content_0cm', 'Clay_Content_30cm', 'Clay_Content_100cm', \
-	'Coarse_Fragments_v_0cm', 'Coarse_Fragments_v_30cm', 'Coarse_Fragments_v_100cm', \
-	'Depth_Bedrock_R', \
-	'Garde_Acid', \
-	'Occurrence_R_Horizon', \
-	'pH_Water_0cm', 'pH_Water_30cm', 'pH_Water_100cm', \
-	'Sand_Content_0cm', 'Sand_Content_30cm', 'Sand_Content_100cm', \
-	'Silt_Content_0cm', 'Silt_Content_30cm', 'Silt_Content_100cm', \
-	'SWC_v_Wilting_Point_0cm', 'SWC_v_Wilting_Point_30cm', 'SWC_v_Wilting_Point_100cm', \
-	'Texture_USDA_0cm', 'Texture_USDA_30cm', 'Texture_USDA_100cm', \
-	'USDA_Suborder', \
-	'WRB_Subgroup', \
-	'Drought', \
-	'Elevation', \
-	'Max_Depth', \
-	'Koppen_Climate_2018', \
-	'cesm2_npp', 'cesm2_npp_std', \
-	'cesm2_gpp', 'cesm2_gpp_std', \
-	'cesm2_vegc', \
-	'nbedrock', \
-	'Ald_0_20',	'Ald_20_40', 'Ald_40_60', 'Ald_60_80', 'Ald_80_100', 'Alo_0_20', 'Alo_20_40', 'Alo_40_60', 'Alo_60_80', 'Alo_80_100',\
-	'Fed_0_20', 'Fed_20_40', 'Fed_40_60', 'Fed_60_80', 'Fed_80_100', 'Feo_0_20', 'Feo_20_40', 'Feo_40_60', 'Feo_60_80', 'Feo_80_100'
-]
-
-grid_env_info = df(grid_env_info)
-grid_env_info.columns = grid_env_info_names
-
-# Remove the first 3 columns and the R_squared column from the col_max_min matrix
-col_max_min_grid = np.delete(col_max_min, env_info_names.index("R_Squared"), axis=0)[3:, :]
-
-# Logic to add columns for "average" variables (e.g. average over layers)
-var4nn = ["BIO1", "BIO12", "BIO3", "BIO15", \
-	"Clay_Content_avg", "Sand_Content_avg","Silt_Content_avg", \
-	"Bulk_Density_avg",\
-	"SWC_v_Wilting_Point_avg", "pH_Water_avg", "CEC_avg", \
-	"Coarse_Fragments_avg", \
-	#"cesm2_npp", "cesm2_vegc", \
-	'Ald_avg', 'Alo_avg',\
-	'Fed_avg', 'Feo_avg', \
-	]
-
-for v in var4nn:
-	if v not in env_info_names:
-		var_prefix = v.split("_avg")[0]
-		columns = grid_env_info.filter(regex=(f"{var_prefix}*"))
-		grid_env_info[v] = columns.mean(axis=1)
-
-grid_env_info["0.5_Feo_avg_Alo_avg"] = (grid_env_info["Feo_avg"] / 2 + grid_env_info["Alo_avg"])
-grid_env_info["0.5_Fed_avg_Ald_avg"] = (grid_env_info["Fed_avg"] / 2 + grid_env_info["Ald_avg"])
-grid_env_info["Clay_Silt_avg"] = (grid_env_info["Clay_Content_avg"] + grid_env_info["Silt_Content_avg"])
-
-var4nn = ["BIO1", "BIO12", "BIO3", "BIO15", \
-	# "Clay_Content_avg", "Sand_Content_avg","Silt_Content_avg", \
-	"Clay_Silt_avg",\
-	"Bulk_Density_avg",\
-	"SWC_v_Wilting_Point_avg", "pH_Water_avg", "CEC_avg", \
-	"Coarse_Fragments_avg", \
-	# "cesm2_npp", "cesm2_vegc", \
-	# '0.5_Feo_avg_Alo_avg', \
-	# '0.5_Fed_avg_Ald_avg', \
-	]
-# Normalize grid env info
-for ivar in np.arange(0, len(col_max_min_grid[:, 0])):
-	if np.isnan(col_max_min_grid[ivar, :]).any():
-		pass
-	else:
-		grid_env_info.iloc[:, ivar] = (grid_env_info.iloc[:, ivar] - col_max_min_grid[ivar, 0])/(col_max_min_grid[ivar, 1] - col_max_min_grid[ivar, 0])
-		grid_env_info.iloc[(grid_env_info.iloc[:, ivar] > 1), ivar] = 1
-		grid_env_info.iloc[(grid_env_info.iloc[:, ivar] < 0), ivar] = 0
-
-
-# Only keep the variables used in training the NN
-grid_env_info = grid_env_info[var4nn]
-grid_env_info["original_lon"] = original_lons_grid
-grid_env_info["original_lat"] = original_lats_grid
-
-
-grid_env_info_US = grid_env_info.copy()
-grid_env_info_num = grid_env_info_US.shape[0]
-
-# Check the max value of categorical variables, if it is larger than the number of categories, then remove the row
-for group in categorical_vars:
-	if group[0] not in var4nn:
-		continue
-	mask = grid_env_info_US[group].apply(lambda x: (x > np.max(env_info[group])).any(), axis=1)
-	indices_to_remove = grid_env_info_US[mask].index
-	grid_env_info_US = grid_env_info_US.drop(indices_to_remove)
-grid_env_info_num = grid_env_info_US.shape[0]
-
-# Include forcing data for the grid env info
-# Initialize the forcing data for the grid env info to nan and then fill in the values row by row
-forcing_var = ['Input_CWD', 'Input_Litter1', 'Input_Litter2', 
-			   'Input_Litter3', 'Altmax_Last_Year', 'Altmax_Current', 
-			   'Nbedrock', 'Xio', 'Xin', 'Sand_Content', 'Soil_Temperature', 
-			   'Soil_Water']
-
-model_force_pred_input_vector_cwd = np.ones([grid_env_info_num, month_num])*np.nan
-model_force_pred_input_vector_litter1 = np.ones([grid_env_info_num, month_num])*np.nan
-model_force_pred_input_vector_litter2 = np.ones([grid_env_info_num, month_num])*np.nan
-model_force_pred_input_vector_litter3 = np.ones([grid_env_info_num, month_num])*np.nan
-model_force_pred_altmax_lastyear_profile = np.ones([grid_env_info_num, month_num])*np.nan
-model_force_pred_altmax_current_profile = np.ones([grid_env_info_num, month_num])*np.nan
-model_force_pred_nbedrock = np.ones([grid_env_info_num, month_num])*np.nan
-model_force_pred_xio = np.ones([grid_env_info_num, soil_decom_num, month_num])*np.nan
-model_force_pred_xin = np.ones([grid_env_info_num, soil_decom_num, month_num])*np.nan
-model_force_pred_sand_vector = np.ones([grid_env_info_num, soil_decom_num, month_num])*np.nan
-model_force_pred_soil_temp_profile = np.ones([grid_env_info_num, soil_decom_num, month_num])*np.nan
-model_force_pred_soil_water_profile = np.ones([grid_env_info_num, soil_decom_num, month_num])*np.nan
-
-# Fill in the forcing data
-for irow in np.arange(0, grid_env_info_num):
-	lat_loc = np.where(abs(grid_env_info_US.iloc[irow, :]["original_lat"] - lat_grid) == min(abs(grid_env_info_US.iloc[irow, :]["original_lat"] - lat_grid)))[0][0]
-	lon_loc = np.where(abs(grid_env_info_US.iloc[irow, :]["original_lon"] - lon_grid) == min(abs(grid_env_info_US.iloc[irow, :]["original_lon"] - lon_grid)))[0][0]
-	model_force_pred_input_vector_cwd[irow, :] = cesm2_simu_input_sum_cwd[lat_loc, lon_loc, :]
-	model_force_pred_input_vector_litter1[irow, :] = cesm2_simu_input_sum_litter1[lat_loc, lon_loc, :]
-	model_force_pred_input_vector_litter2[irow, :] = cesm2_simu_input_sum_litter2[lat_loc, lon_loc, :]
-	model_force_pred_input_vector_litter3[irow, :] = cesm2_simu_input_sum_litter3[lat_loc, lon_loc, :]
-	model_force_pred_altmax_lastyear_profile[irow, :] = cesm2_simu_altmax_last_year[lat_loc, lon_loc, :]
-	model_force_pred_altmax_current_profile[irow, :] = cesm2_simu_altmax[lat_loc, lon_loc, :]
-	model_force_pred_nbedrock[irow, :] = cesm2_simu_nbedrock[lat_loc, lon_loc, :]
-	model_force_pred_xio[irow, :, :] = cesm2_simu_o_scalar[lat_loc, lon_loc, 0:soil_decom_num, :]
-	model_force_pred_xin[irow, :, :] = cesm2_simu_n_scalar[lat_loc, lon_loc, 0:soil_decom_num, :]
-	model_force_pred_sand_vector[irow, :, :] = cesm2_simu_cellsand[lat_loc, lon_loc, 0:soil_decom_num, :]
-	model_force_pred_soil_temp_profile[irow, :, :] = cesm2_simu_soil_temperature[lat_loc, lon_loc, 0:soil_decom_num, :]
-	model_force_pred_soil_water_profile[irow, :, :] = cesm2_simu_w_scalar[lat_loc, lon_loc, 0:soil_decom_num, :]
-# end
-
-# wrapping up for the nn prediction
-predict_data_x = np.ones((grid_env_info_num, max(len(var4nn), 20), 12, 13))*np.nan
-predict_data_x[:, 0:len(var4nn), 0, 0] = np.array(grid_env_info_US.loc[:, var4nn])
-predict_data_x[:, 0:12, 0, 1] = model_force_pred_input_vector_cwd
-predict_data_x[:, 0:12, 0, 2] = model_force_pred_input_vector_litter1
-predict_data_x[:, 0:12, 0, 3] = model_force_pred_input_vector_litter2
-predict_data_x[:, 0:12, 0, 4] = model_force_pred_input_vector_litter3
-predict_data_x[:, 0:12, 0, 5] = model_force_pred_altmax_lastyear_profile
-predict_data_x[:, 0:12, 0, 6] = model_force_pred_altmax_current_profile
-predict_data_x[:, 0:12, 0, 7] = model_force_pred_nbedrock
-predict_data_x[:, 0:20, 0:12, 8] = model_force_pred_xio
-predict_data_x[:, 0:20, 0:12, 9] = model_force_pred_xin
-predict_data_x[:, 0:20, 0:12, 10] = model_force_pred_sand_vector
-predict_data_x[:, 0:20, 0:12, 11] = model_force_pred_soil_temp_profile
-predict_data_x[:, 0:20, 0:12, 12] = model_force_pred_soil_water_profile
-
-# create dummy z since it is not used in the prediction
-predict_data_z = np.ones((grid_env_info_num))*np.nan
-predict_data_c = np.stack([grid_env_info_US["original_lon"], grid_env_info_US["original_lat"]], axis=1)
-
-# # Drop rows with nan values
-# nan_loc = np.nanmean(predict_data_x[:, 0:len(var4nn), 0, 0], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:12, 0, 1], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:12, 0, 2], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:12, 0, 3], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:12, 0, 4], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:12, 0, 5], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:12, 0, 6], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:12, 0, 7], axis = 1) + \
-# 			np.sum(predict_data_x[:, 0:20, 0:12, 8], axis = (1, 2)) + \
-# 			np.sum(predict_data_x[:, 0:20, 0:12, 9], axis = (1, 2)) + \
-# 			np.sum(predict_data_x[:, 0:20, 0:12, 10], axis = (1, 2)) + \
-# 			np.sum(predict_data_x[:, 0:20, 0:12, 11], axis = (1, 2)) + \
-# 			np.sum(predict_data_x[:, 0:20, 0:12, 12], axis = (1, 2))
-# valid_profile_loc = np.where(np.isnan(nan_loc) == False)[0]
-# predict_data_x = predict_data_x[valid_profile_loc, :, :, :]
-# predict_data_z = predict_data_z[valid_profile_loc]
-# grid_env_info_US = grid_env_info_US.iloc[valid_profile_loc, :]
-
-print("Shape of predict data x", predict_data_x.shape)
-print("Shape of predict data z", predict_data_z.shape)
-print("Shape of grid env info US", grid_env_info_US.shape)
-print(datetime.now(), '------------grid env info prepared------------')
-
-
-# Convert predict data to tensors
-predict_data_x = torch.tensor(predict_data_x, dtype=torch.float32)
-predict_data_z = torch.tensor(predict_data_z, dtype=torch.float32)
-predict_data_c = torch.tensor(predict_data_c, dtype=torch.float32)
-grid_PRODA_para = torch.tensor(np.ones((grid_env_info_num, 1)), dtype=torch.float32)
 
 # Helper function to combine the training data into a single tensor
 class MergeDataset(Dataset):
@@ -1954,7 +1743,7 @@ def worker(rank, world_size, job_id, port):
 
 			# Store losses in a tensor, in the order of args.losses
 
-			if iepoch <= 100:
+			if iepoch <= 0:
 				# Seperate training by epochs
 				smooth_l1_loss_POM_idx = args.losses.index("Smooth_l1_loss_POM")
 				smooth_l1_loss_MAOM_idx = args.losses.index("Smooth_l1_loss_MAOM")
