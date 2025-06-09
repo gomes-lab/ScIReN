@@ -18,7 +18,7 @@ from sklearn.model_selection import KFold
 from mlp import ConstantParameters
 from pe_gcn_model import GridCellSpatialRelationEncoder
 from torch.optim.swa_utils import AveragedModel, SWALR
-from spatial_utils import *
+# from spatial_utils import *
 from losses import binns_loss, compute_param_matching_loss, compute_param_violation_loss, compute_unconstrained_param_loss
 import visualization_utils
 
@@ -75,6 +75,7 @@ from matplotlib import pyplot as plt
 ###################################
 # fun_model_simu predicts at user-specified depths. fun_model_prediction predicts at 20 default layers.
 from fun_matrix_COMPAS_Hardy import fun_model_simu, fun_model_prediction
+from fun_matrix_COMPAS_Hardy_bulk_converge import fun_bulk_simu
 
 ################################################
 # Command-line arguments

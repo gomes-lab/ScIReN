@@ -617,294 +617,297 @@ def worker():
 	dataset = MergeDataset(current_data_x, current_data_y, current_data_z, current_data_profile_id)
 	# Load datasets into dataloaders
 	dist_loader = DataLoader(dataset, batch_size=1, shuffle=True)
-	# Randomly select one profile from dist_loader
-	batch_x, batch_y, batch_z, batch_profile_id = next(iter(dist_loader))
-	batch_x = batch_x.to(device)
-	batch_y = batch_y.to(device)
-	batch_z = batch_z.to(device)
-	batch_profile_id = batch_profile_id.to(device)
-	
-	#####################
-	# Observed Variable #
-	#####################
-	# Initialize the parameter list
-	base_run_step = 1000
-	obs_para = torch.zeros([len(para_name)], requires_grad=False, device=device)
-	# Initialize the tensor to store the observed SOC
-	obs_soc_all = torch.zeros([base_run_step], requires_grad=False, device=device)
-	obs_soc_0_30 = torch.zeros([base_run_step], requires_grad=False, device=device)
-	obs_soc_30_100 = torch.zeros([base_run_step], requires_grad=False, device=device)
-	obs_soc_100_ = torch.zeros([base_run_step], requires_grad=False, device=device)
 
-	obs_POM_all = torch.zeros([base_run_step], requires_grad=False, device=device)
-	obs_POM_0_30 = torch.zeros([base_run_step], requires_grad=False, device=device)
-	obs_POM_30_100 = torch.zeros([base_run_step], requires_grad=False, device=device)
-	obs_POM_100_ = torch.zeros([base_run_step], requires_grad=False, device=device)
+	# Define number of batches for sensitivity analysis
+	num_batches = 32  # Number of batches to run for sensitivity analysis
 
-	obs_MAOM_all = torch.zeros([base_run_step], requires_grad=False, device=device)
-	obs_MAOM_0_30 = torch.zeros([base_run_step], requires_grad=False, device=device)
-	obs_MAOM_30_100 = torch.zeros([base_run_step], requires_grad=False, device=device)
-	obs_MAOM_100_ = torch.zeros([base_run_step], requires_grad=False, device=device)
-
-	print('Start calculating the observed SOC variance...')
-
-	for idx_obs in range(base_run_step):
-		# Freely select parameters from prior range
-		for ipara in range(len(para_name)):
-			# obs_para[ipara] = torch.tensor(np.random.normal(prior_range[ipara][0], prior_range[ipara][1]), requires_grad=False, device=device)
-			obs_para[ipara] = torch.tensor(np.random.uniform(0, 1) * (prior_range[ipara][1] - prior_range[ipara][0]) + prior_range[ipara][0], requires_grad=False, device=device)
-		# end for parameter selection
-		
-		# Initialize the model
-		temp_obs_soc, temp_obs_POM, temp_obs_MAOM = fun_model_sensitivity(obs_para, batch_x)
-
-		# Calculate the sum if not all nan, otherwise set to nan
-		obs_soc_all[idx_obs] = (torch.nansum(temp_obs_soc) if not torch.all(torch.isnan(temp_obs_soc)) else torch.tensor(np.nan, device=device))
-		obs_soc_0_30[idx_obs] = (torch.nansum(temp_obs_soc[0, 0:6]) if not torch.all(torch.isnan(temp_obs_soc[0, 0:6])) else torch.tensor(np.nan, device=device))
-		obs_soc_30_100[idx_obs] = (torch.nansum(temp_obs_soc[0, 6:9]) if not torch.all(torch.isnan(temp_obs_soc[0, 6:9])) else torch.tensor(np.nan, device=device))
-		obs_soc_100_[idx_obs] = (torch.nansum(temp_obs_soc[0, 9:]) if not torch.all(torch.isnan(temp_obs_soc[0, 9:])) else torch.tensor(np.nan, device=device))
-
-		obs_POM_all[idx_obs] = (torch.nansum(temp_obs_POM) if not torch.all(torch.isnan(temp_obs_POM)) else torch.tensor(np.nan, device=device))
-		obs_POM_0_30[idx_obs] = (torch.nansum(temp_obs_POM[0, 0:6]) if not torch.all(torch.isnan(temp_obs_POM[0, 0:6])) else torch.tensor(np.nan, device=device))
-		obs_POM_30_100[idx_obs] = (torch.nansum(temp_obs_POM[0, 6:9]) if not torch.all(torch.isnan(temp_obs_POM[0, 6:9])) else torch.tensor(np.nan, device=device))
-		obs_POM_100_[idx_obs] = (torch.nansum(temp_obs_POM[0, 9:]) if not torch.all(torch.isnan(temp_obs_POM[0, 9:])) else torch.tensor(np.nan, device=device))
-
-		obs_MAOM_all[idx_obs] = (torch.nansum(temp_obs_MAOM) if not torch.all(torch.isnan(temp_obs_MAOM)) else torch.tensor(np.nan, device=device))
-		obs_MAOM_0_30[idx_obs] = (torch.nansum(temp_obs_MAOM[0, 0:6]) if not torch.all(torch.isnan(temp_obs_MAOM[0, 0:6])) else torch.tensor(np.nan, device=device))
-		obs_MAOM_30_100[idx_obs] = (torch.nansum(temp_obs_MAOM[0, 6:9]) if not torch.all(torch.isnan(temp_obs_MAOM[0, 6:9])) else torch.tensor(np.nan, device=device))
-		obs_MAOM_100_[idx_obs] = (torch.nansum(temp_obs_MAOM[0, 9:]) if not torch.all(torch.isnan(temp_obs_MAOM[0, 9:])) else torch.tensor(np.nan, device=device))
-
-		# if any values over 1e15, set to 1e15
-		obs_soc_all[idx_obs] = torch.clamp(obs_soc_all[idx_obs], max=1e15)
-		obs_soc_0_30[idx_obs] = torch.clamp(obs_soc_0_30[idx_obs], max=1e15)
-		obs_soc_30_100[idx_obs] = torch.clamp(obs_soc_30_100[idx_obs], max=1e15)
-		obs_soc_100_[idx_obs] = torch.clamp(obs_soc_100_[idx_obs], max=1e15)
-
-		obs_POM_all[idx_obs] = torch.clamp(obs_POM_all[idx_obs], max=1e15)
-		obs_POM_0_30[idx_obs] = torch.clamp(obs_POM_0_30[idx_obs], max=1e15)
-		obs_POM_30_100[idx_obs] = torch.clamp(obs_POM_30_100[idx_obs], max=1e15)
-		obs_POM_100_[idx_obs] = torch.clamp(obs_POM_100_[idx_obs], max=1e15)
-
-		obs_MAOM_all[idx_obs] = torch.clamp(obs_MAOM_all[idx_obs], max=1e15)
-		obs_MAOM_0_30[idx_obs] = torch.clamp(obs_MAOM_0_30[idx_obs], max=1e15)
-		obs_MAOM_30_100[idx_obs] = torch.clamp(obs_MAOM_30_100[idx_obs], max=1e15)
-		obs_MAOM_100_[idx_obs] = torch.clamp(obs_MAOM_100_[idx_obs], max=1e15)
-
-
-	# end for idx_obs in range(100)
-	# Remove nan, inf, and zero
-	print('obs_soc_all', obs_soc_all)
-	obs_soc_all = obs_soc_all[~torch.isnan(obs_soc_all) & ~torch.isinf(obs_soc_all) & (obs_soc_all >= 0)]
-	obs_soc_0_30 = obs_soc_0_30[~torch.isnan(obs_soc_0_30) & ~torch.isinf(obs_soc_0_30) & (obs_soc_0_30 >= 0)]
-	obs_soc_30_100 = obs_soc_30_100[~torch.isnan(obs_soc_30_100) & ~torch.isinf(obs_soc_30_100) & (obs_soc_30_100 >= 0)]
-	obs_soc_100_ = obs_soc_100_[~torch.isnan(obs_soc_100_) & ~torch.isinf(obs_soc_100_) & (obs_soc_100_ >= 0)]
-
-	obs_POM_all = obs_POM_all[~torch.isnan(obs_POM_all) & ~torch.isinf(obs_POM_all) & (obs_POM_all >= 0)]
-	obs_POM_0_30 = obs_POM_0_30[~torch.isnan(obs_POM_0_30) & ~torch.isinf(obs_POM_0_30) & (obs_POM_0_30 >= 0)]
-	obs_POM_30_100 = obs_POM_30_100[~torch.isnan(obs_POM_30_100) & ~torch.isinf(obs_POM_30_100) & (obs_POM_30_100 >= 0)]
-	obs_POM_100_ = obs_POM_100_[~torch.isnan(obs_POM_100_) & ~torch.isinf(obs_POM_100_) & (obs_POM_100_ >= 0)]
-
-	obs_MAOM_all = obs_MAOM_all[~torch.isnan(obs_MAOM_all) & ~torch.isinf(obs_MAOM_all) & (obs_MAOM_all >= 0)]
-	obs_MAOM_0_30 = obs_MAOM_0_30[~torch.isnan(obs_MAOM_0_30) & ~torch.isinf(obs_MAOM_0_30) & (obs_MAOM_0_30 >= 0)]
-	obs_MAOM_30_100 = obs_MAOM_30_100[~torch.isnan(obs_MAOM_30_100) & ~torch.isinf(obs_MAOM_30_100) & (obs_MAOM_30_100 >= 0)]
-	obs_MAOM_100_ = obs_MAOM_100_[~torch.isnan(obs_MAOM_100_) & ~torch.isinf(obs_MAOM_100_) & (obs_MAOM_100_ >= 0)]
-	print('obs_soc_all after processing', obs_soc_all)
-	# Calculate the variance of the observed SOC
-	obs_soc_all_var = torch.var(obs_soc_all)
-	obs_soc_0_30_var = torch.var(obs_soc_0_30)
-	obs_soc_30_100_var = torch.var(obs_soc_30_100)
-	obs_soc_100_var = torch.var(obs_soc_100_)
-
-	obs_POM_all_var = torch.var(obs_POM_all)
-	obs_POM_0_30_var = torch.var(obs_POM_0_30)
-	obs_POM_30_100_var = torch.var(obs_POM_30_100)
-	obs_POM_100_var = torch.var(obs_POM_100_)
-
-	obs_MAOM_all_var = torch.var(obs_MAOM_all)
-	obs_MAOM_0_30_var = torch.var(obs_MAOM_0_30)
-	obs_MAOM_30_100_var = torch.var(obs_MAOM_30_100)
-	obs_MAOM_100_var = torch.var(obs_MAOM_100_)
-
-	# Print the variance of the observed SOC
-	print('---------------------SOC---------------------')
-	print('Variance of the observed SOC at all layers: ', obs_soc_all_var)
-	print('Variance of the observed SOC at 0-30cm: ', obs_soc_0_30_var)
-	print('Variance of the observed SOC at 30-100cm: ', obs_soc_30_100_var)
-	print('Variance of the observed SOC at 100-: ', obs_soc_100_var)
-	print('---------------------POM---------------------')
-	print('Variance of the observed POM at all layers: ', obs_POM_all_var)
-	print('Variance of the observed POM at 0-30cm: ', obs_POM_0_30_var)
-	print('Variance of the observed POM at 30-100cm: ', obs_POM_30_100_var)
-	print('Variance of the observed POM at 100-: ', obs_POM_100_var)
-	print('---------------------MAOM---------------------')
-	print('Variance of the observed MAOM at all layers: ', obs_MAOM_all_var)
-	print('Variance of the observed MAOM at 0-30cm: ', obs_MAOM_0_30_var)
-	print('Variance of the observed MAOM at 30-100cm: ', obs_MAOM_30_100_var)
-	print('Variance of the observed MAOM at 100-: ', obs_MAOM_100_var)
-
-	print('Observed SOC variance calculated in ', time.time() - start_time, ' seconds')
-
-	####################
-	# Sensitivity Test #
-	####################
-	# initialize the parameter list
-	test_para = obs_para.clone().detach()
 	# Initialize the tensor to store the sensitivity
-	sensitivity_soc_all = torch.zeros([para_size], requires_grad=False, device=device)
-	sensitivity_soc_0_30 = torch.zeros([para_size], requires_grad=False, device=device)
-	sensitivity_soc_30_100 = torch.zeros([para_size], requires_grad=False, device=device)
-	sensitivity_soc_100_ = torch.zeros([para_size], requires_grad=False, device=device)
+	sensitivity_soc_all = torch.zeros([para_size, num_batches], requires_grad=False, device=device)
+	sensitivity_soc_0_30 = torch.zeros([para_size, num_batches], requires_grad=False, device=device)
+	sensitivity_soc_30_100 = torch.zeros([para_size, num_batches], requires_grad=False, device=device)
+	sensitivity_soc_100_ = torch.zeros([para_size, num_batches], requires_grad=False, device=device)
 
-	sensitivity_soc_all_POM = torch.zeros([para_size], requires_grad=False, device=device)
-	sensitivity_soc_0_30_POM = torch.zeros([para_size], requires_grad=False, device=device)
-	sensitivity_soc_30_100_POM = torch.zeros([para_size], requires_grad=False, device=device)
-	sensitivity_soc_100_POM = torch.zeros([para_size], requires_grad=False, device=device)
+	sensitivity_soc_all_POM = torch.zeros([para_size, num_batches], requires_grad=False, device=device)
+	sensitivity_soc_0_30_POM = torch.zeros([para_size, num_batches], requires_grad=False, device=device)
+	sensitivity_soc_30_100_POM = torch.zeros([para_size, num_batches], requires_grad=False, device=device)
+	sensitivity_soc_100_POM = torch.zeros([para_size, num_batches], requires_grad=False, device=device)
 
-	sensitivity_soc_all_MAOM = torch.zeros([para_size], requires_grad=False, device=device)
-	sensitivity_soc_0_30_MAOM = torch.zeros([para_size], requires_grad=False, device=device)
-	sensitivity_soc_30_100_MAOM = torch.zeros([para_size], requires_grad=False, device=device)
-	sensitivity_soc_100_MAOM = torch.zeros([para_size], requires_grad=False, device=device)
+	sensitivity_soc_all_MAOM = torch.zeros([para_size, num_batches], requires_grad=False, device=device)
+	sensitivity_soc_0_30_MAOM = torch.zeros([para_size, num_batches], requires_grad=False, device=device)
+	sensitivity_soc_30_100_MAOM = torch.zeros([para_size, num_batches], requires_grad=False, device=device)
+	sensitivity_soc_100_MAOM = torch.zeros([para_size, num_batches], requires_grad=False, device=device)
 
-	# Loop through all parameters
-	for ipara in range(len(para_name)):
-		para_cal_start_time = time.time()
-		# Initialize the tensor to store the sensitivity
-		temp_sensitivity_all = torch.zeros([100], requires_grad=False, device=device)
-		temp_sensitivity_0_30 = torch.zeros([100], requires_grad=False, device=device)
-		temp_sensitivity_30_100 = torch.zeros([100], requires_grad=False, device=device)
-		temp_sensitivity_100_ = torch.zeros([100], requires_grad=False, device=device)
+	for batch_idx in range(num_batches):
+		# Randomly select one profile from dist_loader
+		batch_x, batch_y, batch_z, batch_profile_id = next(iter(dist_loader))
+		batch_x = batch_x.to(device)
+		batch_y = batch_y.to(device)
+		batch_z = batch_z.to(device)
+		batch_profile_id = batch_profile_id.to(device)
+		
+		#####################
+		# Observed Variable #
+		#####################
+		# Initialize the parameter list
+		base_run_step = 100
+		obs_para = torch.zeros([len(para_name)], requires_grad=False, device=device)
+		# Initialize the tensor to store the observed SOC
+		obs_soc_all = torch.zeros([base_run_step], requires_grad=False, device=device)
+		obs_soc_0_30 = torch.zeros([base_run_step], requires_grad=False, device=device)
+		obs_soc_30_100 = torch.zeros([base_run_step], requires_grad=False, device=device)
+		obs_soc_100_ = torch.zeros([base_run_step], requires_grad=False, device=device)
 
-		temp_sensitivity_all_POM = torch.zeros([100], requires_grad=False, device=device)
-		temp_sensitivity_0_30_POM = torch.zeros([100], requires_grad=False, device=device)
-		temp_sensitivity_30_100_POM = torch.zeros([100], requires_grad=False, device=device)
-		temp_sensitivity_100_POM = torch.zeros([100], requires_grad=False, device=device)
+		obs_POM_all = torch.zeros([base_run_step], requires_grad=False, device=device)
+		obs_POM_0_30 = torch.zeros([base_run_step], requires_grad=False, device=device)
+		obs_POM_30_100 = torch.zeros([base_run_step], requires_grad=False, device=device)
+		obs_POM_100_ = torch.zeros([base_run_step], requires_grad=False, device=device)
 
-		temp_sensitivity_all_MAOM = torch.zeros([100], requires_grad=False, device=device)
-		temp_sensitivity_0_30_MAOM = torch.zeros([100], requires_grad=False, device=device)
-		temp_sensitivity_30_100_MAOM = torch.zeros([100], requires_grad=False, device=device)
-		temp_sensitivity_100_MAOM = torch.zeros([100], requires_grad=False, device=device)
+		obs_MAOM_all = torch.zeros([base_run_step], requires_grad=False, device=device)
+		obs_MAOM_0_30 = torch.zeros([base_run_step], requires_grad=False, device=device)
+		obs_MAOM_30_100 = torch.zeros([base_run_step], requires_grad=False, device=device)
+		obs_MAOM_100_ = torch.zeros([base_run_step], requires_grad=False, device=device)
 
-		for idx_test in range(100):
-			# Initialize the parameter for sensitivity test
-			# test_para[ipara] = torch.tensor(np.random.normal(prior_range[ipara][0], prior_range[ipara][1]), requires_grad=False, device=device)
-			test_para[ipara] = torch.tensor(np.random.uniform(0, 1) * (prior_range[ipara][1] - prior_range[ipara][0]) + prior_range[ipara][0], requires_grad=False, device=device)
+		for idx_obs in range(base_run_step):
+			# Freely select parameters from prior range
+			for ipara in range(len(para_name)):
+				# obs_para[ipara] = torch.tensor(np.random.normal(prior_range[ipara][0], prior_range[ipara][1]), requires_grad=False, device=device)
+				obs_para[ipara] = torch.tensor(np.random.uniform(0, 1) * (prior_range[ipara][1] - prior_range[ipara][0]) + prior_range[ipara][0], requires_grad=False, device=device)
+			# end for parameter selection
 			
-			# Initialize the tensor to store the simulated SOC
-			temp_soc_all = torch.zeros([100], requires_grad=False, device=device)
-			temp_soc_0_30 = torch.zeros([100], requires_grad=False, device=device)
-			temp_soc_30_100 = torch.zeros([100], requires_grad=False, device=device)
-			temp_soc_100_ = torch.zeros([100], requires_grad=False, device=device)
+			# Initialize the model
+			temp_obs_soc, temp_obs_POM, temp_obs_MAOM = fun_model_sensitivity(obs_para, batch_x)
 
-			temp_POM_all = torch.zeros([100], requires_grad=False, device=device)
-			temp_POM_0_30 = torch.zeros([100], requires_grad=False, device=device)
-			temp_POM_30_100 = torch.zeros([100], requires_grad=False, device=device)
-			temp_POM_100_ = torch.zeros([100], requires_grad=False, device=device)
+			# Calculate the sum if not all nan, otherwise set to nan
+			obs_soc_all[idx_obs] = (torch.nansum(temp_obs_soc) if not torch.all(torch.isnan(temp_obs_soc)) else torch.tensor(np.nan, device=device))
+			obs_soc_0_30[idx_obs] = (torch.nansum(temp_obs_soc[0, 0:6]) if not torch.all(torch.isnan(temp_obs_soc[0, 0:6])) else torch.tensor(np.nan, device=device))
+			obs_soc_30_100[idx_obs] = (torch.nansum(temp_obs_soc[0, 6:9]) if not torch.all(torch.isnan(temp_obs_soc[0, 6:9])) else torch.tensor(np.nan, device=device))
+			obs_soc_100_[idx_obs] = (torch.nansum(temp_obs_soc[0, 9:]) if not torch.all(torch.isnan(temp_obs_soc[0, 9:])) else torch.tensor(np.nan, device=device))
 
-			temp_MAOM_all = torch.zeros([100], requires_grad=False, device=device)
-			temp_MAOM_0_30 = torch.zeros([100], requires_grad=False, device=device)
-			temp_MAOM_30_100 = torch.zeros([100], requires_grad=False, device=device)
-			temp_MAOM_100_ = torch.zeros([100], requires_grad=False, device=device)
+			obs_POM_all[idx_obs] = (torch.nansum(temp_obs_POM) if not torch.all(torch.isnan(temp_obs_POM)) else torch.tensor(np.nan, device=device))
+			obs_POM_0_30[idx_obs] = (torch.nansum(temp_obs_POM[0, 0:6]) if not torch.all(torch.isnan(temp_obs_POM[0, 0:6])) else torch.tensor(np.nan, device=device))
+			obs_POM_30_100[idx_obs] = (torch.nansum(temp_obs_POM[0, 6:9]) if not torch.all(torch.isnan(temp_obs_POM[0, 6:9])) else torch.tensor(np.nan, device=device))
+			obs_POM_100_[idx_obs] = (torch.nansum(temp_obs_POM[0, 9:]) if not torch.all(torch.isnan(temp_obs_POM[0, 9:])) else torch.tensor(np.nan, device=device))
 
-			# loop through other parameters to calculate the sensitivity
-			for idx_temp in range(100):
-				# Freely select parameters from prior range
-				for ipara_temp in range(len(para_name)):
-					if ipara_temp != ipara:
-						# test_para[ipara_temp] = torch.tensor(np.random.normal(prior_range[ipara_temp][0], prior_range[ipara_temp][1]), requires_grad=False, device=device)
-						test_para[ipara_temp] = torch.tensor(np.random.uniform(0, 1) * (prior_range[ipara_temp][1] - prior_range[ipara_temp][0]) + prior_range[ipara_temp][0], requires_grad=False, device=device)
-					# end if ipara_temp != ipara
-				# end for ipara_temp in range(len(para_name))
-				
-				# Initialize the model
-				temp_soc, temp_POM, temp_MAOM = fun_model_sensitivity(test_para, batch_x)
-
-				temp_soc_all[idx_temp] = (torch.nansum(temp_soc) if not torch.all(torch.isnan(temp_soc)) else torch.tensor(np.nan, device=device))
-				temp_soc_0_30[idx_temp] = (torch.nansum(temp_soc[0, 0:6]) if not torch.all(torch.isnan(temp_soc[0, 0:6])) else torch.tensor(np.nan, device=device))
-				temp_soc_30_100[idx_temp] = (torch.nansum(temp_soc[0, 6:9]) if not torch.all(torch.isnan(temp_soc[0, 6:9])) else torch.tensor(np.nan, device=device))
-				temp_soc_100_[idx_temp] = (torch.nansum(temp_soc[0, 9:]) if not torch.all(torch.isnan(temp_soc[0, 9:])) else torch.tensor(np.nan, device=device))
-
-				temp_POM_all[idx_temp] = (torch.nansum(temp_POM) if not torch.all(torch.isnan(temp_POM)) else torch.tensor(np.nan, device=device))
-				temp_POM_0_30[idx_temp] = (torch.nansum(temp_POM[0, 0:6]) if not torch.all(torch.isnan(temp_POM[0, 0:6])) else torch.tensor(np.nan, device=device))
-				temp_POM_30_100[idx_temp] = (torch.nansum(temp_POM[0, 6:9]) if not torch.all(torch.isnan(temp_POM[0, 6:9])) else torch.tensor(np.nan, device=device))
-				temp_POM_100_[idx_temp] = (torch.nansum(temp_POM[0, 9:]) if not torch.all(torch.isnan(temp_POM[0, 9:])) else torch.tensor(np.nan, device=device))
-
-				temp_MAOM_all[idx_temp] = (torch.nansum(temp_MAOM) if not torch.all(torch.isnan(temp_MAOM)) else torch.tensor(np.nan, device=device))
-				temp_MAOM_0_30[idx_temp] = (torch.nansum(temp_MAOM[0, 0:6]) if not torch.all(torch.isnan(temp_MAOM[0, 0:6])) else torch.tensor(np.nan, device=device))
-				temp_MAOM_30_100[idx_temp] = (torch.nansum(temp_MAOM[0, 6:9]) if not torch.all(torch.isnan(temp_MAOM[0, 6:9])) else torch.tensor(np.nan, device=device))
-				temp_MAOM_100_[idx_temp] = (torch.nansum(temp_MAOM[0, 9:]) if not torch.all(torch.isnan(temp_MAOM[0, 9:])) else torch.tensor(np.nan, device=device))
-			# end for idx_temp in range(100)
-			
-			# Calculate the mean of the simulated SOC and store it
-			temp_sensitivity_all[idx_test] = (torch.nanmean(temp_soc_all) if not torch.all(torch.isnan(temp_soc_all)) else torch.tensor(np.nan, device=device))
-			temp_sensitivity_0_30[idx_test] = (torch.nanmean(temp_soc_0_30) if not torch.all(torch.isnan(temp_soc_0_30)) else torch.tensor(np.nan, device=device))
-			temp_sensitivity_30_100[idx_test] = (torch.nanmean(temp_soc_30_100) if not torch.all(torch.isnan(temp_soc_30_100)) else torch.tensor(np.nan, device=device))
-			temp_sensitivity_100_[idx_test] = (torch.nanmean(temp_soc_100_) if not torch.all(torch.isnan(temp_soc_100_)) else torch.tensor(np.nan, device=device))
-
-			temp_sensitivity_all_POM[idx_test] = (torch.nanmean(temp_POM_all) if not torch.all(torch.isnan(temp_POM_all)) else torch.tensor(np.nan, device=device))
-			temp_sensitivity_0_30_POM[idx_test] = (torch.nanmean(temp_POM_0_30) if not torch.all(torch.isnan(temp_POM_0_30)) else torch.tensor(np.nan, device=device))
-			temp_sensitivity_30_100_POM[idx_test] = (torch.nanmean(temp_POM_30_100) if not torch.all(torch.isnan(temp_POM_30_100)) else torch.tensor(np.nan, device=device))
-			temp_sensitivity_100_POM[idx_test] = (torch.nanmean(temp_POM_100_) if not torch.all(torch.isnan(temp_POM_100_)) else torch.tensor(np.nan, device=device))
-
-			temp_sensitivity_all_MAOM[idx_test] = (torch.nanmean(temp_MAOM_all) if not torch.all(torch.isnan(temp_MAOM_all)) else torch.tensor(np.nan, device=device))
-			temp_sensitivity_0_30_MAOM[idx_test] = (torch.nanmean(temp_MAOM_0_30) if not torch.all(torch.isnan(temp_MAOM_0_30)) else torch.tensor(np.nan, device=device))
-			temp_sensitivity_30_100_MAOM[idx_test] = (torch.nanmean(temp_MAOM_30_100) if not torch.all(torch.isnan(temp_MAOM_30_100)) else torch.tensor(np.nan, device=device))
-			temp_sensitivity_100_MAOM[idx_test] = (torch.nanmean(temp_MAOM_100_) if not torch.all(torch.isnan(temp_MAOM_100_)) else torch.tensor(np.nan, device=device))
+			obs_MAOM_all[idx_obs] = (torch.nansum(temp_obs_MAOM) if not torch.all(torch.isnan(temp_obs_MAOM)) else torch.tensor(np.nan, device=device))
+			obs_MAOM_0_30[idx_obs] = (torch.nansum(temp_obs_MAOM[0, 0:6]) if not torch.all(torch.isnan(temp_obs_MAOM[0, 0:6])) else torch.tensor(np.nan, device=device))
+			obs_MAOM_30_100[idx_obs] = (torch.nansum(temp_obs_MAOM[0, 6:9]) if not torch.all(torch.isnan(temp_obs_MAOM[0, 6:9])) else torch.tensor(np.nan, device=device))
+			obs_MAOM_100_[idx_obs] = (torch.nansum(temp_obs_MAOM[0, 9:]) if not torch.all(torch.isnan(temp_obs_MAOM[0, 9:])) else torch.tensor(np.nan, device=device))
 
 			# if any values over 1e15, set to 1e15
-			temp_sensitivity_all[idx_test] = torch.clamp(temp_sensitivity_all[idx_test], max=1e15)
-			temp_sensitivity_0_30[idx_test] = torch.clamp(temp_sensitivity_0_30[idx_test], max=1e15)
-			temp_sensitivity_30_100[idx_test] = torch.clamp(temp_sensitivity_30_100[idx_test], max=1e15)
-			temp_sensitivity_100_[idx_test] = torch.clamp(temp_sensitivity_100_[idx_test], max=1e15)
+			obs_soc_all[idx_obs] = torch.clamp(obs_soc_all[idx_obs], max=1e15)
+			obs_soc_0_30[idx_obs] = torch.clamp(obs_soc_0_30[idx_obs], max=1e15)
+			obs_soc_30_100[idx_obs] = torch.clamp(obs_soc_30_100[idx_obs], max=1e15)
+			obs_soc_100_[idx_obs] = torch.clamp(obs_soc_100_[idx_obs], max=1e15)
 
-			temp_sensitivity_all_POM[idx_test] = torch.clamp(temp_sensitivity_all_POM[idx_test], max=1e15)
-			temp_sensitivity_0_30_POM[idx_test] = torch.clamp(temp_sensitivity_0_30_POM[idx_test], max=1e15)
-			temp_sensitivity_30_100_POM[idx_test] = torch.clamp(temp_sensitivity_30_100_POM[idx_test], max=1e15)
-			temp_sensitivity_100_POM[idx_test] = torch.clamp(temp_sensitivity_100_POM[idx_test], max=1e15)
+			obs_POM_all[idx_obs] = torch.clamp(obs_POM_all[idx_obs], max=1e15)
+			obs_POM_0_30[idx_obs] = torch.clamp(obs_POM_0_30[idx_obs], max=1e15)
+			obs_POM_30_100[idx_obs] = torch.clamp(obs_POM_30_100[idx_obs], max=1e15)
+			obs_POM_100_[idx_obs] = torch.clamp(obs_POM_100_[idx_obs], max=1e15)
 
-			temp_sensitivity_all_MAOM[idx_test] = torch.clamp(temp_sensitivity_all_MAOM[idx_test], max=1e15)
-			temp_sensitivity_0_30_MAOM[idx_test] = torch.clamp(temp_sensitivity_0_30_MAOM[idx_test], max=1e15)
-			temp_sensitivity_30_100_MAOM[idx_test] = torch.clamp(temp_sensitivity_30_100_MAOM[idx_test], max=1e15)
-			temp_sensitivity_100_MAOM[idx_test] = torch.clamp(temp_sensitivity_100_MAOM[idx_test], max=1e15)
+			obs_MAOM_all[idx_obs] = torch.clamp(obs_MAOM_all[idx_obs], max=1e15)
+			obs_MAOM_0_30[idx_obs] = torch.clamp(obs_MAOM_0_30[idx_obs], max=1e15)
+			obs_MAOM_30_100[idx_obs] = torch.clamp(obs_MAOM_30_100[idx_obs], max=1e15)
+			obs_MAOM_100_[idx_obs] = torch.clamp(obs_MAOM_100_[idx_obs], max=1e15)
 
-			# end for idx_test in range(100)
+
+		# end for idx_obs in range(100)
 		# Remove nan, inf, and zero
-		temp_sensitivity_all = temp_sensitivity_all[~torch.isnan(temp_sensitivity_all) & ~torch.isinf(temp_sensitivity_all) & (temp_sensitivity_all >= 0)]
-		temp_sensitivity_0_30 = temp_sensitivity_0_30[~torch.isnan(temp_sensitivity_0_30) & ~torch.isinf(temp_sensitivity_0_30) & (temp_sensitivity_0_30 >= 0)]
-		temp_sensitivity_30_100 = temp_sensitivity_30_100[~torch.isnan(temp_sensitivity_30_100) & ~torch.isinf(temp_sensitivity_30_100) & (temp_sensitivity_30_100 >= 0)]
-		temp_sensitivity_100_ = temp_sensitivity_100_[~torch.isnan(temp_sensitivity_100_) & ~torch.isinf(temp_sensitivity_100_) & (temp_sensitivity_100_ >= 0)]
+		obs_soc_all = obs_soc_all[~torch.isnan(obs_soc_all) & ~torch.isinf(obs_soc_all) & (obs_soc_all >= 0)]
+		obs_soc_0_30 = obs_soc_0_30[~torch.isnan(obs_soc_0_30) & ~torch.isinf(obs_soc_0_30) & (obs_soc_0_30 >= 0)]
+		obs_soc_30_100 = obs_soc_30_100[~torch.isnan(obs_soc_30_100) & ~torch.isinf(obs_soc_30_100) & (obs_soc_30_100 >= 0)]
+		obs_soc_100_ = obs_soc_100_[~torch.isnan(obs_soc_100_) & ~torch.isinf(obs_soc_100_) & (obs_soc_100_ >= 0)]
 
-		temp_sensitivity_all_POM = temp_sensitivity_all_POM[~torch.isnan(temp_sensitivity_all_POM) & ~torch.isinf(temp_sensitivity_all_POM) & (temp_sensitivity_all_POM >= 0)]
-		temp_sensitivity_0_30_POM = temp_sensitivity_0_30_POM[~torch.isnan(temp_sensitivity_0_30_POM) & ~torch.isinf(temp_sensitivity_0_30_POM) & (temp_sensitivity_0_30_POM >= 0)]
-		temp_sensitivity_30_100_POM = temp_sensitivity_30_100_POM[~torch.isnan(temp_sensitivity_30_100_POM) & ~torch.isinf(temp_sensitivity_30_100_POM)	 & (temp_sensitivity_30_100_POM >= 0)]
-		temp_sensitivity_100_POM = temp_sensitivity_100_POM[~torch.isnan(temp_sensitivity_100_POM) & ~torch.isinf(temp_sensitivity_100_POM) & (temp_sensitivity_100_POM >= 0)]
-		
-		temp_sensitivity_all_MAOM = temp_sensitivity_all_MAOM[~torch.isnan(temp_sensitivity_all_MAOM) & ~torch.isinf(temp_sensitivity_all_MAOM) & (temp_sensitivity_all_MAOM >= 0)]
-		temp_sensitivity_0_30_MAOM = temp_sensitivity_0_30_MAOM[~torch.isnan(temp_sensitivity_0_30_MAOM) & ~torch.isinf(temp_sensitivity_0_30_MAOM) & (temp_sensitivity_0_30_MAOM >= 0)]
-		temp_sensitivity_30_100_MAOM = temp_sensitivity_30_100_MAOM[~torch.isnan(temp_sensitivity_30_100_MAOM) & ~torch.isinf(temp_sensitivity_30_100_MAOM) & (temp_sensitivity_30_100_MAOM >= 0)]
-		temp_sensitivity_100_MAOM = temp_sensitivity_100_MAOM[~torch.isnan(temp_sensitivity_100_MAOM) & ~torch.isinf(temp_sensitivity_100_MAOM) & (temp_sensitivity_100_MAOM >= 0)]
-		
-		# Calculate the variance of the sensitivity
-		sensitivity_soc_all[ipara] = torch.var(temp_sensitivity_all) / obs_soc_all_var
-		sensitivity_soc_0_30[ipara] = torch.var(temp_sensitivity_0_30) / obs_soc_0_30_var
-		sensitivity_soc_30_100[ipara] = torch.var(temp_sensitivity_30_100) / obs_soc_30_100_var
-		sensitivity_soc_100_[ipara] = torch.var(temp_sensitivity_100_) / obs_soc_100_var
+		obs_POM_all = obs_POM_all[~torch.isnan(obs_POM_all) & ~torch.isinf(obs_POM_all) & (obs_POM_all >= 0)]
+		obs_POM_0_30 = obs_POM_0_30[~torch.isnan(obs_POM_0_30) & ~torch.isinf(obs_POM_0_30) & (obs_POM_0_30 >= 0)]
+		obs_POM_30_100 = obs_POM_30_100[~torch.isnan(obs_POM_30_100) & ~torch.isinf(obs_POM_30_100) & (obs_POM_30_100 >= 0)]
+		obs_POM_100_ = obs_POM_100_[~torch.isnan(obs_POM_100_) & ~torch.isinf(obs_POM_100_) & (obs_POM_100_ >= 0)]
 
-		sensitivity_soc_all_POM[ipara] = torch.var(temp_sensitivity_all_POM) / obs_POM_all_var
-		sensitivity_soc_0_30_POM[ipara] = torch.var(temp_sensitivity_0_30_POM) / obs_POM_0_30_var
-		sensitivity_soc_30_100_POM[ipara] = torch.var(temp_sensitivity_30_100_POM) / obs_POM_30_100_var
-		sensitivity_soc_100_POM[ipara] = torch.var(temp_sensitivity_100_POM) / obs_POM_100_var
+		obs_MAOM_all = obs_MAOM_all[~torch.isnan(obs_MAOM_all) & ~torch.isinf(obs_MAOM_all) & (obs_MAOM_all >= 0)]
+		obs_MAOM_0_30 = obs_MAOM_0_30[~torch.isnan(obs_MAOM_0_30) & ~torch.isinf(obs_MAOM_0_30) & (obs_MAOM_0_30 >= 0)]
+		obs_MAOM_30_100 = obs_MAOM_30_100[~torch.isnan(obs_MAOM_30_100) & ~torch.isinf(obs_MAOM_30_100) & (obs_MAOM_30_100 >= 0)]
+		obs_MAOM_100_ = obs_MAOM_100_[~torch.isnan(obs_MAOM_100_) & ~torch.isinf(obs_MAOM_100_) & (obs_MAOM_100_ >= 0)]
+		# Calculate the variance of the observed SOC
+		obs_soc_all_var = torch.var(obs_soc_all)
+		obs_soc_0_30_var = torch.var(obs_soc_0_30)
+		obs_soc_30_100_var = torch.var(obs_soc_30_100)
+		obs_soc_100_var = torch.var(obs_soc_100_)
 
-		sensitivity_soc_all_MAOM[ipara] = torch.var(temp_sensitivity_all_MAOM) / obs_MAOM_all_var
-		sensitivity_soc_0_30_MAOM[ipara] = torch.var(temp_sensitivity_0_30_MAOM) / obs_MAOM_0_30_var
-		sensitivity_soc_30_100_MAOM[ipara] = torch.var(temp_sensitivity_30_100_MAOM) / obs_MAOM_30_100_var
-		sensitivity_soc_100_MAOM[ipara] = torch.var(temp_sensitivity_100_MAOM) / obs_MAOM_100_var
+		obs_POM_all_var = torch.var(obs_POM_all)
+		obs_POM_0_30_var = torch.var(obs_POM_0_30)
+		obs_POM_30_100_var = torch.var(obs_POM_30_100)
+		obs_POM_100_var = torch.var(obs_POM_100_)
+
+		obs_MAOM_all_var = torch.var(obs_MAOM_all)
+		obs_MAOM_0_30_var = torch.var(obs_MAOM_0_30)
+		obs_MAOM_30_100_var = torch.var(obs_MAOM_30_100)
+		obs_MAOM_100_var = torch.var(obs_MAOM_100_)
+
+		# Print the variance of the observed SOC
+		print('Calculating sensitivity for batch: ', batch_idx, ' out of ', num_batches)
+		print('---------------------SOC---------------------')
+		print('Variance of the observed SOC at all layers: ', obs_soc_all_var)
+		print('Variance of the observed SOC at 0-30cm: ', obs_soc_0_30_var)
+		print('Variance of the observed SOC at 30-100cm: ', obs_soc_30_100_var)
+		print('Variance of the observed SOC at 100-: ', obs_soc_100_var)
+		print('---------------------POM---------------------')
+		print('Variance of the observed POM at all layers: ', obs_POM_all_var)
+		print('Variance of the observed POM at 0-30cm: ', obs_POM_0_30_var)
+		print('Variance of the observed POM at 30-100cm: ', obs_POM_30_100_var)
+		print('Variance of the observed POM at 100-: ', obs_POM_100_var)
+		print('---------------------MAOM---------------------')
+		print('Variance of the observed MAOM at all layers: ', obs_MAOM_all_var)
+		print('Variance of the observed MAOM at 0-30cm: ', obs_MAOM_0_30_var)
+		print('Variance of the observed MAOM at 30-100cm: ', obs_MAOM_30_100_var)
+		print('Variance of the observed MAOM at 100-: ', obs_MAOM_100_var)
+
+		print('Observed SOC variance calculated in ', time.time() - start_time, ' seconds')
+
+		####################
+		# Sensitivity Test #
+		####################
+		# initialize the parameter list
+		test_para = obs_para.clone().detach()
+
+		# Loop through all parameters
+		test_run_step = 100
+		test_start_time = time.time()
+		for ipara in range(len(para_name)):
+			para_cal_start_time = time.time()
+			# Initialize the tensor to store the sensitivity
+			temp_sensitivity_all = torch.zeros([test_run_step], requires_grad=False, device=device)
+			temp_sensitivity_0_30 = torch.zeros([test_run_step], requires_grad=False, device=device)
+			temp_sensitivity_30_100 = torch.zeros([test_run_step], requires_grad=False, device=device)
+			temp_sensitivity_100_ = torch.zeros([test_run_step], requires_grad=False, device=device)
+
+			temp_sensitivity_all_POM = torch.zeros([test_run_step], requires_grad=False, device=device)
+			temp_sensitivity_0_30_POM = torch.zeros([test_run_step], requires_grad=False, device=device)
+			temp_sensitivity_30_100_POM = torch.zeros([test_run_step], requires_grad=False, device=device)
+			temp_sensitivity_100_POM = torch.zeros([test_run_step], requires_grad=False, device=device)
+
+			temp_sensitivity_all_MAOM = torch.zeros([test_run_step], requires_grad=False, device=device)
+			temp_sensitivity_0_30_MAOM = torch.zeros([test_run_step], requires_grad=False, device=device)
+			temp_sensitivity_30_100_MAOM = torch.zeros([test_run_step], requires_grad=False, device=device)
+			temp_sensitivity_100_MAOM = torch.zeros([test_run_step], requires_grad=False, device=device)
+
+			for idx_test in range(test_run_step):
+				# Initialize the parameter for sensitivity test
+				# test_para[ipara] = torch.tensor(np.random.normal(prior_range[ipara][0], prior_range[ipara][1]), requires_grad=False, device=device)
+				test_para[ipara] = torch.tensor(np.random.uniform(0, 1) * (prior_range[ipara][1] - prior_range[ipara][0]) + prior_range[ipara][0], requires_grad=False, device=device)
+				
+				# Initialize the tensor to store the simulated SOC
+				temp_soc_all = torch.zeros([test_run_step], requires_grad=False, device=device)
+				temp_soc_0_30 = torch.zeros([test_run_step], requires_grad=False, device=device)
+				temp_soc_30_100 = torch.zeros([test_run_step], requires_grad=False, device=device)
+				temp_soc_100_ = torch.zeros([test_run_step], requires_grad=False, device=device)
+
+				temp_POM_all = torch.zeros([test_run_step], requires_grad=False, device=device)
+				temp_POM_0_30 = torch.zeros([test_run_step], requires_grad=False, device=device)
+				temp_POM_30_100 = torch.zeros([test_run_step], requires_grad=False, device=device)
+				temp_POM_100_ = torch.zeros([test_run_step], requires_grad=False, device=device)
+
+				temp_MAOM_all = torch.zeros([test_run_step], requires_grad=False, device=device)
+				temp_MAOM_0_30 = torch.zeros([test_run_step], requires_grad=False, device=device)
+				temp_MAOM_30_100 = torch.zeros([test_run_step], requires_grad=False, device=device)
+				temp_MAOM_100_ = torch.zeros([test_run_step], requires_grad=False, device=device)
+
+				# loop through other parameters to calculate the sensitivity
+				for idx_temp in range(test_run_step):
+					# Freely select parameters from prior range
+					for ipara_temp in range(len(para_name)):
+						if ipara_temp != ipara:
+							# test_para[ipara_temp] = torch.tensor(np.random.normal(prior_range[ipara_temp][0], prior_range[ipara_temp][1]), requires_grad=False, device=device)
+							test_para[ipara_temp] = torch.tensor(np.random.uniform(0, 1) * (prior_range[ipara_temp][1] - prior_range[ipara_temp][0]) + prior_range[ipara_temp][0], requires_grad=False, device=device)
+						# end if ipara_temp != ipara
+					# end for ipara_temp in range(len(para_name))
+					
+					# Initialize the model
+					temp_soc, temp_POM, temp_MAOM = fun_model_sensitivity(test_para, batch_x)
+
+					temp_soc_all[idx_temp] = (torch.nansum(temp_soc) if not torch.all(torch.isnan(temp_soc)) else torch.tensor(np.nan, device=device))
+					temp_soc_0_30[idx_temp] = (torch.nansum(temp_soc[0, 0:6]) if not torch.all(torch.isnan(temp_soc[0, 0:6])) else torch.tensor(np.nan, device=device))
+					temp_soc_30_100[idx_temp] = (torch.nansum(temp_soc[0, 6:9]) if not torch.all(torch.isnan(temp_soc[0, 6:9])) else torch.tensor(np.nan, device=device))
+					temp_soc_100_[idx_temp] = (torch.nansum(temp_soc[0, 9:]) if not torch.all(torch.isnan(temp_soc[0, 9:])) else torch.tensor(np.nan, device=device))
+
+					temp_POM_all[idx_temp] = (torch.nansum(temp_POM) if not torch.all(torch.isnan(temp_POM)) else torch.tensor(np.nan, device=device))
+					temp_POM_0_30[idx_temp] = (torch.nansum(temp_POM[0, 0:6]) if not torch.all(torch.isnan(temp_POM[0, 0:6])) else torch.tensor(np.nan, device=device))
+					temp_POM_30_100[idx_temp] = (torch.nansum(temp_POM[0, 6:9]) if not torch.all(torch.isnan(temp_POM[0, 6:9])) else torch.tensor(np.nan, device=device))
+					temp_POM_100_[idx_temp] = (torch.nansum(temp_POM[0, 9:]) if not torch.all(torch.isnan(temp_POM[0, 9:])) else torch.tensor(np.nan, device=device))
+
+					temp_MAOM_all[idx_temp] = (torch.nansum(temp_MAOM) if not torch.all(torch.isnan(temp_MAOM)) else torch.tensor(np.nan, device=device))
+					temp_MAOM_0_30[idx_temp] = (torch.nansum(temp_MAOM[0, 0:6]) if not torch.all(torch.isnan(temp_MAOM[0, 0:6])) else torch.tensor(np.nan, device=device))
+					temp_MAOM_30_100[idx_temp] = (torch.nansum(temp_MAOM[0, 6:9]) if not torch.all(torch.isnan(temp_MAOM[0, 6:9])) else torch.tensor(np.nan, device=device))
+					temp_MAOM_100_[idx_temp] = (torch.nansum(temp_MAOM[0, 9:]) if not torch.all(torch.isnan(temp_MAOM[0, 9:])) else torch.tensor(np.nan, device=device))
+				# end for idx_temp in range(100)
+				
+				# Calculate the mean of the simulated SOC and store it
+				temp_sensitivity_all[idx_test] = (torch.nanmean(temp_soc_all) if not torch.all(torch.isnan(temp_soc_all)) else torch.tensor(np.nan, device=device))
+				temp_sensitivity_0_30[idx_test] = (torch.nanmean(temp_soc_0_30) if not torch.all(torch.isnan(temp_soc_0_30)) else torch.tensor(np.nan, device=device))
+				temp_sensitivity_30_100[idx_test] = (torch.nanmean(temp_soc_30_100) if not torch.all(torch.isnan(temp_soc_30_100)) else torch.tensor(np.nan, device=device))
+				temp_sensitivity_100_[idx_test] = (torch.nanmean(temp_soc_100_) if not torch.all(torch.isnan(temp_soc_100_)) else torch.tensor(np.nan, device=device))
+
+				temp_sensitivity_all_POM[idx_test] = (torch.nanmean(temp_POM_all) if not torch.all(torch.isnan(temp_POM_all)) else torch.tensor(np.nan, device=device))
+				temp_sensitivity_0_30_POM[idx_test] = (torch.nanmean(temp_POM_0_30) if not torch.all(torch.isnan(temp_POM_0_30)) else torch.tensor(np.nan, device=device))
+				temp_sensitivity_30_100_POM[idx_test] = (torch.nanmean(temp_POM_30_100) if not torch.all(torch.isnan(temp_POM_30_100)) else torch.tensor(np.nan, device=device))
+				temp_sensitivity_100_POM[idx_test] = (torch.nanmean(temp_POM_100_) if not torch.all(torch.isnan(temp_POM_100_)) else torch.tensor(np.nan, device=device))
+
+				temp_sensitivity_all_MAOM[idx_test] = (torch.nanmean(temp_MAOM_all) if not torch.all(torch.isnan(temp_MAOM_all)) else torch.tensor(np.nan, device=device))
+				temp_sensitivity_0_30_MAOM[idx_test] = (torch.nanmean(temp_MAOM_0_30) if not torch.all(torch.isnan(temp_MAOM_0_30)) else torch.tensor(np.nan, device=device))
+				temp_sensitivity_30_100_MAOM[idx_test] = (torch.nanmean(temp_MAOM_30_100) if not torch.all(torch.isnan(temp_MAOM_30_100)) else torch.tensor(np.nan, device=device))
+				temp_sensitivity_100_MAOM[idx_test] = (torch.nanmean(temp_MAOM_100_) if not torch.all(torch.isnan(temp_MAOM_100_)) else torch.tensor(np.nan, device=device))
+
+				# if any values over 1e15, set to 1e15
+				temp_sensitivity_all[idx_test] = torch.clamp(temp_sensitivity_all[idx_test], max=1e15)
+				temp_sensitivity_0_30[idx_test] = torch.clamp(temp_sensitivity_0_30[idx_test], max=1e15)
+				temp_sensitivity_30_100[idx_test] = torch.clamp(temp_sensitivity_30_100[idx_test], max=1e15)
+				temp_sensitivity_100_[idx_test] = torch.clamp(temp_sensitivity_100_[idx_test], max=1e15)
+
+				temp_sensitivity_all_POM[idx_test] = torch.clamp(temp_sensitivity_all_POM[idx_test], max=1e15)
+				temp_sensitivity_0_30_POM[idx_test] = torch.clamp(temp_sensitivity_0_30_POM[idx_test], max=1e15)
+				temp_sensitivity_30_100_POM[idx_test] = torch.clamp(temp_sensitivity_30_100_POM[idx_test], max=1e15)
+				temp_sensitivity_100_POM[idx_test] = torch.clamp(temp_sensitivity_100_POM[idx_test], max=1e15)
+
+				temp_sensitivity_all_MAOM[idx_test] = torch.clamp(temp_sensitivity_all_MAOM[idx_test], max=1e15)
+				temp_sensitivity_0_30_MAOM[idx_test] = torch.clamp(temp_sensitivity_0_30_MAOM[idx_test], max=1e15)
+				temp_sensitivity_30_100_MAOM[idx_test] = torch.clamp(temp_sensitivity_30_100_MAOM[idx_test], max=1e15)
+				temp_sensitivity_100_MAOM[idx_test] = torch.clamp(temp_sensitivity_100_MAOM[idx_test], max=1e15)
+
+				# end for idx_test in range(100)
+			# Remove nan, inf, and zero
+			temp_sensitivity_all = temp_sensitivity_all[~torch.isnan(temp_sensitivity_all) & ~torch.isinf(temp_sensitivity_all) & (temp_sensitivity_all >= 0)]
+			temp_sensitivity_0_30 = temp_sensitivity_0_30[~torch.isnan(temp_sensitivity_0_30) & ~torch.isinf(temp_sensitivity_0_30) & (temp_sensitivity_0_30 >= 0)]
+			temp_sensitivity_30_100 = temp_sensitivity_30_100[~torch.isnan(temp_sensitivity_30_100) & ~torch.isinf(temp_sensitivity_30_100) & (temp_sensitivity_30_100 >= 0)]
+			temp_sensitivity_100_ = temp_sensitivity_100_[~torch.isnan(temp_sensitivity_100_) & ~torch.isinf(temp_sensitivity_100_) & (temp_sensitivity_100_ >= 0)]
+
+			temp_sensitivity_all_POM = temp_sensitivity_all_POM[~torch.isnan(temp_sensitivity_all_POM) & ~torch.isinf(temp_sensitivity_all_POM) & (temp_sensitivity_all_POM >= 0)]
+			temp_sensitivity_0_30_POM = temp_sensitivity_0_30_POM[~torch.isnan(temp_sensitivity_0_30_POM) & ~torch.isinf(temp_sensitivity_0_30_POM) & (temp_sensitivity_0_30_POM >= 0)]
+			temp_sensitivity_30_100_POM = temp_sensitivity_30_100_POM[~torch.isnan(temp_sensitivity_30_100_POM) & ~torch.isinf(temp_sensitivity_30_100_POM)	 & (temp_sensitivity_30_100_POM >= 0)]
+			temp_sensitivity_100_POM = temp_sensitivity_100_POM[~torch.isnan(temp_sensitivity_100_POM) & ~torch.isinf(temp_sensitivity_100_POM) & (temp_sensitivity_100_POM >= 0)]
+			
+			temp_sensitivity_all_MAOM = temp_sensitivity_all_MAOM[~torch.isnan(temp_sensitivity_all_MAOM) & ~torch.isinf(temp_sensitivity_all_MAOM) & (temp_sensitivity_all_MAOM >= 0)]
+			temp_sensitivity_0_30_MAOM = temp_sensitivity_0_30_MAOM[~torch.isnan(temp_sensitivity_0_30_MAOM) & ~torch.isinf(temp_sensitivity_0_30_MAOM) & (temp_sensitivity_0_30_MAOM >= 0)]
+			temp_sensitivity_30_100_MAOM = temp_sensitivity_30_100_MAOM[~torch.isnan(temp_sensitivity_30_100_MAOM) & ~torch.isinf(temp_sensitivity_30_100_MAOM) & (temp_sensitivity_30_100_MAOM >= 0)]
+			temp_sensitivity_100_MAOM = temp_sensitivity_100_MAOM[~torch.isnan(temp_sensitivity_100_MAOM) & ~torch.isinf(temp_sensitivity_100_MAOM) & (temp_sensitivity_100_MAOM >= 0)]
+			
+			# Calculate the variance of the sensitivity
+			sensitivity_soc_all[ipara, batch_idx] = torch.var(temp_sensitivity_all) / obs_soc_all_var
+			sensitivity_soc_0_30[ipara, batch_idx] = torch.var(temp_sensitivity_0_30) / obs_soc_0_30_var
+			sensitivity_soc_30_100[ipara, batch_idx] = torch.var(temp_sensitivity_30_100) / obs_soc_30_100_var
+			sensitivity_soc_100_[ipara, batch_idx] = torch.var(temp_sensitivity_100_) / obs_soc_100_var
+
+			sensitivity_soc_all_POM[ipara, batch_idx] = torch.var(temp_sensitivity_all_POM) / obs_POM_all_var
+			sensitivity_soc_0_30_POM[ipara, batch_idx] = torch.var(temp_sensitivity_0_30_POM) / obs_POM_0_30_var
+			sensitivity_soc_30_100_POM[ipara, batch_idx] = torch.var(temp_sensitivity_30_100_POM) / obs_POM_30_100_var
+			sensitivity_soc_100_POM[ipara, batch_idx] = torch.var(temp_sensitivity_100_POM) / obs_POM_100_var
+
+			sensitivity_soc_all_MAOM[ipara, batch_idx] = torch.var(temp_sensitivity_all_MAOM) / obs_MAOM_all_var
+			sensitivity_soc_0_30_MAOM[ipara, batch_idx] = torch.var(temp_sensitivity_0_30_MAOM) / obs_MAOM_0_30_var
+			sensitivity_soc_30_100_MAOM[ipara, batch_idx] = torch.var(temp_sensitivity_30_100_MAOM) / obs_MAOM_30_100_var
+			sensitivity_soc_100_MAOM[ipara, batch_idx] = torch.var(temp_sensitivity_100_MAOM) / obs_MAOM_100_var
 
 
 
-
-		# Print the variance of the sensitivity
-		print('Variance of the sensitivity to parameter ', para_name[ipara], ' calculated in ', time.time() - para_cal_start_time, ' seconds')
-	# end for ipara in range(len(para_name))
+		print('Sensitivity test for batch: ', batch_idx, ' finished in ', time.time() - test_start_time, ' seconds')
+		# end for ipara in range(len(para_name))
 	
 	# Save the sensitivity to excel file
 	pd.DataFrame(sensitivity_soc_all.cpu().detach().numpy()).to_excel(data_dir_output + '/Sensitivity_soc_all.xlsx')
@@ -921,6 +924,22 @@ def worker():
 	pd.DataFrame(sensitivity_soc_0_30_MAOM.cpu().detach().numpy()).to_excel(data_dir_output + '/Sensitivity_soc_0_30_MAOM.xlsx')
 	pd.DataFrame(sensitivity_soc_30_100_MAOM.cpu().detach().numpy()).to_excel(data_dir_output + '/Sensitivity_soc_30_100_MAOM.xlsx')
 	pd.DataFrame(sensitivity_soc_100_MAOM.cpu().detach().numpy()).to_excel(data_dir_output + '/Sensitivity_soc_100_MAOM.xlsx')
+
+	# Calculate the mean sensitivity for each parameter
+	sensitivity_soc_all = torch.mean(sensitivity_soc_all, dim=1)
+	sensitivity_soc_0_30 = torch.mean(sensitivity_soc_0_30, dim=1)
+	sensitivity_soc_30_100 = torch.mean(sensitivity_soc_30_100, dim=1)
+	sensitivity_soc_100_ = torch.mean(sensitivity_soc_100_, dim=1)
+
+	sensitivity_soc_all_POM = torch.mean(sensitivity_soc_all_POM, dim=1)
+	sensitivity_soc_0_30_POM = torch.mean(sensitivity_soc_0_30_POM, dim=1)
+	sensitivity_soc_30_100_POM = torch.mean(sensitivity_soc_30_100_POM, dim=1)
+	sensitivity_soc_100_POM = torch.mean(sensitivity_soc_100_POM, dim=1)
+
+	sensitivity_soc_all_MAOM = torch.mean(sensitivity_soc_all_MAOM, dim=1)
+	sensitivity_soc_0_30_MAOM = torch.mean(sensitivity_soc_0_30_MAOM, dim=1)
+	sensitivity_soc_30_100_MAOM = torch.mean(sensitivity_soc_30_100_MAOM, dim=1)
+	sensitivity_soc_100_MAOM = torch.mean(sensitivity_soc_100_MAOM, dim=1)
 
 	# Create bar plot for sensitivity of each parameter
 	for i_type in ['soc', 'POM', 'MAOM']:
