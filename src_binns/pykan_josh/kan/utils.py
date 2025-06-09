@@ -265,20 +265,20 @@ def fit_params(x, y, fun, a_range=(-10,10), b_range=(-10,10), grid_number=101, i
     return torch.stack([a_best, b_best, c_best, d_best]), r2_best
 
 
-def sparse_mask(in_dim, out_dim):
+def sparse_mask(in_dim, out_dim, device):
     '''
     get sparse mask
     '''
-    in_coord = torch.arange(in_dim) * 1/in_dim + 1/(2*in_dim)
-    out_coord = torch.arange(out_dim) * 1/out_dim + 1/(2*out_dim)
+    in_coord = torch.arange(in_dim, device=device) * 1/in_dim + 1/(2*in_dim)
+    out_coord = torch.arange(out_dim, device=device) * 1/out_dim + 1/(2*out_dim)
 
     dist_mat = torch.abs(out_coord[:,None] - in_coord[None,:])
     in_nearest = torch.argmin(dist_mat, dim=0)
-    in_connection = torch.stack([torch.arange(in_dim), in_nearest]).permute(1,0)
+    in_connection = torch.stack([torch.arange(in_dim, device=device), in_nearest]).permute(1,0)
     out_nearest = torch.argmin(dist_mat, dim=1)
-    out_connection = torch.stack([out_nearest, torch.arange(out_dim)]).permute(1,0)
+    out_connection = torch.stack([out_nearest, torch.arange(out_dim, device=device)]).permute(1,0)
     all_connection = torch.cat([in_connection, out_connection], dim=0)
-    mask = torch.zeros(in_dim, out_dim)
+    mask = torch.zeros(in_dim, out_dim, device=device)
     mask[all_connection[:,0], all_connection[:,1]] = 1.
     
     return mask

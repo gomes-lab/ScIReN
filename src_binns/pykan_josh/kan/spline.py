@@ -1,3 +1,4 @@
+import os
 import torch
 
 
@@ -78,7 +79,7 @@ def coef2curve(x_eval, grid, coef, k, device="cpu"):
     return y_eval
 
 
-def curve2coef(x_eval, y_eval, grid, k, smoothness_lamb=1):
+def curve2coef(x_eval, y_eval, grid, k, smoothness_lamb=0.001):  # Check smoothness_lamb
     '''
     converting B-spline curves to B-spline coefficients using least squares.
     
@@ -119,7 +120,7 @@ def curve2coef(x_eval, y_eval, grid, k, smoothness_lamb=1):
     # except:
     #     print('lstsq failed')
 
-    # NOT USED: anual psuedo-inverse
+    # NOT USED: manual psuedo-inverse
     '''lamb=1e-8
     XtX = torch.einsum('ijmn,ijnp->ijmp', mat.permute(0,1,3,2), mat)
     Xty = torch.einsum('ijmn,ijnp->ijmp', mat.permute(0,1,3,2), y_eval)
@@ -141,7 +142,7 @@ def curve2coef(x_eval, y_eval, grid, k, smoothness_lamb=1):
     # For row i, position (i, i) contains -1 and position (i, i+1) contains 1. Other entries in the row are 0.
     # When we multiply this D matrix by the coef vector "a", we get a vector:
     # Da = [ a2-a1, a3-a2, a4-a3, ... ]^T
-    D = torch.zeros((n_coef-1, n_coef))
+    D = torch.zeros((n_coef-1, n_coef), device=device)
     D[range(0, n_coef-1), range(0, n_coef-1)] = -1  # Fill in the (i, i) diagonal with -1
     D[range(0, n_coef-1), range(1, n_coef)] = 1  # Fill in the (i, i+1) diagonal with 1
     B = mat  # [in_dim, out_dim, batch, n_coef]
@@ -149,6 +150,7 @@ def curve2coef(x_eval, y_eval, grid, k, smoothness_lamb=1):
 
     # Find the least squares fit
     coef = None
+
     try:
         coef = torch.linalg.lstsq((B_T @ B) + smoothness_lamb * (D.T @ D), B_T @ y_eval).solution[:, :, :, 0]
     except:  # NOTE @joshuafan may be unncessary now

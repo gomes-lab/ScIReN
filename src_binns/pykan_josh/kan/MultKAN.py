@@ -93,7 +93,8 @@ class MultKAN(nn.Module):
             the number of times rewind() has been called
         device : str
     '''
-    def __init__(self, width=None, grid=3, k=3, mult_arity = 2, noise_scale=0.3, scale_base_mu=0.0, scale_base_sigma=1.0, base_fun='silu', symbolic_enabled=True, affine_trainable=False, grid_eps=0.02, grid_margin=0.0, grid_range=[-1, 1], sp_trainable=True, sb_trainable=True, seed=1, save_act=True, sparse_init=False, residual=False, auto_save=False, first_init=True, ckpt_path='./model', state_id=0, round=0, device='cpu', input_size=None):
+    def __init__(self, width=None, grid=3, k=3, mult_arity = 2, noise_scale=0.3, scale_base_mu=0.0, scale_base_sigma=1.0, base_fun='silu', symbolic_enabled=True, affine_trainable=False, grid_eps=0.02, grid_margin=0.0, grid_range=[-1, 1], sp_trainable=True, sb_trainable=True, seed=1, save_act=True, sparse_init=False, auto_save=True, first_init=True, ckpt_path='./model', state_id=0, round=0, device='cpu',
+                 input_size=None, absolute_deviation=False):
         '''
         initalize a KAN model
         
@@ -135,8 +136,6 @@ class MultKAN(nn.Module):
                 indicate whether intermediate activations are saved in forward pass
             sparse_init : bool
                 sparse initialization (True) or normal dense initialization. Default: False.
-            residual : bool
-                if residual = True, layers where out_dim > in_dim (except last dim) get a residual connection.
             auto_save : bool
                 indicate whether to automatically save a checkpoint once the model is modified
             state_id : int
@@ -150,6 +149,7 @@ class MultKAN(nn.Module):
                 if set, this is the number of nuemric features. The other features are assumed 
                 to be categorical embeddings (each categorical variable's embedding dim should
                 be equal to the output dim of the network, and are added at the end)
+            absolute_deviation: If True, compute edge scores and node scores using mean absolute deviation (otherwise we use standard deviation)
 
         Returns:
         --------
@@ -183,7 +183,6 @@ class MultKAN(nn.Module):
         self.width = width
         self.input_size = input_size if input_size is not None else width[0][0]
         self.output_size = width[-1][0]
-        self.residual = residual
 
         # if mult_arity is just a scalar, we extend it to a list of lists
         # e.g, mult_arity = [[2,3],[4]] means that in the first hidden layer, 2 mult ops have arity 2 and 3, respectively;
@@ -222,8 +221,7 @@ class MultKAN(nn.Module):
             else:
                 k_l = k
 
-            whether_residual = False if (l == self.depth - 1 or width_out[l+1] <= width_in[l]) else residual
-            sp_batch = KANLayer(in_dim=width_in[l], out_dim=width_out[l+1], num=grid_l, k=k_l, noise_scale=noise_scale, scale_base_mu=scale_base_mu, scale_base_sigma=scale_base_sigma, scale_sp=1., base_fun=base_fun, grid_eps=grid_eps, grid_margin=grid_margin, grid_range=grid_range, sp_trainable=sp_trainable, sb_trainable=sb_trainable, sparse_init=sparse_init, residual=whether_residual)
+            sp_batch = KANLayer(in_dim=width_in[l], out_dim=width_out[l+1], num=grid_l, k=k_l, noise_scale=noise_scale, scale_base_mu=scale_base_mu, scale_base_sigma=scale_base_sigma, scale_sp=1., base_fun=base_fun, grid_eps=grid_eps, grid_margin=grid_margin, grid_range=grid_range, sp_trainable=sp_trainable, sb_trainable=sb_trainable, sparse_init=sparse_init, device=device)
             self.act_fun.append(sp_batch)
 
         self.node_bias = []
@@ -267,6 +265,7 @@ class MultKAN(nn.Module):
             
         self.node_scores = None
         self.edge_scores = None
+        self.absolute_deviation = absolute_deviation
         self.subnode_scores = None
         
         self.cache_data = None
@@ -489,7 +488,7 @@ class MultKAN(nn.Module):
                      sp_trainable=self.sp_trainable,
                      sb_trainable=self.sb_trainable,
                      ckpt_path=self.ckpt_path,
-                     auto_save=False,
+                     auto_save=True,
                      first_init=False,
                      state_id=self.state_id,
                      round=self.round,
@@ -833,8 +832,12 @@ class MultKAN(nn.Module):
             
             if self.save_act:
                 # save subnode_scale
-                self.subnode_actscale.append(torch.std(x, dim=0).detach())
-            
+                if self.absolute_deviation:
+                    node_deviation = (x - x.mean(dim=0, keepdim=True)).abs().mean(dim=0)
+                else:
+                    node_deviation = torch.std(x, dim=0)
+                self.subnode_actscale.append(node_deviation.detach())
+
             # subnode affine transform
             x = self.subnode_scale[l][None,:] * x + self.subnode_bias[l][None,:]
             
@@ -843,9 +846,14 @@ class MultKAN(nn.Module):
 
                 # self.neurons_scale.append(torch.mean(torch.abs(x), dim=0))
                 #grid_reshape = self.act_fun[l].grid.reshape(self.width_out[l + 1], self.width_in[l], -1)
-                input_range = torch.std(preacts, dim=0) + 0.1
-                output_range_spline = torch.std(postacts_numerical, dim=0) # for training, only penalize the spline part
-                output_range = torch.std(postacts, dim=0) # for visualization, include the contribution from both spline + symbolic
+                if self.absolute_deviation:
+                    input_range = (preacts - preacts.mean(dim=0, keepdim=True)).abs().mean(dim=0) + 0.1
+                    output_range_spline = (postacts_numerical - postacts_numerical.mean(dim=0, keepdim=True)).abs().mean(dim=0)  # for training, only penalize the spline part
+                    output_range = (postacts - postacts.mean(dim=0, keepdim=True)).abs().mean(dim=0)  # for visualization, include the contribution from both spline + symbolic
+                else:
+                    input_range = torch.std(preacts, dim=0) + 0.1
+                    output_range_spline = torch.std(postacts_numerical, dim=0) # for training, only penalize the spline part
+                    output_range = torch.std(postacts, dim=0) # for visualization, include the contribution from both spline + symbolic
                 # save edge_scale
                 self.edge_actscale.append(output_range)
                 
@@ -902,7 +910,6 @@ class MultKAN(nn.Module):
         values = []
         names = []
         for l in range(self.depth):
-            # print("SHAPES. spline_preacts", self.spline_preacts[l].shape, "Postacts", self.spline_postacts[l].shape, "acts", self.acts[l+1].shape)
             # preacts: [batch, out_dim, in_dim], postacts: [batch, out_dim, in_dim], acts[l+1]: [batch, out_dim]
             values.extend([self.spline_preacts[l].cpu().numpy(), self.spline_postacts[l].cpu().numpy(), self.acts[l+1].cpu().numpy()])
             names.extend([f"Layer {l} pre-activations", f"Layer {l} post-activations", f"Layer {l} outputs"])
@@ -1107,8 +1114,7 @@ class MultKAN(nn.Module):
             
         if metric == 'backward':
             self.attribute()
-            
-        
+
         if not os.path.exists(folder):
             os.makedirs(folder)
         # matplotlib.use('Agg')
@@ -1118,6 +1124,15 @@ class MultKAN(nn.Module):
         depth = len(self.width) - 1
         for l in range(depth):
             w_large = 2.0
+
+            # Also compute function outside of data input range
+            min_grid = self.act_fun[l].grid[:, 0]
+            max_grid = self.act_fun[l].grid[:, -1]
+            grid_inputs = torch.empty((50, min_grid.shape[0]), device=self.device)
+            for input_idx in range(min_grid.shape[0]):
+                grid_inputs[:, input_idx] = torch.linspace(min_grid[input_idx], max_grid[input_idx], 50)
+            y, grid_preacts, grid_postacts, grid_postspline = self.act_fun[l].forward(grid_inputs)
+
             for i in range(self.width_in[l]):
                 for j in range(self.width_out[l+1]):
                     rank = torch.argsort(self.acts[l][:, i])
@@ -1170,12 +1185,15 @@ class MultKAN(nn.Module):
                     # Plot version with ticks
                     plt.xticks()  # Restore default ticks
                     plt.yticks()
-                    plt.plot(self.acts[l][:, i][rank].cpu().detach().numpy(), self.spline_postacts[l][:, j, i][rank].cpu().detach().numpy())  # , color=color, lw=10)  # @joshuafan changed lw (line width)
+                    plt.scatter(self.acts[l][:, i][rank].cpu().detach().numpy(), self.spline_postacts[l][:, j, i][rank].cpu().detach().numpy(), label="Evaluated at datapoints")  # , color=color, lw=10)  # @joshuafan changed lw (line width)
+                    if not torch.allclose(grid_postacts[:, j, i], torch.zeros_like(grid_postacts[:, j, i])):
+                        # Only plot this if grid_postacts is not all zero (meaning edge was not masked out)
+                        plt.plot(grid_preacts[:, j, i].cpu().detach().numpy(), grid_postacts[:, j, i].cpu().detach().numpy(), color='green', linestyle='--', label="Evaluated at evenly spaced points")  # evenly spaced
                     plt.xlabel("Input")
                     plt.ylabel("Post-activation output")
+                    plt.legend()
                     plt.savefig(f'{folder}/sp_{l}_{i}_{j}_ticks.png')  # , bbox_inches="tight", dpi=400)
                     plt.close()
-
 
         def score2alpha(score):
             return np.tanh(beta * score)
@@ -1354,8 +1372,9 @@ class MultKAN(nn.Module):
                 if isinstance(in_vars[i], sympy.Expr):
                     plt.gcf().get_axes()[0].text(1 / (2 * (n)) + i / (n), -0.1, f'${latex(in_vars[i])}$', fontsize=40 * scale * varscale, horizontalalignment='center', verticalalignment='center')
                 else:
+                    # TODO -0.05 needs to be tuned
+                    plt.gcf().get_axes()[0].text(1 / (2 * (n)) + i / (n), -0.05, in_vars[i], fontsize=40 * scale * varscale, horizontalalignment='center', verticalalignment='center')
                     # plt.gcf().get_axes()[0].text(1 / (2 * (n)) + i / (n), -0.1, in_vars[i], fontsize=40 * scale * varscale, horizontalalignment='center', verticalalignment='center')
-                    plt.gcf().get_axes()[0].text(1 / (2 * (n)) + i / (n), -0.02, in_vars[i], fontsize=40 * scale * varscale, horizontalalignment='center', verticalalignment='center')
                 
                 
 
@@ -1365,14 +1384,15 @@ class MultKAN(nn.Module):
                 if isinstance(out_vars[i], sympy.Expr):
                     plt.gcf().get_axes()[0].text(1 / (2 * (n)) + i / (n), (y0+z0) * (len(self.width) - 1) + 0.15, f'${latex(out_vars[i])}$', fontsize=40 * scale * varscale, horizontalalignment='center', verticalalignment='center')
                 else:
+                    # TODO 0.05 needs to be tuned
+                    plt.gcf().get_axes()[0].text(1 / (2 * (n)) + i / (n), (y0+z0) * (len(self.width) - 1) + 0.05, out_vars[i], fontsize=40 * scale * varscale, horizontalalignment='center', verticalalignment='center')
                     # plt.gcf().get_axes()[0].text(1 / (2 * (n)) + i / (n), (y0+z0) * (len(self.width) - 1) + 0.15, out_vars[i], fontsize=40 * scale * varscale, horizontalalignment='center', verticalalignment='center')
-                    plt.gcf().get_axes()[0].text(1 / (2 * (n)) + i / (n), (y0+z0) * (len(self.width) - 1) + 0.02, out_vars[i], fontsize=40 * scale * varscale, horizontalalignment='center', verticalalignment='center')
 
         if title != None:
             plt.gcf().get_axes()[0].text(0.5, (y0+z0) * (len(self.width) - 1) + 0.3, title, fontsize=40 * scale, horizontalalignment='center', verticalalignment='center')
 
             
-    def reg(self, reg_metric, lamb_l1, lamb_entropy, lamb_coef, lamb_coefdiff, return_indiv=False):
+    def reg(self, reg_metric, lamb_l1, lamb_entropy, lamb_coef, lamb_coefdiff, return_indiv=False, flat_entropy=False):
         '''
         Get regularization
         
@@ -1394,7 +1414,7 @@ class MultKAN(nn.Module):
         Returns:
         --------
         If return_indiv True:
-            4 floats: l1 loss, entropy loss, coefficient penalty, coefficient smoothness
+            5 floats: l1 loss, entropy loss, coefficient penalty, coefficient smoothness, 2nd order coefficient smoothness
         If return_indiv False:
             reg_ : torch.float
         
@@ -1432,77 +1452,55 @@ class MultKAN(nn.Module):
             raise Exception(f'reg_metric = {reg_metric} not recognized!')
 
         reg_ = 0.
+        l1 = 0.0
+        entropy = 0.0
+        coeff_l1 = 0.0
+        coeff_diff_l2 = 0.0
+        coeff_diff2_l2 = 0.0
 
-        # Old version: entropy computed per row/column of vec (input/output)
-        for i in range(len(acts_scale)):
-            vec = acts_scale[i]
+        if not flat_entropy:
+            # Old version: entropy computed per row/column of vec (input/output)
+            for i in range(len(acts_scale)):
+                vec = acts_scale[i]
 
-            l1 = torch.sum(vec)
-            p_row = vec / (torch.sum(vec, dim=1, keepdim=True) + 1)
-            p_col = vec / (torch.sum(vec, dim=0, keepdim=True) + 1)
-            entropy_row = - torch.mean(torch.sum(p_row * torch.log2(p_row + 1e-4), dim=1)) # Fixed output
-            entropy_col = - torch.mean(torch.sum(p_col * torch.log2(p_col + 1e-4), dim=0))  # Fixed input
+                l1 = torch.sum(vec)
+                p_row = vec / (torch.sum(vec, dim=1, keepdim=True) + 1)
+                p_col = vec / (torch.sum(vec, dim=0, keepdim=True) + 1)
+                entropy_row = - torch.mean(torch.sum(p_row * torch.log2(p_row + 1e-4), dim=1))
+                entropy_col = - torch.mean(torch.sum(p_col * torch.log2(p_col + 1e-4), dim=0))
+                entropy += (entropy_row + entropy_col)
+                # reg_ += lamb_l1 * l1 + lamb_entropy * (entropy_row + entropy_col)  # both l1 and entropy
+        else:
+            # New version: entropy computed across all edges simultaneously @joshuafan
+            for i in range(len(acts_scale)):
+                vec = acts_scale[i].flatten()
+                # print(i, "Computing entropy over", acts_scale[i].shape, vec)
+                l1 += torch.sum(vec)
+                p_edge = vec / vec.sum()
+                entropy += (- torch.sum(p_edge * torch.log2(p_edge + 1e-4)))
 
-            # If calculate sum of all rows
-            select_row_idx = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-            select_row = vec[select_row_idx, :]
-            p_row = select_row / (torch.sum(select_row, dim=1, keepdim=True) + 1)
-            entropy_row = torch.mean(torch.sum(p_row * torch.log2(p_row + 1e-4), dim=1))
+                # Tsallis alpha-entropy: Eq 9 in https://arxiv.org/pdf/1905.05702 (alpha=1.5)
+                # Supposed to induce a sparser distribution than normal Shannon entropy
+                # tsallis_entropy = (1.0 / 0.75) * (p_edge - p_edge**1.5).sum()
 
-            non_select_row_idx = [0, 1, 2, 3, 4, 5, 6]
-            non_select_row = vec[non_select_row_idx, :]
-            p_row = non_select_row / (torch.sum(non_select_row, dim=1, keepdim=True) + 1)
-            row_balance = -torch.mean(torch.sum(p_row * torch.log2(p_row + 1e-4), dim=1))
-            
-            # If calculate specific col
-            # select_col_idx = [2, 8, 9]
-            select_col_idx = 2
-            select_col = vec[:, select_col_idx]
-            p_col = select_col / (torch.sum(select_col, dim=0, keepdim=True) + 1)
-            entropy_col = torch.mean(torch.sum(p_col * torch.log2(p_col + 1e-4), dim=0))
-
-            # row_sum = vec.sum(dim=1)
-            # row_balance = torch.var(row_sum)
-
-
-            reg_ += lamb_l1 * l1 + lamb_entropy * (entropy_row + entropy_col)  # both l1 and entropy
-
-        # New version: entropy computed across all edges simultaneously @joshuafan
-        for i in range(len(acts_scale)):
-            vec = acts_scale[i].flatten()
-            l1 = torch.sum(vec)
-            p_edge = vec / vec.sum()
-            entropy_edge = - torch.mean(torch.sum(p_edge * torch.log2(p_edge + 1e-4)))
-            reg_ += lamb_l1 * l1 + lamb_entropy * entropy_edge  # both l1 and entropy
-
-        coeff_diff_l2 = 0
-        coeff_diff2_l2 = 0
         # regularize coefficient to encourage spline to be zero
         for i in range(len(self.act_fun)):
-            coeff_l1 = torch.sum(torch.mean(torch.abs(self.act_fun[i].coef), dim=1))
-
-            edge_weight = acts_scale[i].permute((1, 0))  # Permute to [in_dim, out_dim]
-            edge_weight = edge_weight / edge_weight.sum()
+            coeff_l1 += torch.sum(torch.mean(torch.abs(self.act_fun[i].coef), dim=1))
 
             # Note that self.act_fun[i].coef has shape [in_dim, out_dim, n_splines]
             # By default, diff is over the last dimension (splines)
-            coeff_diff_l1 = (edge_weight * torch.diff(self.act_fun[i].coef).abs().sum(dim=2)).sum()
-
+            # coeff_diff_l1 = torch.diff(self.act_fun[i].coef).abs().sum()
+            # coeff_diff_l1 = torch.sum(torch.mean(torch.abs(torch.diff(self.act_fun[i].coef)), dim=1))
             coeff_diff = torch.diff(self.act_fun[i].coef)
             coeff_diff2 = torch.diff(coeff_diff)  # 2nd order differences
             coeff_diff_l2 += coeff_diff.square().sum()
             coeff_diff2_l2 += coeff_diff2.square().sum()
 
-            # coeff_diff_l1 = torch.sum(torch.mean(torch.abs(torch.diff(self.act_fun[i].coef)), dim=1))
-            reg_ += lamb_coef * coeff_l1 + lamb_coefdiff * coeff_diff_l1
-
         # directly regularize the postactivations towards zero
         if return_indiv:
-            # print('coeff_diff_l1', coeff_diff_l1)
-            # print('entropy_row', entropy_row)
-            # print('row_balance', row_balance)
-            return l1, entropy_edge, coeff_l1, coeff_diff2_l2, entropy_row, entropy_col, row_balance
+            return l1, entropy, coeff_l1, coeff_diff_l2, coeff_diff2_l2  #, tsallis_entropy_edge
         else:
+            reg_ = lamb_l1 * l1 + lamb_entropy * entropy + lamb_coef * coeff_l1 + lamb_coefdiff * coeff_diff_l2
             return reg_
     
     def get_reg(self, reg_metric, lamb_l1, lamb_entropy, lamb_coef, lamb_coefdiff):
@@ -1824,21 +1822,22 @@ class MultKAN(nn.Module):
         self.mask_up = mask_up
         self.mask_down = mask_down
 
+        # NOTE Moved this up here so that remove_node does not change the original model self
+        model2 = MultKAN(copy.deepcopy(self.width), grid=self.grid, k=self.k, base_fun=self.base_fun_name, mult_arity=self.mult_arity, ckpt_path=self.ckpt_path, auto_save=True, first_init=False, state_id=self.state_id, round=self.round, input_size=self.input_size, device=self.device)
+        model2.load_state_dict(self.state_dict())
+        width_new = [self.width[0]]
+
         # update act_fun[l].mask up
         for l in range(len(self.acts_scale) - 1):
             for i in range(self.width_in[l + 1]):
                 if i not in active_neurons_up[l + 1]:
-                    self.remove_node(l + 1, i, mode='up',log_history=False)
+                    # NOTE Changed self to model2, to avoid modifying the original model
+                    model2.remove_node(l + 1, i, mode='up',log_history=False)
                     
             for i in range(self.width_out[l + 1]):
                 if i not in active_neurons_down[l]:
-                    self.remove_node(l + 1, i, mode='down',log_history=False)
+                    model2.remove_node(l + 1, i, mode='down',log_history=False)
 
-        model2 = MultKAN(copy.deepcopy(self.width), grid=self.grid, k=self.k, base_fun=self.base_fun_name, mult_arity=self.mult_arity, ckpt_path=self.ckpt_path, auto_save=False, first_init=False, state_id=self.state_id, round=self.round, residual=self.residual, input_size=self.input_size).to(self.device)
-        model2.load_state_dict(self.state_dict())
-        
-        width_new = [self.width[0]]
-        
         for i in range(len(self.acts_scale)):
             
             if i < len(self.acts_scale) - 1:
@@ -1876,7 +1875,7 @@ class MultKAN(nn.Module):
         
         return model2
     
-    def prune_edge(self, threshold=3e-2, log_history=True):
+    def prune_edge(self, threshold=3e-2, quantile_threshold=None, log_history=True):
         '''
         pruning edges
 
@@ -1901,7 +1900,10 @@ class MultKAN(nn.Module):
         '''
         if self.acts == None:
             self.get_act()
-        
+
+        if quantile_threshold is not None:
+            threshold = torch.quantile(self.edge_scores[0], 1 - quantile_threshold)
+
         for i in range(len(self.width)-1):
             #self.act_fun[i].mask.data = ((self.acts_scale[i] > threshold).permute(1,0)).float()
             old_mask = self.act_fun[i].mask.data
@@ -1910,7 +1912,7 @@ class MultKAN(nn.Module):
         if log_history:
             self.log_history('fix_symbolic')
     
-    def prune(self, node_th=1e-2, edge_th=3e-2):
+    def prune(self, node_th=1e-2, edge_th=3e-2, edge_quantile_th=None):
         '''
         prune (both nodes and edges)
 
@@ -1920,7 +1922,9 @@ class MultKAN(nn.Module):
                 if the attribution score of a node is below node_th, it is considered dead and will be set to zero.
             edge_th : float
                 if the attribution score of an edge is below node_th, it is considered dead and will be set to zero.
-            
+            edge_quantile_th : float
+                if this is set, keep this fraction of edges (instead of using a fixed threshold)
+
         Returns:
         --------
             pruned network : MultKAN
@@ -1938,13 +1942,13 @@ class MultKAN(nn.Module):
         if self.acts == None:
             self.get_act()
         
-        self = self.prune_node(node_th, log_history=False)
+        self2 = self.prune_node(node_th, log_history=False)
         #self.prune_node(node_th, log_history=False)
-        self.forward(self.cache_data)
-        self.attribute()
-        self.prune_edge(edge_th, log_history=False)
-        self.log_history('prune')
-        return self
+        self2.forward(self2.cache_data)
+        self2.attribute()
+        self2.prune_edge(edge_th, quantile_threshold=edge_quantile_th, log_history=False)
+        self2.log_history('prune')
+        return self2
     
     def prune_input(self, threshold=1e-2, active_inputs=None, log_history=True):
         '''
@@ -1995,7 +1999,7 @@ class MultKAN(nn.Module):
         else:
             input_id = torch.tensor(active_inputs, dtype=torch.long).to(self.device)
         
-        model2 = MultKAN(copy.deepcopy(self.width), grid=self.grid, k=self.k, base_fun=self.base_fun, mult_arity=self.mult_arity, ckpt_path=self.ckpt_path, auto_save=False, first_init=False, state_id=self.state_id, round=self.round).to(self.device)
+        model2 = MultKAN(copy.deepcopy(self.width), grid=self.grid, k=self.k, base_fun=self.base_fun, mult_arity=self.mult_arity, ckpt_path=self.ckpt_path, auto_save=True, first_init=False, state_id=self.state_id, round=self.round, device=self.device)
         model2.load_state_dict(self.state_dict())
 
         model2.act_fun[0] = model2.act_fun[0].get_subset(input_id, torch.arange(self.width_out[1]))
@@ -2145,10 +2149,6 @@ class MultKAN(nn.Module):
             # subnode_score is a 'weight' on how important each output is to each FINAL output. [final_out_dim, out_dim]. In the KAN 2.0 paper this is A_{l,i}.
             # subnode_actscale[l-1] is the standard deviation of the SUMMED post-activations (from all inputs), used to normalize edge_actscale. [out_dim] In the KAN 2.0 paper this is N_{l+1, j}
             # This line computes the first part of Eq 9 in the KAN 2.0 paper: B_{l-1, i, j} = A_{l,j} * E_{l,j} / N_{l+1, j}
-            # print("Layer", l, "Edge actscale", self.edge_actscale[l-1].shape, self.edge_actscale[l-1].mean(), self.edge_actscale[l-1].std())
-            # print("Layer", l, "Subnode score", subnode_score.shape, subnode_score.mean(), subnode_score.std())
-            # print("Layer", l, "Subnode actscale", self.subnode_actscale[l-1].shape, self.subnode_actscale[l-1].mean(), self.subnode_actscale[l-1].std())
-
             # edge_score = torch.einsum('ij,ki,i->kij', self.edge_actscale[l-1], subnode_score.to(device), 1/(self.subnode_actscale[l-1]+1e-4))
             edge_score = torch.einsum('ij,ki->kij', self.edge_actscale[l-1], subnode_score.to(device)) / self.subnode_actscale[l-1].mean() # @joshuafan: Try not dividing by subnode_actscale, since some nodes are inherently less variable.
             edge_scores.append(edge_score)  # edge_score: [final_out_dim, out_dim, in_dim]
@@ -2156,10 +2156,6 @@ class MultKAN(nn.Module):
             # edge to node
             # This line computes the second part of Eq 9 in the KAN 2.0 paper: A_{l-1,i} = \sum_j B_{l-1,i,j}
             node_score = torch.sum(edge_score, dim=1)  # [final_out_dim, in_dim]
-
-            # ATTN @joshuafan: normalize the node score, so the sum across the final outputs is one. 
-            # node_score = node_score / node_score.sum(dim=0, keepdim=True)
-
             node_scores.append(node_score)
 
         self.node_scores_all = list(reversed(node_scores))  # List of num_layers+1 items, although last item (representing the output layer) is just a diagonal
@@ -2529,7 +2525,7 @@ class MultKAN(nn.Module):
 
         # add kanlayer, set mask to zero
         dim_out = self.width_in[-1]
-        layer = KANLayer(dim_out, dim_out, num=self.grid, k=self.k)
+        layer = KANLayer(dim_out, dim_out, num=self.grid, k=self.k, device=self.device)
         layer.mask *= 0.
         self.act_fun.append(layer)
 
@@ -2600,7 +2596,7 @@ class MultKAN(nn.Module):
                                 new.affine.data[j][i] = old.affine.data[j-n_added_nodes][i]
 
                     self.symbolic_fun[l] = new
-                    self.act_fun[l] = KANLayer(in_dim, out_dim + n_added_nodes, num=self.grid, k=self.k)
+                    self.act_fun[l] = KANLayer(in_dim, out_dim + n_added_nodes, num=self.grid, k=self.k, device=self.device)
                     self.act_fun[l].mask *= 0.
 
                     self.node_scale[l].data = torch.cat([torch.ones(n_added_nodes, device=self.device), self.node_scale[l].data])
@@ -2631,7 +2627,7 @@ class MultKAN(nn.Module):
                                 new.affine.data[j][i] = old.affine.data[j][i-n_added_nodes]
 
                     self.symbolic_fun[l] = new
-                    self.act_fun[l] = KANLayer(in_dim + n_added_nodes, out_dim, num=self.grid, k=self.k)
+                    self.act_fun[l] = KANLayer(in_dim + n_added_nodes, out_dim, num=self.grid, k=self.k, device=self.device)
                     self.act_fun[l].mask *= 0.
 
 
@@ -2662,7 +2658,7 @@ class MultKAN(nn.Module):
                                 new.affine.data[j][i] = old.affine.data[j][i]
 
                     self.symbolic_fun[l] = new
-                    self.act_fun[l] = KANLayer(in_dim, out_dim + n_added_subnodes, num=self.grid, k=self.k)
+                    self.act_fun[l] = KANLayer(in_dim, out_dim + n_added_subnodes, num=self.grid, k=self.k, device=self.device)
                     self.act_fun[l].mask *= 0.
 
                     self.node_scale[l].data = torch.cat([self.node_scale[l].data, torch.ones(n_added_nodes, device=self.device)])
@@ -2691,7 +2687,7 @@ class MultKAN(nn.Module):
                                 new.affine.data[j][i] = old.affine.data[j][i]
 
                     self.symbolic_fun[l] = new
-                    self.act_fun[l] = KANLayer(in_dim + n_added_nodes, out_dim, num=self.grid, k=self.k)
+                    self.act_fun[l] = KANLayer(in_dim + n_added_nodes, out_dim, num=self.grid, k=self.k, device=self.device)
                     self.act_fun[l].mask *= 0.
 
         _expand(layer_id-1, n_added_nodes, sum_bool, mult_arity, added_dim='out')
@@ -2770,7 +2766,7 @@ class MultKAN(nn.Module):
                         self.act_fun[l].mask.data[i][j] = torch.tensor(1.)
                         self.act_fun[l].scale_base.data[i][j] = torch.tensor(0.)
                         self.act_fun[l].scale_sp.data[i][j] = torch.tensor(0.)
-                        
+
         self.get_act(self.cache_data)
         
         self.log_history('perturb')
