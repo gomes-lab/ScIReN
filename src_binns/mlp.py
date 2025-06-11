@@ -1,10 +1,11 @@
-import fun_matrix_clm5_experimental
+import fun_matrix_COMPAS_Hardy
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from pe_gcn_model import GridCellSpatialRelationEncoder
 import misc_utils
+
 
 
 class mlp(torch.nn.Module):
@@ -252,7 +253,7 @@ class mlp_wrapper(nn.Module):
 			self.mlp = mlp(layer_sizes, use_bn=use_bn, dropout_prob=dropout_prob,
 				  		   activation=activation, init=init, residual=residual)
 		elif base_model == "kan":
-			import kan
+			from pykan_josh import kan
 			# grid_eps = 1: use evenly-spaced grid
 			self.mlp = kan.KAN(width=layer_sizes, grid=kan_grid, k=3, seed=torch.initial_seed(), device=device,
 					  		   input_size=len(self.non_categorical_indices), noise_scale=kan_noise,
@@ -369,17 +370,17 @@ class mlp_wrapper(nn.Module):
 
 		# CLM5 process-based model
 		if whether_predict == 1:
-			simu_soc = fun_matrix_clm5_experimental.fun_model_prediction(predicted_para[valid_mask], forcing, self.vertical_mixing, self.vectorized)
+			simu_soc = fun_matrix_COMPAS_Hardy.fun_model_prediction(predicted_para[valid_mask], forcing)
 		else:
-			simu_soc = fun_matrix_clm5_experimental.fun_model_simu(predicted_para[valid_mask], forcing, obs_depth, self.vertical_mixing, self.vectorized)
+			simu_soc = fun_matrix_COMPAS_Hardy.fun_model_simu(predicted_para[valid_mask], forcing, obs_depth)
 
-		simu_soc_with_nan = torch.full((predicted_para.shape[0], simu_soc.shape[1]), float('nan'), device=input_var.device)
-		simu_soc_with_nan[valid_mask] = simu_soc
+		# simu_soc_with_nan = torch.full((predicted_para.shape[0], simu_soc.shape[1]), float('nan'), device=input_var.device)
+		# simu_soc_with_nan[valid_mask] = simu_soc
 
 		if return_spatial_embedding:
-			return simu_soc_with_nan, predicted_para, spatial_embeddings
+			return simu_soc, predicted_para, spatial_embeddings
 		else:
-			return simu_soc_with_nan, predicted_para
+			return simu_soc, predicted_para
 
 
 	def forward_ignoring_input(self, input_var, wosis_depth):
@@ -395,7 +396,7 @@ class mlp_wrapper(nn.Module):
 		bias = self.mlp.layer_output.bias  # [n_params]
 		bias = bias.repeat((predictor.shape[0], 1))  # [batch, n_params]
 		h5 = self.sigmoid(bias / clamped_temp_sigmoid)
-		simu_soc = fun_matrix_clm5_experimental.fun_model_simu(h5, forcing, obs_depth, self.vertical_mixing)  # [batch, n_depths]
+		simu_soc = fun_matrix_COMPAS_Hardy.fun_model_simu(h5, forcing, obs_depth)  # [batch, n_depths]
 		return simu_soc, h5
 
 
@@ -476,7 +477,7 @@ class ConstantParameters(nn.Module):
 		h5 = self.sigmoid(self.unconstrained_params / clamped_temp_sigmoid)
 
 		# print("forward_ignoring_input Current params", h5[0, :])
-		simu_soc = fun_matrix_clm5_experimental.fun_model_simu(h5, forcing, obs_depth, self.vertical_mixing)  # [batch, n_depths]
+		simu_soc = fun_matrix_COMPAS_Hardy.fun_model_simu(h5, forcing, obs_depth)  # [batch, n_depths]
 		return simu_soc, h5
 
 

@@ -18,7 +18,7 @@ from sklearn.model_selection import KFold
 from mlp import ConstantParameters
 from pe_gcn_model import GridCellSpatialRelationEncoder
 from torch.optim.swa_utils import AveragedModel, SWALR
-# from spatial_utils import *
+from spatial_utils import *
 from losses import binns_loss, compute_param_matching_loss, compute_param_violation_loss, compute_unconstrained_param_loss
 import visualization_utils
 
@@ -38,11 +38,8 @@ import numpy as np
 from scipy.interpolate import pchip_interpolate
 
 print("Start binns_DDP")
-print("Step-wise training at 100")
+# print("Step-wise training at 100")
 
-# @joshuafan: previously we set default dtype to float64 to avoid underflow in process-based model.
-# Now checking float32 with fixed process-based model.
-torch.set_default_dtype(torch.float32)
 
 # Temporary hack to avoid printing np.float64(...) when printing out numpy scalars.
 # TODO fix this
@@ -64,6 +61,10 @@ from scipy.io import loadmat
 import netCDF4 as ncread 
 import mat73
 from matplotlib import pyplot as plt
+
+# @joshuafan: previously we set default dtype to float64 to avoid underflow in process-based model.
+# Now checking float32 with fixed process-based model.
+torch.set_default_dtype(torch.float32)
 
 # LibMTL is a library for advanced multi-task loss weighting methods.
 # Commenting these out as they are not essential for BINN training.
@@ -103,6 +104,8 @@ parser.add_argument("--kan_grid_margin", type=float, default=1.0, help="How much
 parser.add_argument("--kan_noise", type=float, default=0.3, help="Noise scale for KAN")
 parser.add_argument("--kan_base_fun", type=str, default="silu", choices=["silu", "identity"], help="Base function for KAN")
 parser.add_argument("--kan_affine_trainable", action='store_true')
+parser.add_argument("--kan_absolute_deviation", action='store_true')
+parser.add_argument("--kan_flat_entropy", type=int, default=1)
 
 # Process-based model settings
 parser.add_argument("--vertical_mixing", type=str, default='original', choices=['original', 'simple_one_intercept', 'simple_two_intercepts'], help="""Vertical mixing matrix parameterization. Original explicitly models diffusion.
@@ -154,6 +157,7 @@ parser.add_argument("--bias_only_epochs", type=int, default=0, help="Number of e
 parser.add_argument("--patience", type=int, default=20)
 parser.add_argument("--one_param_only", action='store_true', help='If set, target updating only one param per batch')
 parser.add_argument("--save_freq", type=int, default=5, help="How often (epochs) to save the latest checkpoint, in case the job crashes")
+parser.add_argument("--soc_only_epochs", type=int, default=0, help="If set, train only on SOC data for this many epochs")
 
 # Regularization
 parser.add_argument("--weight_decay", type=float, default=1e-4)
@@ -163,7 +167,7 @@ parser.add_argument("--clip_value", type=float, default=-1, help="Clip value for
 # Losses and loss weights
 parser.add_argument("--losses", nargs="+", choices=["l1_loss", "smooth_l1", "l2_loss", "Smooth_l1_loss_SOC", "Smooth_l1_loss_POM", "Smooth_l1_loss_MAOM", "param_reg", "param_violation", "unconstrained_param", "param_matching", "jacobian",
 													"jacobian_sparsity", "spectral", "lipmlp", "cure", "senn_robustness", "senn_l1", "senn_sparsity", 
-													"nam_l2", "nam_entropy", "kan_l1", "kan_entropy", "kan_coef", "kan_coefdiff", "kan_entropy_output", "kan_entropy_input", "kan_output_var",
+													"nam_l2", "nam_entropy", "kan_l1", "kan_entropy", "kan_coef", "kan_coefdiff", "kan_coef_l1", "kan_coefdiff_l2", "kan_coefdiff2_l2", 
 													"spatial_error", "spatial_emb_smoothness", "param_smoothness", "residual"], default=["smooth_l1", "param_reg"],
 					help="Losses to use (can list any number). Note jacobian_sparsity cannot be optimized (non-differentiable): it is just something we track.")
 parser.add_argument("--loss_weighting", default="manual", choices=["manual", "relobralo", "IMTL", "two_stage"])
@@ -1573,7 +1577,8 @@ def worker(rank, world_size, job_id, port):
 
 		# Early stopping parameters
 		best_val_loss_soc = float('inf')
-		best_val_loss_pom_maom = float('inf')
+		best_val_loss_pom = float('inf')
+		best_val_loss_maom = float('inf')
 		best_val_NSE = float('inf')
 		best_val_NSE_soc = float('inf') 
 		best_val_NSE_POM = float('inf')
@@ -1626,7 +1631,8 @@ def worker(rank, world_size, job_id, port):
 
 		# Early stopping parameters
 		best_val_loss_soc = checkpoint_worker['best_val_loss_soc']
-		best_val_loss_pom_maom = checkpoint_worker['best_val_loss_pom_maom']
+		best_val_loss_pom = checkpoint_worker['best_val_loss_pom']
+		best_val_loss_maom = checkpoint_worker['best_val_loss_maom']
 		best_val_NSE = checkpoint_worker['best_val_NSE'] 
 		patience = args.patience
 		epochs_without_improvement = checkpoint_worker['epochs_without_improvement']
@@ -1701,7 +1707,7 @@ def worker(rank, world_size, job_id, port):
 			# KAN: update grid
 			if args.model == "kan" and ibatch == 1 and iepoch < 10 and args.kan_update_grid == 1:
 				with torch.no_grad():
-					model_without_ddp.update_grid(batch_x, batch_z, batch_c, whether_predict=0, one_param_only=args.one_param_only, PRODA_para=batch_proda_para)
+					model_without_ddp.update_grid(batch_x, batch_z, batch_c, whether_predict=0)
 					# local_min = batch_x.min(dim=0).values
 					# local_max = batch_x.max(dim=0).values
 					# global_min = local_min.clone()
@@ -1742,7 +1748,7 @@ def worker(rank, world_size, job_id, port):
 			else:
 				# Normal models just return predicted (1) SOC, (2) parameters
 				# print(f"Rank {rank} forward pass for batch {ibatch} started", flush=True)
-				batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0, one_param_only=args.one_param_only, PRODA_para=batch_proda_para)
+				batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0)
 				# print(f"Rank {rank} forward pass for batch {ibatch} done", flush=True)
 
 			# Check if batch_pred_para is nan or inf
@@ -1786,8 +1792,9 @@ def worker(rank, world_size, job_id, port):
 			nam_entropy_loss = np.nan
 			kan_l1_loss = np.nan
 			kan_entropy_loss = np.nan
-			kan_coef_loss = np.nan
-			kan_coefdiff_loss = np.nan
+			kan_coef_l1 = np.nan
+			kan_coefdiff_l2 = np.nan
+			kan_coefdiff2_l2 = np.nan
 			senn_robustness_loss = np.nan
 			senn_l1_loss = np.nan
 			senn_sparsity = np.nan
@@ -1903,7 +1910,7 @@ def worker(rank, world_size, job_id, port):
 
 				# NOTE: the lamb values passed are completely unused, as we direclty obtain the individual loss components and weight them later.
 				# For default weights see https://github.com/KindXiaoming/pykan/blob/master/kan/MultKAN.py#L1411
-				kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss, kan_entropy_output, kan_entropy_input, kan_output_var = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., return_indiv=True)
+				kan_l1_loss, kan_entropy_loss, kan_coef_l1, kan_coefdiff_l2, kan_coefdiff2_l2 = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., return_indiv=True, flat_entropy=args.kan_flat_entropy)
 					# model_without_ddp.mlp.get_reg(reg_metric='node_influence_on_output', lamb_l1=0., lamb_entropy=1., lamb_coef=0., lamb_coefdiff=0.)
 
 			if "senn_robustness" in args.losses:
@@ -1939,23 +1946,21 @@ def worker(rank, world_size, job_id, port):
 						"nam_entropy": nam_entropy_loss,
 						"kan_l1": kan_l1_loss,
 						"kan_entropy": kan_entropy_loss, # How "uniform" the distribution over edges (connections) is
-						"kan_coef": kan_coef_loss,
-						"kan_coefdiff": kan_coefdiff_loss, # Linear coefficients
+						"kan_coef_l1": kan_coef_l1, 
+						"kan_coefdiff_l2": kan_coefdiff_l2,  
+						"kan_coefdiff2_l2": kan_coefdiff2_l2,  
 						"senn_robustness": senn_robustness_loss,
 						"senn_l1": senn_l1_loss,
 						"senn_sparsity": senn_sparsity,
 						"spatial_error": spatial_error_loss,
 						"spatial_emb_smoothness": spatial_smoothness_loss,
 						"param_smoothness": param_smoothness_loss,
-						"residual": residual_loss, 
-						"kan_entropy_output": kan_entropy_output,
-						"kan_entropy_input": kan_entropy_input,
-						"kan_output_var": kan_output_var,
+						"residual": residual_loss
 						}
 
 			# Store losses in a tensor, in the order of args.losses
 
-			if iepoch <= 100:
+			if iepoch <= args.soc_only_epochs:
 				# Seperate training by epochs
 				smooth_l1_loss_POM_idx = args.losses.index("Smooth_l1_loss_POM")
 				smooth_l1_loss_MAOM_idx = args.losses.index("Smooth_l1_loss_MAOM")
@@ -2063,7 +2068,7 @@ def worker(rank, world_size, job_id, port):
 				elif args.model == 'binn_hybrid':
 					batch_y_hat, batch_pred_para, residual = model(batch_x, batch_z, batch_c, whether_predict=0, return_residual=True)
 				else:
-					batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0, PRODA_para=batch_proda_para)
+					batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0)
 
 				# 2 compute the objective function
 				smooth_l1_loss, NSE_SOC, NSE_POM, NSE_MAOM, l1_loss_SOC, l1_loss_POM, l1_loss_MAOM, param_reg_loss = fun_loss(batch_y_hat, batch_y, batch_pred_para)
@@ -2084,8 +2089,9 @@ def worker(rank, world_size, job_id, port):
 				nam_entropy_loss = np.nan
 				kan_l1_loss = np.nan
 				kan_entropy_loss = np.nan
-				kan_coef_loss = np.nan
-				kan_coefdiff_loss = np.nan
+				kan_coef_l1 = np.nan
+				kan_coefdiff_l2 = np.nan
+				kan_coefdiff2_l2 = np.nan
 				senn_robustness_loss = np.nan
 				senn_l1_loss = np.nan
 				senn_sparsity = np.nan
@@ -2186,7 +2192,7 @@ def worker(rank, world_size, job_id, port):
 					assert args.model == "kan"
 
 					# NOTE: the lamb values passed are completely unused, as we direclty obtain the individual loss components and weight them later.
-					kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss, kan_entropy_output, kan_entropy_input, kan_output_var = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., return_indiv=True)
+					kan_l1_loss, kan_entropy_loss, kan_coef_l1, kan_coefdiff_l2, kan_coefdiff2_l2 = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., return_indiv=True, flat_entropy=args.kan_flat_entropy)
 
 				if "senn_robustness" in args.losses:
 					senn_robustness_loss = model_without_ddp.senn_robustness_loss()
@@ -2215,18 +2221,16 @@ def worker(rank, world_size, job_id, port):
 							"nam_entropy": nam_entropy_loss,
 							"kan_l1": kan_l1_loss,
 							"kan_entropy": kan_entropy_loss,
-							"kan_coef": kan_coef_loss,
-							"kan_coefdiff": kan_coefdiff_loss,
+							"kan_coef_l1": kan_coef_l1,
+							"kan_coefdiff_l2": kan_coefdiff_l2,
+							"kan_coefdiff2_l2": kan_coefdiff2_l2,
 							"senn_robustness": senn_robustness_loss,
 							"senn_l1": senn_l1_loss,
 							"senn_sparsity": senn_sparsity,
 							"spatial_error": spatial_error_loss,
 							"spatial_emb_smoothness": spatial_smoothness_loss,
 							"param_smoothness": param_smoothness_loss,
-							"residual": residual_loss, 
-							"kan_entropy_output": kan_entropy_output,
-							"kan_entropy_input": kan_entropy_input,
-							"kan_output_var": kan_output_var,
+							"residual": residual_loss
 							}
 
 				# Record losses
@@ -2320,7 +2324,10 @@ def worker(rank, world_size, job_id, port):
 		val_metrics_history_POM[iepoch, :] = torch.stack(all_val_NSE_POM).mean().detach().cpu().numpy()
 		val_metrics_history_MAOM[iepoch, :] = torch.stack(all_val_NSE_MAOM).mean().detach().cpu().numpy()
 
-
+		# Get loss weights for best model evaluation
+		smooth_l1_loss_SOC_idx = args.losses.index("Smooth_l1_loss_SOC")
+		smooth_l1_loss_POM_idx = args.losses.index("Smooth_l1_loss_POM")
+		smooth_l1_loss_MAOM_idx = args.losses.index("Smooth_l1_loss_MAOM")
 
 		# Save loss history
 		if rank == 0:
@@ -2350,7 +2357,14 @@ def worker(rank, world_size, job_id, port):
 			# If this model is the best so far, save the checkpoint into 'opt_nn_{job_id}.pt'
 			# if val_metrics_history[iepoch, :] <= best_val_NSE: 
 			# if val_loss_history_soc[iepoch, :] + val_loss_history_POM[iepoch, :] + val_loss_history_MAOM[iepoch, :] < best_val_loss_soc + best_val_loss_pom_maom:
-			if val_loss_history_soc[iepoch, :] < best_val_loss_soc and val_loss_history_POM[iepoch, :] + val_loss_history_MAOM[iepoch, :] < best_val_loss_pom_maom:
+			# if val_loss_history_soc[iepoch, :] < best_val_loss_soc and val_loss_history_POM[iepoch, :] + val_loss_history_MAOM[iepoch, :] < best_val_loss_pom_maom:
+			if val_loss_history_soc[iepoch, :] * args.lambdas[smooth_l1_loss_SOC_idx].item() + \
+				val_loss_history_POM[iepoch, :] * args.lambdas[smooth_l1_loss_POM_idx].item() + \
+				val_loss_history_MAOM[iepoch, :] * args.lambdas[smooth_l1_loss_MAOM_idx].item() < \
+				best_val_loss_soc * args.lambdas[smooth_l1_loss_SOC_idx].item() + \
+				best_val_loss_pom * args.lambdas[smooth_l1_loss_POM_idx].item() + \
+				best_val_loss_maom * args.lambdas[smooth_l1_loss_MAOM_idx].item():
+
 				print(f'Best model updated at epoch {iepoch}')
 				best_model_epoch = torch.tensor(iepoch, device=device)
 
@@ -2359,9 +2373,10 @@ def worker(rank, world_size, job_id, port):
 					'model_state_dict': model.state_dict(),
 					'model_kwargs': model_kwargs,  # Save kwargs used to construct the model
 					'optimizer_state_dict': optimizer.state_dict(),
-					'best_val_loss_soc': best_val_loss_soc,
-					'best_val_loss_POM_MAOM': best_val_loss_pom_maom,
-					'best_val_NSE': best_val_NSE,
+					'best_val_loss_soc': val_loss_history_soc[iepoch, :],
+					'best_val_loss_POM': val_loss_history_POM[iepoch, :],
+					'best_val_loss_MAOM': val_loss_history_MAOM[iepoch, :],
+					'best_val_NSE': (val_metrics_history[iepoch, :] + val_metrics_history_POM[iepoch, :] + val_metrics_history_MAOM[iepoch, :]) / 3,
 					'best_model_epoch': best_model_epoch,
 					'train_loss_history': train_loss_history,
 					'train_loss_history_soc': train_loss_history_soc,
@@ -2445,11 +2460,18 @@ def worker(rank, world_size, job_id, port):
 				
 		
 		# Add a early stopping condition
-		# if val_loss_history_soc[iepoch, :] + val_loss_history_POM[iepoch, :] + val_loss_history_MAOM[iepoch, :] < best_val_loss_soc + best_val_loss_pom_maom:
-		if val_loss_history_soc[iepoch, :] < best_val_loss_soc and val_loss_history_POM[iepoch, :] + val_loss_history_MAOM[iepoch, :] < best_val_loss_pom_maom:
+		# if val_loss_history_soc[iepoch, :] < best_val_loss_soc and val_loss_history_POM[iepoch, :] + val_loss_history_MAOM[iepoch, :] < best_val_loss_pom_maom:		
+		if val_loss_history_soc[iepoch, :] * args.lambdas[smooth_l1_loss_SOC_idx].item() + \
+			val_loss_history_POM[iepoch, :] * args.lambdas[smooth_l1_loss_POM_idx].item() + \
+			val_loss_history_MAOM[iepoch, :] * args.lambdas[smooth_l1_loss_MAOM_idx].item() < \
+			best_val_loss_soc * args.lambdas[smooth_l1_loss_SOC_idx].item() + \
+			best_val_loss_pom * args.lambdas[smooth_l1_loss_POM_idx].item() + \
+			best_val_loss_maom * args.lambdas[smooth_l1_loss_MAOM_idx].item():
+
 			best_val_NSE = (val_metrics_history[iepoch, :] + val_metrics_history_POM[iepoch, :] + val_metrics_history_MAOM[iepoch, :]) / 3
 			best_val_loss_soc = val_loss_history_soc[iepoch, :]
-			best_val_loss_pom_maom = val_loss_history_POM[iepoch, :] + val_loss_history_MAOM[iepoch, :]
+			best_val_loss_pom = val_loss_history_POM[iepoch, :]
+			best_val_loss_maom = val_loss_history_MAOM[iepoch, :]
 			epochs_without_improvement = 0
 			best_model_epoch = torch.tensor(iepoch, device=device)
 			# Optionally save the model here if it's the best one so far
@@ -2511,7 +2533,8 @@ def worker(rank, world_size, job_id, port):
 					'model_kwargs': model_kwargs,  # Save kwargs used to construct the model
 					'optimizer_state_dict': optimizer.state_dict(),
 					'best_val_loss_soc': best_val_loss_soc,
-					'best_val_loss_POM_MAOM': best_val_loss_pom_maom,
+					'best_val_loss_POM': best_val_loss_pom,
+					'best_val_loss_MAOM': best_val_loss_maom,
 					'best_val_NSE': best_val_NSE,
 					'best_model_epoch': best_model_epoch,
 					'train_loss_history': train_loss_history,
@@ -2558,7 +2581,7 @@ def worker(rank, world_size, job_id, port):
 					f.write(f'# Activate environment in conda\n')
 					f.write(f'conda activate BINN_310_CPU\n\n')
 					f.write(f'# Start the Python Code\n')
-					f.write(f'python -u /glade/u/home/haodixu/BINN/Server_Script/BINN_COMPAS/binns_DDP.py {" ".join(sys.argv)} --whether_resume 1\n')
+					f.write(f'python -u /glade/u/home/haodixu/BINN/Server_Script/Haodi_COMPAS_2/src_binns/binns_DDP.py {" ".join(sys.argv)} --whether_resume 1\n')
 
 				# submit the job again
 				submit_command = ['qsub', 
@@ -2620,28 +2643,28 @@ def worker(rank, world_size, job_id, port):
 		with torch.no_grad():
 			# Get predictions for train examples, compute loss & plot
 			best_guess_train_y_hat, best_guess_train_pred_para = best_guess_model(train_x.to(device), train_z.to(device), train_c.to(device),
-																					whether_predict=0, PRODA_para=train_proda_para.to(device))
+																					whether_predict=0)
 			train_smooth_l1_loss, train_NSE_SOC, train_NSE_POM, train_NSE_MAOM, train_l1_loss_SOC, train_l1_loss_POM, train_l1_loss_MAOM, train_param_reg_loss = fun_loss(best_guess_train_y_hat, train_y.to(device), best_guess_train_pred_para)
 			print(f'Train - smooth_l1_loss: {train_smooth_l1_loss.item():.2f}, NSE_SOC: {train_NSE_SOC.item():.2f}, NSE_POM: {train_NSE_POM.item():.2f}, NSE_MAOM: {train_NSE_MAOM.item():.2f}, l1_loss_SOC: {train_l1_loss_SOC.item():.2f}, l1_loss_POM: {train_l1_loss_POM.item():.2f}, l1_loss_MAOM: {train_l1_loss_MAOM.item():.2f}')
 
 			# Get predictions for val examples, compute loss & plot
 			best_guess_val_y_hat, best_guess_val_pred_para = best_guess_model(val_x.to(device), val_z.to(device), val_c.to(device),
-																				whether_predict=0, PRODA_para=val_proda_para.to(device))
+																				whether_predict=0)
 			val_smooth_l1_loss, val_NSE_SOC, val_NSE_POM, val_NSE_MAOM, val_l1_loss_SOC, val_l1_loss_POM, val_l1_loss_MAOM, val_param_reg_loss = fun_loss(best_guess_val_y_hat, val_y.to(device), best_guess_val_pred_para)
 			print(f'Val - smooth_l1_loss: {val_smooth_l1_loss.item():.2f}, NSE_SOC: {val_NSE_SOC.item():.2f}, NSE_POM: {val_NSE_POM.item():.2f}, NSE_MAOM: {val_NSE_MAOM.item():.2f}, l1_loss_SOC: {val_l1_loss_SOC.item():.2f}, l1_loss_POM: {val_l1_loss_POM.item():.2f}, l1_loss_MAOM: {val_l1_loss_MAOM.item():.2f}')
 
 			if test_split_ratio != 0:
 				# Get predictions for test examples, compute loss & plot
 				best_guess_test_y_hat, best_guess_test_pred_para = best_guess_model(test_x.to(device), test_z.to(device), test_c.to(device),
-																					whether_predict=0, PRODA_para=test_proda_para.to(device))
+																					whether_predict=0)
 				test_smooth_l1_loss, test_NSE_SOC, test_NSE_POM, test_NSE_MAOM, test_l1_loss_SOC, test_l1_loss_POM, test_l1_loss_MAOM, test_param_reg_loss = fun_loss(best_guess_test_y_hat, test_y.to(device), best_guess_test_pred_para)
 				print(f'Test - smooth_l1_loss: {test_smooth_l1_loss.item():.2f}, NSE_SOC: {test_NSE_SOC.item():.2f}, NSE_POM: {test_NSE_POM.item():.2f}, NSE_MAOM: {test_NSE_MAOM.item():.2f}, l1_loss_SOC: {test_l1_loss_SOC.item():.2f}, l1_loss_POM: {test_l1_loss_POM.item():.2f}, l1_loss_MAOM: {test_l1_loss_MAOM.item():.2f}')
 				
 
 			# Also generate PREDICTED SOC for EACH SOIL LAYER (20)
-			train_simu_all_layers, _ = best_guess_model(train_x.to(device), train_z.to(device), train_c.to(device), whether_predict=1, PRODA_para=train_proda_para.to(device))
-			val_simu_all_layers, _ = best_guess_model(val_x.to(device), val_z.to(device), val_c.to(device), whether_predict=1, PRODA_para=val_proda_para.to(device))
-			test_simu_all_layers, _ = best_guess_model(test_x.to(device), test_z.to(device), test_c.to(device), whether_predict=1, PRODA_para=test_proda_para.to(device))
+			train_simu_all_layers, _ = best_guess_model(train_x.to(device), train_z.to(device), train_c.to(device), whether_predict=1)
+			val_simu_all_layers, _ = best_guess_model(val_x.to(device), val_z.to(device), val_c.to(device), whether_predict=1)
+			test_simu_all_layers, _ = best_guess_model(test_x.to(device), test_z.to(device), test_c.to(device), whether_predict=1)
 
 		# Summary csv file of all results. Create this if it doesn't exist
 		results_summary_file = os.path.join(data_dir_output, f"neural_network/results_summary_{args.note}.csv")

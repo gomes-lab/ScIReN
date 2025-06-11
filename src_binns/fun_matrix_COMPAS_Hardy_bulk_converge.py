@@ -6,14 +6,13 @@ import math
 
 
 # Simulate the soil carbon profile using the CLM5 model at the depth of the observation layers
-def fun_bulk_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_depth):
+def fun_bulk_simu(tensor_para, tensor_frocing_steady_state):
 	start_time = time.time()
 	device = tensor_para.device
 	# convert tensor to numpy
 	para = tensor_para
 	# para = (tensor_para - (-1)) /(1 - (-1)) # conversion from Hardttanh [-1, 1] to [0, 1]
 	frocing_steady_state = tensor_frocing_steady_state 
-	obs_layer_depth = tensor_obs_layer_depth
 
 	# depth of the node                                                   
 	zsoi = torch.tensor([1.000000000000000E-002, 4.000000000000000E-002, 9.000000000000000E-002, \
