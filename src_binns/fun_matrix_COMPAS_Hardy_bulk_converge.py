@@ -217,12 +217,12 @@ def matrix_fun_COMPAS(tensor_para, tensor_forcing_steady_state):
 
 	# f42 = scale(para[11], 0.1, 0.5)
 	# x52 = scale(para[12], 0.05, 0.5)
-	x52 = scale(para[11], 0.0001, 0.9)
-	x53 = scale(para[12], 0.0001, 0.9)
+	x52 = scale(para[11], 0.0001, 0.9999)
+	x53 = scale(para[12], 0.0001, 0.9999)
 	# f43 = scale(para[13], 0.0001, 0.4)
 	f45 = scale(para[13], 0.3, 0.8)
-	f65 = scale(para[14], 0.0001, 0.2)
-	x74 = scale(para[15], 0.0001, 0.2)
+	f65 = scale(para[14], 0.1, 0.2)
+	x74 = scale(para[15], 0.0001, 0.1)
 	# f46 = scale(para[16], 0.1, 0.8)
 	f46 = 1
 

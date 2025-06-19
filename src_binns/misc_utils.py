@@ -303,7 +303,7 @@ def get_optimizer_and_scheduler(model, args):
 	if args.scheduler == "reduce_on_plateau":
 		scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.2)  #, mode="max")
 	elif args.scheduler == "step":
-		scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
+		scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=400, gamma=0.1)
 	elif args.scheduler == "cosine":
 		scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 	elif args.scheduler == "cosine_restarts":

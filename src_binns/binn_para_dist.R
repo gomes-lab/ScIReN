@@ -14,7 +14,7 @@ setwd('D:/Research/Binn/BINN_output/plot/')
 ############################
 # load data
 ############################
-date_stamp = '20250404-114716_BINN_Global_COMPAS'
+date_stamp = '20250613-081128_KAN_ONELAYER_GRIDMARGIN_COMPAS2_9749158_lr=1e-02_fold=0_seed=111'
 
 data_path = paste0('D:/Research/BINN/BINN_output/neural_network/',  date_stamp, '/')
 # data_path = paste0('C:/Users/Hardy/Models/BINN/',  date_stamp, '/')
