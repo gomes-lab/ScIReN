@@ -151,7 +151,7 @@ class mlp(torch.nn.Module):
 #---------------------------------------------------
 # define model
 class mlp_wrapper(nn.Module):
-	def __init__(self, input_vars, var_idx_to_emb, vertical_mixing, vectorized='yes', pos_enc='early',
+	def __init__(self, args, input_vars, var_idx_to_emb, vertical_mixing, vectorized='yes', pos_enc='early',
 				 base_model="new_mlp", one_hot=False, use_bn=False, dropout_prob=0.0,
 				 activation='relu', param_constraint='sigmoid',
 				 device="cpu", train_x=None,
@@ -172,6 +172,7 @@ class mlp_wrapper(nn.Module):
 		"""
 		super().__init__()
 
+		self.args = args
 		self.one_hot = one_hot
 		self.var_idx_to_emb = var_idx_to_emb
 		self.vertical_mixing = vertical_mixing
@@ -370,9 +371,9 @@ class mlp_wrapper(nn.Module):
 
 		# CLM5 process-based model
 		if whether_predict == 1:
-			simu_soc = fun_matrix_COMPAS_Hardy.fun_model_prediction(predicted_para[valid_mask], forcing)
+			simu_soc = fun_matrix_COMPAS_Hardy.fun_model_prediction(predicted_para[valid_mask], forcing, self.args)
 		else:
-			simu_soc = fun_matrix_COMPAS_Hardy.fun_model_simu(predicted_para[valid_mask], forcing, obs_depth)
+			simu_soc = fun_matrix_COMPAS_Hardy.fun_model_simu(predicted_para[valid_mask], forcing, obs_depth, self.args)
 
 		# simu_soc_with_nan = torch.full((predicted_para.shape[0], simu_soc.shape[1]), float('nan'), device=input_var.device)
 		# simu_soc_with_nan[valid_mask] = simu_soc
@@ -396,7 +397,7 @@ class mlp_wrapper(nn.Module):
 		bias = self.mlp.layer_output.bias  # [n_params]
 		bias = bias.repeat((predictor.shape[0], 1))  # [batch, n_params]
 		h5 = self.sigmoid(bias / clamped_temp_sigmoid)
-		simu_soc = fun_matrix_COMPAS_Hardy.fun_model_simu(h5, forcing, obs_depth)  # [batch, n_depths]
+		simu_soc = fun_matrix_COMPAS_Hardy.fun_model_simu(h5, forcing, obs_depth, self.args)  # [batch, n_depths]
 		return simu_soc, h5
 
 
@@ -477,7 +478,7 @@ class ConstantParameters(nn.Module):
 		h5 = self.sigmoid(self.unconstrained_params / clamped_temp_sigmoid)
 
 		# print("forward_ignoring_input Current params", h5[0, :])
-		simu_soc = fun_matrix_COMPAS_Hardy.fun_model_simu(h5, forcing, obs_depth)  # [batch, n_depths]
+		simu_soc = fun_matrix_COMPAS_Hardy.fun_model_simu(h5, forcing, obs_depth, self.args)  # [batch, n_depths]
 		return simu_soc, h5
 
 

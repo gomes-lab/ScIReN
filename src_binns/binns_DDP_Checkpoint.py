@@ -799,8 +799,7 @@ if args.features == "ten":
 		# "Sand_Content_avg","Silt_Content_avg", \
 		"Clay_Silt_avg",\
 		"Bulk_Density_avg",\
-		# "SWC_v_Wilting_Point_avg", \
-		"pH_Water_avg", "CEC_avg", \
+		"SWC_v_Wilting_Point_avg", "pH_Water_avg", "CEC_avg", \
 		"Coarse_Fragments_avg", \
 		# "cesm2_npp", "cesm2_vegc", \
 		# '0.5_Feo_avg_Alo_avg', \
@@ -1217,8 +1216,7 @@ var4nn = ["BIO1", "BIO12", "BIO3", "BIO15", \
 	# "Sand_Content_avg","Silt_Content_avg", \
 	"Clay_Silt_avg",\
 	"Bulk_Density_avg",\
-	#"SWC_v_Wilting_Point_avg", \
-	"pH_Water_avg", "CEC_avg", \
+	"SWC_v_Wilting_Point_avg", "pH_Water_avg", "CEC_avg", \
 	"Coarse_Fragments_avg", \
 	# "cesm2_npp", "cesm2_vegc", \
 	# '0.5_Feo_avg_Alo_avg', \

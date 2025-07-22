@@ -186,7 +186,16 @@ parser.add_argument("--loss_weighting", default="manual", choices=["manual", "re
 parser.add_argument("--lambdas", nargs="+", type=float, default=[1.0, 10.0], help="If loss_weighting is manual, provide weights in the same order as `args.losses`")
 parser.add_argument("--second_start", type=int, default=30, help="If loss_weighting is two_stage, epoch the second phase starts")
 parser.add_argument("--second_lambdas", nargs="+", type=float, default=[1.0, 10.0], help="If loss_weighting is two_stage, weights for the second stage - in the same order as `args.losses`")
+parser.add_argument("--param_reg_scale", type=float, default=10, help="Scale for param_reg loss.")
 
+# Process-based model parameters
+for para_idx in range(22):
+    parser.add_argument(
+        f"--para_{para_idx}",
+        nargs=2, type=float, metavar=("LOW", "HIGH"),
+        help=f"Lower/upper bound for para[{para_idx}]"
+    )
+    
 # Relobralo specific hyperparams (specific method of loss balancing: only used if you set `--loss_weighting relobralo`)
 parser.add_argument("--relobralo_alpha", type=float, default=0.9, help="Exponential decay rate for Relobralo")
 parser.add_argument("--relobralo_temp", type=float, default=0.1, help="Softmax temperature for Relobralo")
@@ -242,12 +251,16 @@ print(datetime.now(), '------------all packages loaded------------')
 ################################################
 # Data Directories (CHANGE THIS!!!)
 ################################################
-job_id = '20250618-090643_KAN_ONELAYER_GRIDMARGIN_COMPAS2_9801351_lr=1e-02_fold=0_seed=111'
+# job_id = '20250630-003325_KAN_ONELAYER_GRIDMARGIN_COMPAS2_9917068_lr=1e-02_fold=0_seed=111'
+# job_id = '20250630-220008_KAN_ONELAYER_GRIDMARGIN_COMPAS2_9926268_lr=1e-02_fold=0_seed=111'
+# job_id = '20250704-212930_KAN_ONELAYER_GRIDMARGIN_COMPAS2_998751_lr=1e-02_fold=0_seed=111'
+# job_id = '20250704-213024_KAN_ONELAYER_GRIDMARGIN_COMPAS2_998996_lr=1e-02_fold=0_seed=111'
+job_id = '20250704-213005_KAN_ONELAYER_GRIDMARGIN_COMPAS2_998897_lr=1e-02_fold=0_seed=111'
 # server path
 job_submit_path = '/glade/u/home/haodixu/BINN/PBS_Submit/KAN_COMPAS2/'
 data_dir_input = '/glade/u/home/haodixu/BINN/ENSEMBLE/INPUT_DATA/'
 model_dir_input = '/glade/work/haodixu/BINN/BINNS/OUTPUT_DATA/neural_network/'
-data_dir_output = model_dir_input + job_id + '/KAN_Propotional_Change/'
+data_dir_output = model_dir_input + job_id + '/KAN_Propotional_Change_2_std/'
 
 if not os.path.exists(data_dir_output):
     os.makedirs(data_dir_output)
@@ -303,7 +316,7 @@ print("Shape of data_POM_MAOM: ", POM_MAOM_profile_num)
 #-------------------------------
 # Parameter names
 if args.vertical_mixing == 'original':
-    para_names = ['diffus', 'cryo', 'q10', 'efolding', 'taucwd', 'taul1', 'taul2', 'tau4doc', 'tau4mic', 'tau4poc', 'tau4maom','fl1_MIC', 'fl2_MIC', 'fMIC_DOC', 'fMIC_POC', 'fDOC_MAOM', 'CUEl1', 'CUEl2', 'CUEDOC', 'w-scaling', 'beta']
+    para_names = ['diffus', 'cryo', 'q10', 'efolding', 'taucwd', 'taul1', 'taul2', 'tau4doc', 'tau4mic', 'tau4poc', 'tau4maom', 'fl1_MIC', 'fl2_POC', 'fMIC_MAOM', 'fMIC_POC', 'fDOC_MAOM', 'CUEl1', 'CUEl2', 'CUEDOC', 'w-scaling', 'beta']
 else:
     # If using the simpler vertical mixing parameterization, replace diffus/cryo with slope/intercept.
     para_names = ['slope', 'intercept', 'q10', 'efolding', 'taucwd', 'taul1', 'taul2', 'tau4s1', 'tau4s2', 'tau4s3', 'fl1s1', 'fl2s1', 'fl3s2', 'fs1s2', 'fs1s3', 'fs2s1', 'fs2s3', 'fs3s1', 'fcwdl2', 'w-scaling', 'beta']
@@ -766,6 +779,9 @@ if args.features == "ten":
 	
 
 print("Size of col_max_min: ", col_max_min.shape)
+
+# Save the min/max values for each feature within var4nn
+env_info_max_min_save = np.zeros((len(var4nn), 2))
 # Scale numeric features to [0, 1] based on precomputed min/max 
 warnings.filterwarnings("ignore")  # Ignore warnings about subtracting nan
 for ivar in np.arange(3, len(col_max_min[:, 0])):
@@ -775,13 +791,17 @@ for ivar in np.arange(3, len(col_max_min[:, 0])):
         env_info.iloc[:, ivar] = (env_info.iloc[:, ivar] - col_max_min[ivar, 0])/(col_max_min[ivar, 1] - col_max_min[ivar, 0])
         env_info.iloc[(env_info.iloc[:, ivar] > 1), ivar] = 1
         env_info.iloc[(env_info.iloc[:, ivar] < 0), ivar] = 0
+        if env_info.columns[ivar] in var4nn:
+            env_info_max_min_save[var4nn.index(env_info.columns[ivar]), :] = col_max_min[ivar, :]
+            
 warnings.resetwarnings()
 
 # Retain orginal lat/lon
 env_info["original_lon"] = original_lons
 env_info["original_lat"] = original_lats
 
-
+# Save the min/max values for each feature within var4nn into a txt file
+np.savetxt(data_dir_output + '/env_info_max_min.txt', env_info_max_min_save, delimiter=',', header=','.join(var4nn), comments='')
 
 
 # env_info["Ald_avg"] = (env_info["Ald_0_20"] + env_info["Ald_20_40"]) / 2
@@ -917,6 +937,24 @@ current_data_c = torch.tensor(current_data_c, dtype=torch.float32)
 current_data_profile_id = torch.tensor(current_data_profile_id, dtype=torch.int64)
 current_PRODA_para = torch.tensor(np.ones((len(valid_profile_loc), 1)), dtype=torch.float32)  # Placeholder for PRODA parameters, if needed
 
+# Store the mean values, std, and the range of the env_info
+env_info_mean = torch.mean(current_data_x[:, 0:len(var4nn), 0, 0], dim=0)
+env_info_std = torch.std(current_data_x[:, 0:len(var4nn), 0, 0], dim=0)
+env_info_max = torch.max(current_data_x[:, 0:len(var4nn), 0, 0], dim=0).values
+env_info_min = torch.min(current_data_x[:, 0:len(var4nn), 0, 0], dim=0).values
+
+print("Training with features: ", var4nn)
+print("Mean of env_info features: ", env_info_mean)
+print("Std of env_info features: ", env_info_std)
+print("Max of env_info features: ", env_info_max)
+print("Min of env_info features: ", env_info_min)
+
+# Save the mean and std of the env_info features
+np.savetxt(data_dir_output + '/env_info_mean.txt', env_info_mean.numpy(), delimiter=',', header=','.join(var4nn), comments='')
+np.savetxt(data_dir_output + '/env_info_std.txt', env_info_std.numpy(), delimiter=',', header=','.join(var4nn), comments='')
+np.savetxt(data_dir_output + '/env_info_max_norm.txt', env_info_max.numpy(), delimiter=',', header=','.join(var4nn), comments='')
+np.savetxt(data_dir_output + '/env_info_min_norm.txt', env_info_min.numpy(), delimiter=',', header=','.join(var4nn), comments='')
+
 
 #---------------------------------------------------
 # Grid env info for prediction
@@ -1002,6 +1040,8 @@ var4nn = ["BIO1", "BIO12", "BIO3", "BIO15", \
     # '0.5_Feo_avg_Alo_avg', \
     # '0.5_Fed_avg_Ald_avg', \
     ]
+# Save the col_max_min for the var4nn variables
+col_max_min_grid_save = np.zeros((len(var4nn), 2))
 # Normalize grid env info
 for ivar in np.arange(0, len(col_max_min_grid[:, 0])):
     if np.isnan(col_max_min_grid[ivar, :]).any():
@@ -1010,7 +1050,11 @@ for ivar in np.arange(0, len(col_max_min_grid[:, 0])):
         grid_env_info.iloc[:, ivar] = (grid_env_info.iloc[:, ivar] - col_max_min_grid[ivar, 0])/(col_max_min_grid[ivar, 1] - col_max_min_grid[ivar, 0])
         grid_env_info.iloc[(grid_env_info.iloc[:, ivar] > 1), ivar] = 1
         grid_env_info.iloc[(grid_env_info.iloc[:, ivar] < 0), ivar] = 0
+        if grid_env_info.columns[ivar] in var4nn:
+            col_max_min_grid_save[var4nn.index(grid_env_info.columns[ivar]), :] = col_max_min_grid[ivar, :]
 
+# Save the min/max values for each feature within var4nn into a txt file
+np.savetxt(data_dir_output + '/grid_env_info_max_min.txt', col_max_min_grid_save, delimiter=',', header=','.join(var4nn), comments='')  
 
 # Only keep the variables used in training the NN
 grid_env_info = grid_env_info[var4nn]
@@ -1098,6 +1142,7 @@ print("Shape of predict data z", predict_data_z.shape)
 print("Shape of grid env info US", grid_env_info_US.shape)
 print(datetime.now(), '------------grid env info prepared------------')
 
+
 # Remove grids with missing features or forcing variables
 nan_loc = np.sum(predict_data_x[:, 0:len(var4nn), 0, 0], axis=1) + \
             np.sum(model_force_pred_input_vector_cwd, axis=1) + \
@@ -1127,6 +1172,23 @@ predict_data_z = torch.tensor(predict_data_z, dtype=torch.float32)
 predict_data_c = torch.tensor(predict_data_c, dtype=torch.float32)
 grid_PRODA_para = torch.tensor(np.ones((len(grid_profile_ids), 1)), dtype=torch.float32)
 predict_profile_id = torch.tensor(grid_profile_ids, dtype=torch.int64)
+
+# Store the mean values, std, and the range of the grid_env_info
+grid_env_info_mean = torch.mean(predict_data_x[:, 0:len(var4nn), 0, 0], dim=0)
+grid_env_info_std = torch.std(predict_data_x[:, 0:len(var4nn), 0, 0], dim=0)
+grid_env_info_max = torch.max(predict_data_x[:, 0:len(var4nn), 0, 0], dim=0).values
+grid_env_info_min = torch.min(predict_data_x[:, 0:len(var4nn), 0, 0], dim=0).values
+
+print("Mean of grid_env_info features: ", grid_env_info_mean)
+print("Std of grid_env_info features: ", grid_env_info_std)
+print("Max of grid_env_info features: ", grid_env_info_max)
+print("Min of grid_env_info features: ", grid_env_info_min)
+
+# Save the mean and std of the grid_env_info features
+np.savetxt(data_dir_output + '/grid_env_info_mean.txt', grid_env_info_mean.numpy(), delimiter=',', header=','.join(var4nn), comments='')
+np.savetxt(data_dir_output + '/grid_env_info_std.txt', grid_env_info_std.numpy(), delimiter=',', header=','.join(var4nn), comments='')
+np.savetxt(data_dir_output + '/grid_env_info_max_norm.txt', grid_env_info_max.numpy(), delimiter=',', header=','.join(var4nn), comments='')
+np.savetxt(data_dir_output + '/grid_env_info_min_norm.txt', grid_env_info_min.numpy(), delimiter=',', header=','.join(var4nn), comments='')
 
 # Helper function to combine the training data into a single tensor
 class MergeDataset(Dataset):
@@ -1199,7 +1261,7 @@ def worker(rank, world_size, job_id, port):
         raise ValueError("You selected an advanced loss_weighting method that depends on the LibMTL library. This is not implemented yet.")
     else:
         # Create model
-        model = model_class(**model_kwargs).to(device)   
+        model = model_class(args, **model_kwargs).to(device)   
 
     # Create distributed version of the model
     if args.use_ddp == 1:
@@ -1582,7 +1644,13 @@ def worker(rank, world_size, job_id, port):
 
     # For each var4nn, assign 0.5 to that variable, and then cahnge the variable by propotional_change
     # Define the propotional change from -50 to 50 percent
-    propotional_change = np.linspace(-0.5, 0.5, num=11)  # 11 values from -50% to 50%
+    # propotional_change = np.linspace(-0.5, 0.5, num=11)  # 11 values from -50% to 50%
+    # If change between -2*std and 2*std
+    propotional_change = np.linspace(-2, 2, num=9)  # 9 values from -2 to 2
+    # If change between -1*std and 1*std
+    # propotional_change = np.linspace(-1, 1, num=11)  # 11 values from -1 to 1
+
+
     # Save the propotional change to a file
     if rank == 0:
         np.savetxt(data_dir_output + '/propotional_change.txt', propotional_change, delimiter=',')
@@ -1596,10 +1664,12 @@ def worker(rank, world_size, job_id, port):
         if rank == 0:
             if not os.path.exists(data_dir_output + f'/{var_name}/'):
                 os.makedirs(data_dir_output + f'/{var_name}/')
-
+        # Initialize a tensor to store the updated environment information
+        grid_env_info_update = torch.full((len(propotional_change), 1), torch.nan, device=device)
         # Iterate over each propotional change
         for change in propotional_change:
             change_start_time = time.time()  # Record the start time for each propotional change
+            change_idx = propotional_change.tolist().index(change)  # Get the index of the current change
             ibatch = 0  
             # Initialize a tensor to store the predictions for each propotional change
             predict_prop_change_soc_local = torch.full((max_batches, args.batch_size, 20), torch.nan, device=device)
@@ -1642,11 +1712,35 @@ def worker(rank, world_size, job_id, port):
                 batch_profile_id = batch_profile_id.to(device)
                 batch_proda_para = batch_proda_para.to(device)
 
-                # Assign 0.5 to the variable at var_idx
-                batch_x[:, var_idx, 0, 0] = 0.5
-                # Apply the propotional change to the current environment variable
-                batch_x[:, var_idx, 0, 0] *= (1 + change)
+                # # Assign 0.5 to the variable at var_idx
+                # if grid_env_info_mean[var_idx]*1.5 < grid_env_info_max[var_idx] and grid_env_info_mean[var_idx]*0.5 > grid_env_info_min[var_idx]:
+                #     env_info_update_value = grid_env_info_mean[var_idx]  # Set the variable to its mean value
+                # else:
+                #     env_info_update_value = (grid_env_info_max[var_idx] + grid_env_info_min[var_idx]) / 2  # Set the variable to its mid value
                 
+                env_info_update_value = grid_env_info_mean[var_idx]
+                
+                batch_x[:, var_idx, 0, 0] = env_info_update_value
+                
+                # Apply the propotional change to the current environment variable
+                # batch_x[:, var_idx, 0, 0] *= (1 + change)              
+                # grid_env_info_update[change_idx, 0] = env_info_update_value * (1 + change)  # Update the environment information with the propotional change
+                
+                # If use std as change
+                batch_x[:, var_idx, 0, 0] += change * grid_env_info_std[var_idx]
+                grid_env_info_update[change_idx, 0] = env_info_update_value + change * grid_env_info_std[var_idx]  # Update the environment information with the propotional change
+                
+                if grid_env_info_update[change_idx, 0] < 0:
+                    grid_env_info_update[change_idx, 0] = 0
+                    batch_x[:, var_idx, 0, 0] = 0 
+                    if rank == 0:
+                        print(f"Warning: {var_name} value below minimum, set to minimum: {grid_env_info_min[var_idx]} during propotional change {change}")
+                elif grid_env_info_update[change_idx, 0] > 1:
+                    grid_env_info_update[change_idx, 0] = 1
+                    batch_x[:, var_idx, 0, 0] = 1 
+                    if rank == 0:
+                        print(f"Warning: {var_name} value above maximum, set to maximum: {grid_env_info_max[var_idx]} during propotional change {change}")
+
                 # Forward pass to get the predictions with the propotional change applied
                 model.eval()
                 with torch.no_grad():
@@ -1926,7 +2020,11 @@ def worker(rank, world_size, job_id, port):
                 np.savetxt(data_dir_output + f'/{var_name}/' + f'prop_change_{change:.2f}_bulk_xi.txt', predict_prop_change_bulk_xi.cpu().numpy(), delimiter=',')
                 np.savetxt(data_dir_output + f'/{var_name}/' + f'prop_change_{change:.2f}_bulk_I.txt', predict_prop_change_bulk_I.cpu().numpy(), delimiter=',')
                 np.savetxt(data_dir_output + f'/{var_name}/' + f'prop_change_{change:.2f}_litter_fraction.txt', predict_prop_change_litter_fraction.cpu().numpy(), delimiter=',')
-
+                
+                # Save the grid environment info update
+                np.savetxt(data_dir_output + f'/{var_name}/' + f'grid_env_info_update.txt', grid_env_info_update.cpu().numpy(), delimiter=',')
+                
+                print(f"Data used for environmental variable {var_name} is {batch_x[0, var_idx, 0, 0].item()} with change {change:.2f}")
                 print(f"Proportional change {change:.2f} predictions saved successfully for variable {var_name} with time taken: {time.time() - change_start_time:.2f} seconds")
             # End of if rank == 0
             dist.barrier()  

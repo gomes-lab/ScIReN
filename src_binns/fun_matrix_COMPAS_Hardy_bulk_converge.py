@@ -210,29 +210,32 @@ def matrix_fun_COMPAS(tensor_para, tensor_forcing_steady_state):
 	tau4cwd = scale(para[4], 1, 6)
 	tau4l1 = scale(para[5], 0, 0.11)
 	tau4l2 = scale(para[6], 0.1, 0.3)
-	tau4doc = scale(para[7], 0.0001, 1)
-	tau4mic = scale(para[8], 0.0001, 1)
+	tau4doc = scale(para[7], 1e-4, 1)
+	tau4mic = scale(para[8], 1e-4, 1)
 	tau4poc = scale(para[9], 1, 10)
 	tau4maom = scale(para[10], 1, 200)
 
 	# f42 = scale(para[11], 0.1, 0.5)
 	# x52 = scale(para[12], 0.05, 0.5)
-	x52 = scale(para[11], 0.0001, 0.9999)
-	x53 = scale(para[12], 0.0001, 0.9999)
+	x52 = scale(para[11], 1e-4, 0.4)
+	# x53 = scale(para[12], 0.0001, 0.9999)
+	f63 = scale(para[12], 1e-4, 0.15)
 	# f43 = scale(para[13], 0.0001, 0.4)
-	f45 = scale(para[13], 0.3, 0.8)
-	f65 = scale(para[14], 0.1, 0.2)
-	x74 = scale(para[15], 0.0001, 0.1)
+	f75 = scale(para[13], 1e-4, 0.25)
+	# f45 = scale(para[13], 0.3, 0.8)
+	f65 = scale(para[14], 0.1, 0.75)
+	x74 = scale(para[15], 1e-4, 0.1)
 	# f46 = scale(para[16], 0.1, 0.8)
-	f46 = 1
 
-	e52 = scale(para[16], 0.0001, 0.6)
-	e53 = scale(para[17], 0.0001, 0.4)
+	e52 = scale(para[16], 1e-4, 0.6)
+	e53 = scale(para[17], 1e-4, 0.4)
 	e54 = scale(para[18], 0.1, 0.99)
-	w_scaling = scale(para[19], 0.0001, 5)
+	w_scaling = scale(para[19], 1e-4, 5)
 	beta = scale(para[20], 0.5, 0.9999)
+	
+	# f62 = scale(para[21], 0.0001, 0.5)
 
-
+	f46 = 1
 	adv = 0
 
 	#####################################################
@@ -268,7 +271,7 @@ def matrix_fun_COMPAS(tensor_para, tensor_forcing_steady_state):
 	#---------------------------------------------------
 	sand_vector_mean = torch.mean(sand_vector, axis = 1)
 
-	a_ma = a_matrix(x52, x53, x74, f45, f65, f46, e52, e53, e54, sand_vector) # f42, f43, 
+	a_ma = a_matrix(x52, f63, x74, f75, f65, f46, e52, e53, e54, sand_vector) # f42, f43, 
 
 	kk_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device) 
 	tri_ma_middle = (torch.zeros([npool_vr, npool_vr, timestep_num])*np.nan).to(device) 
@@ -513,7 +516,7 @@ def matrix_fun_COMPAS(tensor_para, tensor_forcing_steady_state):
 	donor_pool_layer = torch.stack([cpool_steady_state[0:20, :], cpool_steady_state[20:40, :], cpool_steady_state[40:60, :], cpool_steady_state[60:80, :], cpool_steady_state[80:100, :], cpool_steady_state[100:120, :], cpool_steady_state[120:140, :]], dim = 1).to(device)
 	
 	# DOC pool (pool 4)
-	cpool_flow_rate = torch.tensor([(1-x52), f45, 1, 1]).to(device) # f42, f45, f46, f47
+	cpool_flow_rate = torch.tensor([(1-x52), (1-f75-f65), 1, 1]).to(device) # f42, f45, f46, f47
 	donor_pool_size = donor_pool_layer[:, [1, 4, 5, 6]]
 	donor_decomp = torch.stack((decom_cpools[1], decom_cpools[4], decom_cpools[5], decom_cpools[6]), dim = 0).to(device)
 	# Calculate total donor flow
@@ -524,7 +527,7 @@ def matrix_fun_COMPAS(tensor_para, tensor_forcing_steady_state):
 
 	# MIC pool (pool 5)
 	# baseline carbon flow
-	cpool_flow_rate = torch.tensor([x52, x53, (1-x74)]).to(device) # f52, f53, f54
+	cpool_flow_rate = torch.tensor([x52, (1-f63), (1-x74)]).to(device) # f52, f53, f54
 	donor_pool_size = donor_pool_layer[:, [1, 2, 3]]
 	donor_decomp = torch.stack((decom_cpools[1], decom_cpools[2], decom_cpools[3]), dim = 0).to(device)
 	total_donor_flow = torch.nan * torch.ones(len(cpool_flow_rate), device=device)
@@ -536,7 +539,7 @@ def matrix_fun_COMPAS(tensor_para, tensor_forcing_steady_state):
 	bulk_A_mic = torch.sum(cpool_flow_rate * cue_cpool * total_donor_flow) / torch.sum(total_donor_flow)
 
 	# POM pool (pool 6)
-	cpool_flow_rate = torch.tensor([(1-x53), f65]).to(device) # f63, f65
+	cpool_flow_rate = torch.tensor([f63, f65]).to(device) # f63, f65
 	donor_pool_size = donor_pool_layer[:, [2, 4]]
 	donor_decomp = torch.stack((decom_cpools[2], decom_cpools[4]), dim = 0).to(device)
 	total_donor_flow = torch.nan * torch.ones(len(cpool_flow_rate), device=device)
@@ -545,7 +548,7 @@ def matrix_fun_COMPAS(tensor_para, tensor_forcing_steady_state):
 	bulk_A_POM = torch.sum(cpool_flow_rate * total_donor_flow) / torch.sum(total_donor_flow)
 
 	# MAOM pool (pool 7)
-	cpool_flow_rate = torch.tensor([x74, (1-f45-f65)]).to(device) # f74, f75
+	cpool_flow_rate = torch.tensor([x74, f75]).to(device) # f74, f75
 	donor_pool_size = donor_pool_layer[:, [3, 4]]
 	donor_decomp = torch.stack((decom_cpools[3], decom_cpools[4]), dim = 0).to(device)
 	total_donor_flow = torch.nan * torch.ones(len(cpool_flow_rate), device=device)
@@ -573,7 +576,7 @@ def matrix_fun_COMPAS(tensor_para, tensor_forcing_steady_state):
 # sub-function in matrix equation
 ##################################################
 
-def a_matrix(x52, x53, x74, f45, f65, f46, E52, E53, E54, sand_vector): # f42, f43
+def a_matrix(x52, f63, x74, f75, f65, f46, E52, E53, E54, sand_vector): # f42, f43
     n_soil_layer = 20
     npool = 7
     npool_vr = 140
@@ -585,10 +588,11 @@ def a_matrix(x52, x53, x74, f45, f65, f46, E52, E53, E54, sand_vector): # f42, f
     # f62 = 1 - f42 - x52
     f42 = 1 - x52
     f52 = x52 * E52
-    f63 = 1 - x53
+    x53 = 1 - f63
     f53 = x53 * E53
     f54 = (1-x74) * E54
-    f75 = 1 - f45 - f65
+    # f75 = 1 - f45 - f65
+    f45 = 1 - f75 - f65
     f76 = 1 - f46 
     f47 = 1.0
     f74 = x74
@@ -609,6 +613,8 @@ def a_matrix(x52, x53, x74, f45, f65, f46, E52, E53, E54, sand_vector): # f42, f
         a_ma_vr[(7 - 1) * n_soil_layer + j, (6 - 1) * n_soil_layer + j] = transfer_fraction[10]
         a_ma_vr[(4 - 1) * n_soil_layer + j, (7 - 1) * n_soil_layer + j] = transfer_fraction[11]
         a_ma_vr[(7 - 1) * n_soil_layer + j, (4 - 1) * n_soil_layer + j] = transfer_fraction[12]
+        # a_ma_vr[(6 - 1) * n_soil_layer + j, (2 - 1) * n_soil_layer + j] = transfer_fraction[13]
+		
 
     return a_ma_vr
 	

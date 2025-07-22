@@ -2,7 +2,7 @@ import torch
 import visualization_utils
 
 
-def binns_loss(y_pred, y_true, pred_para, plot_path=""):
+def binns_loss(y_pred, y_true, pred_para, param_reg_scale, plot_path=""):
 	"""
 	Computes the main losses used in BINN.
 	 
@@ -74,7 +74,7 @@ def binns_loss(y_pred, y_true, pred_para, plot_path=""):
 	# Regularization for predicted parameters using cosh
 	# Encourage parameters to be around 0.5
 	target_value = 0.5
-	scale_factor = 10
+	scale_factor = param_reg_scale
 	param_reg_loss = torch.mean(torch.cosh(scale_factor*(pred_para - target_value)) - 1)
 
 	# Weighting factor for regularization term
