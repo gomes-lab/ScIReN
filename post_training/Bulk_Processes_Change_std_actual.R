@@ -60,7 +60,7 @@ date_stamp = '20250704-213024_KAN_ONELAYER_GRIDMARGIN_COMPAS2_998996_lr=1e-02_fo
 
 # input and output data path
 data_dir_input = paste0('D:/Research/BINN/BINN_output/neural_network/',  date_stamp, '/')
-data_dir_output = paste0('D:/Research/BINN/BINN_output/neural_network/',  date_stamp, output_std_num)
+data_dir_output = paste0('D:/Research/BINN/BINN_output/neural_network/',  date_stamp, output_std_num, '_actual_values')
 # PRODA data path
 data_dir_PRODA = 'D:/Research/BINN/Research_Data/BINN/Server_Script/post_training/soc_component_proda/soc_component_proda/'
 data_dir_loc = 'D:/Research/BINN/Research_Data/BINN/Server_Script/post_training/component_calculation/'
@@ -261,10 +261,10 @@ for (var_idx in 1:length(var4nn)) {
       bulk_process_prop_change[ , imatrix] = bulk_process_prop_change_avg_temp
     }
 
-    # Calculate the proportional change
-    bulk_process_prop_change_baseline <- bulk_process_prop_change[(length(percentage_change)+1)/2, ]
-    bulk_process_prop_change_baseline <- rep(bulk_process_prop_change_baseline, each = length(percentage_change))
-    bulk_process_prop_change <- (bulk_process_prop_change - bulk_process_prop_change_baseline) / bulk_process_prop_change_baseline * 100
+    # # Calculate the proportional change
+    # bulk_process_prop_change_baseline <- bulk_process_prop_change[(length(percentage_change)+1)/2, ]
+    # bulk_process_prop_change_baseline <- rep(bulk_process_prop_change_baseline, each = length(percentage_change))
+    # bulk_process_prop_change <- (bulk_process_prop_change - bulk_process_prop_change_baseline) / bulk_process_prop_change_baseline * 100
 
     # Update the percentage change when 2*std is exceeding max and min values
     # Change the percentage_change that is closest to i, where i*std = max or min value
@@ -302,7 +302,7 @@ for (var_idx in 1:length(var4nn)) {
        labs(
          title = paste0(var_name[var_idx]),
          x     = "Change in environmental variable (std)",
-         y     = "Percent change compared to baseline"
+         y     = "Bulk Processes"
        ) +
        theme_minimal(base_family = "Helvetica") +
        theme(
@@ -336,7 +336,7 @@ for (var_idx in 1:length(var4nn)) {
         labs(
           title = paste0(var_name[var_idx], " (Normal Value)"),
           x     = "Normal value of environmental variable",
-          y     = "Proportional change of bulk process"
+          y     = "Bulk Processes"
         )
     # Save the plot with updated values
     jpeg(filename = paste0(data_dir_output, '/Percentage_Change_Bulk_Processes/', var_name_temp, '_percentage_change_bulk_processes_norm.jpg'), width = 25, height = 15, units = "in", res = 300)
@@ -351,7 +351,7 @@ for (var_idx in 1:length(var4nn)) {
         labs(
           title = paste0(var_name[var_idx], " (Actual Value)"),
           x     = "Actual value of environmental variable",
-          y     = "Proportional change of bulk process"
+          y     = "Bulk Processes"
         )
     # Save the plot with actual values
     jpeg(filename = paste0(data_dir_output, '/Percentage_Change_Bulk_Processes/', var_name_temp, '_percentage_change_bulk_processes_actual.jpg'), width = 25, height = 15, units = "in", res = 300)
@@ -400,10 +400,10 @@ for (var_idx in 1:length(var4nn)) {
     para_prop_change[ichange, ] = para_prop_change_avg
     }
     
-    # Calculate the proportional change
-    para_prop_change_baseline <- para_prop_change[(length(percentage_change)+1)/2, ]
-    para_prop_change_baseline <- rep(para_prop_change_baseline, each = length(percentage_change))
-    para_prop_change <- (para_prop_change - para_prop_change_baseline) / para_prop_change_baseline * 100
+    # # Calculate the proportional change
+    # para_prop_change_baseline <- para_prop_change[(length(percentage_change)+1)/2, ]
+    # para_prop_change_baseline <- rep(para_prop_change_baseline, each = length(percentage_change))
+    # para_prop_change <- (para_prop_change - para_prop_change_baseline) / para_prop_change_baseline * 100
 
     # Update the percentage change when 2*std is exceeding max and min values
     percentage_change_plot = percentage_change
@@ -437,7 +437,7 @@ for (var_idx in 1:length(var4nn)) {
         labs(
           title = paste0(var_name[var_idx]),
           x     = "Change in environmental variable (std)",
-          y     = "Percent change compared to baseline"
+          y     = "Parameter Norm Value"
         ) +
         theme_minimal(base_family = "Helvetica") +
         theme(
@@ -469,7 +469,7 @@ for (var_idx in 1:length(var4nn)) {
         labs(
           title = paste0(var_name[var_idx], " (Normal Value)"),
           x     = "Normal value of environmental variable",
-          y     = "Proportional change of parameters"
+          y     = "Parameter Norm Value"
         )
     # Save the plot with updated values
     jpeg(filename = paste0(data_dir_output, '/Percentage_Change_Parameters/', var_name_temp, '_percentage_change_parameters_norm.jpg'), width = 20, height = 15, units = "in", res = 300)
@@ -483,7 +483,7 @@ for (var_idx in 1:length(var4nn)) {
         labs(
           title = paste0(var_name[var_idx], " (Actual Value)"),
           x     = "Actual value of environmental variable",
-          y     = "Proportional change of parameters"
+          y     = "Parameter Norm Value"
         )
     # Save the plot with actual values
     jpeg(filename = paste0(data_dir_output, '/Percentage_Change_Parameters/', var_name_temp, '_percentage_change_parameters_actual.jpg'), width = 20, height = 15, units = "in", res = 300)
@@ -536,10 +536,10 @@ for (var_idx in 1:length(var4nn)) {
         # Assign the averaged data to the corresponding column in the array
         soc_prop_change[ , icategory] = soc_prop_change_avg_temp
     }
-    # Calculate the proportional change
-    soc_prop_change_baseline <- soc_prop_change[(length(percentage_change)+1)/2, ]
-    soc_prop_change_baseline <- rep(soc_prop_change_baseline, each = length(percentage_change))
-    soc_prop_change <- (soc_prop_change - soc_prop_change_baseline) / soc_prop_change_baseline * 100
+    # # Calculate the proportional change
+    # soc_prop_change_baseline <- soc_prop_change[(length(percentage_change)+1)/2, ]
+    # soc_prop_change_baseline <- rep(soc_prop_change_baseline, each = length(percentage_change))
+    # soc_prop_change <- (soc_prop_change - soc_prop_change_baseline) / soc_prop_change_baseline * 100
 
     # Update the percentage change when 2*std is exceeding max and min values
     percentage_change_plot = percentage_change
@@ -574,7 +574,7 @@ for (var_idx in 1:length(var4nn)) {
         labs(
           title = paste0(var_name[var_idx]),
           x     = "Change in environmental variable (std)",
-          y     = "Percent change compared to baseline"
+          y     = "Soil Carbon (kgC/m2)"
         ) +
         theme_minimal(base_family = "Helvetica") +
         theme(
@@ -606,7 +606,7 @@ for (var_idx in 1:length(var4nn)) {
         labs(
           title = paste0(var_name[var_idx], " (Normal Value)"),
           x     = "Normal value of environmental variable",
-          y     = "Proportional change of SOC component"
+          y     = "Soil Carbon (kgC/m2)"
         )
     # Save the plot with updated values
     jpeg(filename = paste0(data_dir_output, '/Percentage_Change_SOC_Components/', var_name_temp, '_percentage_change_soc_components_norm.jpg'), width = 20, height = 15, units = "in", res = 300)
@@ -620,7 +620,7 @@ for (var_idx in 1:length(var4nn)) {
         labs(
           title = paste0(var_name[var_idx], " (Actual Value)"),
           x     = "Actual value of environmental variable",
-          y     = "Proportional change of SOC component"
+          y     = "Soil Carbon (kgC/m2)"
         )
     # Save the plot with actual values
     jpeg(filename = paste0(data_dir_output, '/Percentage_Change_SOC_Components/', var_name_temp, '_percentage_change_soc_components_actual.jpg'), width = 20, height = 15, units = "in", res = 300)
@@ -721,7 +721,7 @@ for (var_idx in 1:length(var4nn)) {
         labs(
           title = paste0(var_name[var_idx]),
           x     = "Change in environmental variable (std)",
-          y     = "Percent change compared to baseline"
+          y     = "Carbon Fraction (%)"
         ) +
         theme_minimal(base_family = "Helvetica") +
         theme(
@@ -753,7 +753,7 @@ for (var_idx in 1:length(var4nn)) {
         labs(
           title = paste0(var_name[var_idx], " (Normal Value)"),
           x     = "Normal value of environmental variable",
-          y     = "Proportional change of SOC component"
+          y     = "Carbon Fraction (%)"
         )
     # Save the plot with updated values
     jpeg(filename = paste0(data_dir_output, '/Percentage_Change_SOC_Fractions/', var_name_temp, '_percentage_change_soil_fractions_norm.jpg'), width = 20, height = 15, units = "in", res = 300)
@@ -767,7 +767,7 @@ for (var_idx in 1:length(var4nn)) {
         labs(
           title = paste0(var_name[var_idx], " (Actual Value)"),
           x     = "Actual value of environmental variable",
-          y     = "Proportional change of SOC component"
+          y     = "Carbon Fraction (%)"
         )
     # Save the plot with actual values
     jpeg(filename = paste0(data_dir_output, '/Percentage_Change_SOC_Fractions/', var_name_temp, '_percentage_change_soil_fractions_actual.jpg'), width = 20, height = 15, units = "in", res = 300)
