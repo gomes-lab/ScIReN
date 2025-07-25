@@ -27,11 +27,11 @@
 source .venv/bin/activate
 
 
-for LR in 1e-1
+for LR in 1e-1 1e-2 1e-3 1e-4
 do
     for WD in 0
     do
-        for FOLD in 1 2 3 4 5
+        for FOLD in 1
         do
             if [ $FOLD -eq 1 ]; then
                 PLOT_STR="--plot"
@@ -46,7 +46,7 @@ do
                 --model nn_only --num_layers 3 --residual --activation leaky_relu --use_bn \
                 --features ten --labels real --standardize_output \
                 --losses smooth_l1 --lambdas 1 \
-                --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "4A_REAL_PURENN" $PLOT_STR
+                --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "4A_REAL_PURENN_TUNING" $PLOT_STR
         done
     done
 done
