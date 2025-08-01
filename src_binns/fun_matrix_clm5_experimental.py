@@ -3,6 +3,122 @@ import numpy as np
 import torch
 import traceback
 import math
+import visualization_utils
+
+
+def fun_model_simu_pools(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_depth, vertical_mixing, vectorized='yes', plot_dir=None, true_soc=None):
+	"""
+	Simulate the soil carbon profile AT EACH OF THE 7 POOLS using the CLM5 model. Returns 2 values:
+	1) carbon amounts at 20 prespecified depths. Shape: [batch, pool_type (7), depths (20)]
+	2) specified observation depths in 'tensor_obs_layer_depth'. Shape: [batch, pool_type (7), n_observations (200)]
+	
+	true_soc is optional (only for visualization)
+	"""
+	device = tensor_para.device
+	para = tensor_para
+	frocing_steady_state = tensor_frocing_steady_state 
+	obs_layer_depth = tensor_obs_layer_depth
+
+	# depth of the node                                                   
+	zsoi = torch.tensor([1.000000000000000E-002, 4.000000000000000E-002, 9.000000000000000E-002, \
+		0.160000000000000, 0.260000000000000, 0.400000000000000, \
+		0.580000000000000, 0.800000000000000, 1.06000000000000, \
+		1.36000000000000, 1.70000000000000, 2.08000000000000, \
+		2.50000000000000, 2.99000000000000, 3.58000000000000, \
+		4.27000000000000, 5.06000000000000, 5.95000000000000, \
+		6.94000000000000, 8.03000000000000, 9.79500000000000, \
+		13.3277669529664, 19.4831291701244, 28.8707244343160, \
+		41.9984368640029], device=device)
+
+	n_soil_layer = 20
+
+	# Initialize final outputs of simulation
+	profile_num = para.shape[0]
+	a_mas = torch.ones((profile_num, 140, 140), device=device) * np.nan
+	kk_mas = torch.ones((profile_num, 140, 140), device=device) * np.nan
+	tri_mas = torch.ones((profile_num, 140, 140), device=device) * np.nan
+	matrix_ins = torch.ones((profile_num, 140, 1), device=device) * np.nan
+
+	# calculate soc solution for each profile
+	for iprofile in range(0, profile_num):
+		profile_para = para[iprofile, :]
+		profile_force_steady_state = frocing_steady_state[iprofile, :, :, :]
+
+		if torch.isnan(torch.sum(profile_para)) == False and \
+			torch.isnan(torch.sum(profile_force_steady_state[0:12, 0, 1:8])) == False and \
+			torch.isnan(torch.sum(profile_force_steady_state[0:20, 0:12, 8:13])) == False:
+			
+			a_ma, kk_ma, tri_ma, matrix_in = fun_matrix_clm5(profile_para.cpu(), profile_force_steady_state.cpu(), vertical_mixing, vectorized)
+			a_mas[iprofile] = a_ma.to(device)
+			kk_mas[iprofile] = kk_ma.to(device)
+			tri_mas[iprofile] = tri_ma.to(device)
+			matrix_ins[iprofile] = matrix_in.to(device)
+		else:
+			print("Nan in parameter or forcing.")
+			print(profile_para)
+			print(profile_force_steady_state[0:12, 0, 1:8])
+			print(profile_force_steady_state[0:20, 0:12, 8:13])
+
+	cpool_steady_state = torch.linalg.solve((torch.matmul(a_mas, kk_mas) - tri_mas), (-matrix_ins))  # [batch, 140, 1]
+
+	# Order of pools is: [20 depths for pool 1, 20 depths for pool 2, etc.]
+	soc_pool_layer = cpool_steady_state.view((cpool_steady_state.shape[0], 7, 20))  # [batch, pool_type (7), n_layers (20)]
+
+	# Interpolate to specified depths
+	if obs_layer_depth is not None and (not torch.isnan(obs_layer_depth).all()):
+		obs_layer_depth = obs_layer_depth.unsqueeze(dim=1).repeat(1, 7, 1)  # Repeat to [batch, pool_type (7), n_obs (200)]
+		depth_diff = zsoi[0:n_soil_layer] - obs_layer_depth.unsqueeze(3)  # [batch, pool_type (7), n_obs (200), n_layers (20)]. 
+																		# Distance from the observation to each layer.
+																		# Positive if layer is deeper (below) than the observation, negative if layer is shallower (above).
+
+		# Calculate distance to above layer + index of above layer
+		# Find the largest negative value in depth_diff (layer shallower than observation)
+		diff_negatives = depth_diff.clone().detach()
+		diff_negatives[diff_negatives >= 0] = float('-inf')
+		distance_to_above, upper_layer_idx = torch.max(diff_negatives, dim=3)  # distance_to_above, upper_layer_idx: [batch, pool_type (7), n_obs (200)]
+
+		# Calculate distance to below layer + index of below layer
+		# Find the smallest non-negative value in depth_diff (layer deeper than observation)
+		diff_positives = depth_diff.detach()  # .detach().clone()
+		diff_positives[diff_positives < 0] = float('inf')
+		distance_to_below, lower_layer_idx = torch.min(diff_positives, dim=3)
+
+		# Overwrite upper layer for observations shallower than first soil layer
+		shallow_mask = (obs_layer_depth < zsoi[0])
+		distance_to_above[shallow_mask] = zsoi[0] - obs_layer_depth[shallow_mask]
+		upper_layer_idx[shallow_mask] = 0
+
+		# Overwrite lower layer for observations deeper than last soil layer
+		deep_mask = (obs_layer_depth >= zsoi[n_soil_layer-1])
+		distance_to_below[deep_mask] = obs_layer_depth[deep_mask] - zsoi[n_soil_layer-1]
+		lower_layer_idx[deep_mask] = n_soil_layer - 1
+
+		# Now compute the weighted average of upper/lower soil layers
+		distance_to_above, distance_to_below = distance_to_above.abs(), distance_to_below.abs()
+		sum_distances = distance_to_above + distance_to_below  # Summed distance to above and below layers
+
+		# For gather: input (soc_pool_layer) is [batch, pool_type (7), n_layers (20)]
+		# index (lower_layer_idx) is [batch, pool_type (7), n_obs (200)]
+		# gather documentation says if dim=2, out[i][j][k] = input[i][j][index[i][j][k]]    
+		# This is correct, because index[i][j][k] represents layer index of closest upper layer.
+		lower_layer_soc = torch.gather(soc_pool_layer, 2, lower_layer_idx)
+		upper_layer_soc = torch.gather(soc_pool_layer, 2, upper_layer_idx)
+
+		# Nan out elements in lower_layer_soc and upper_layer_soc that correspond to nan depths
+		nan_mask = torch.isnan(obs_layer_depth)
+		lower_layer_soc[nan_mask] = np.nan
+		upper_layer_soc[nan_mask] = np.nan
+
+		# These two interpolations should be the same, but may be different due to floating point error.
+		interpolated_soc = lower_layer_soc + (upper_layer_soc - lower_layer_soc) * distance_to_below / sum_distances
+	else:
+		interpolated_soc = None
+	
+	if plot_dir is not None:  # Profile visualizations
+		visualization_utils.plot_profile_pools(soc_pool_layer, interpolated_soc, tensor_obs_layer_depth, plot_dir, true_soc=true_soc)
+	return soc_pool_layer, interpolated_soc
+# end def fun_model_simu
+
 
 
 def fun_model_simu(tensor_para, tensor_frocing_steady_state, tensor_obs_layer_depth, vertical_mixing, vectorized='yes'):

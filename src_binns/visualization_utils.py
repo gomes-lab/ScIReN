@@ -12,6 +12,7 @@ from scipy.interpolate import interpn
 import subprocess
 import matplotlib.patches as patches
 
+
 # Get the hash of the latest Git commit.
 # TODO - this is not a visualization method, but temporarily putting it here for convenience
 def get_git_revision_hash():
@@ -427,3 +428,104 @@ def plot_histogram_multiple(list_of_values, names, filename, n_rows=None):
     plt.tight_layout()
     plt.savefig(filename)
     plt.close()
+
+
+
+"""
+For a given profile, plot predicted carbon amounts in each pool, by depth
+pred_soc_pool_layer: [batch, pool, layers]
+pred_interpolated_soc: [batch, pool, n_obs]
+obs_depths = [batch, n_obs]
+true_soc: [batch, pool, n_obs]
+"""
+def plot_profile_pools(pred_soc_pool_layer, pred_interpolated_soc, obs_depths, plot_dir, true_soc=None):
+    n_soil_layer = pred_soc_pool_layer.shape[2]
+    assert n_soil_layer == 20
+
+    # Predefined layer depths
+    zsoi = torch.tensor([1.000000000000000E-002, 4.000000000000000E-002, 9.000000000000000E-002, \
+        0.160000000000000, 0.260000000000000, 0.400000000000000, \
+        0.580000000000000, 0.800000000000000, 1.06000000000000, \
+        1.36000000000000, 1.70000000000000, 2.08000000000000, \
+        2.50000000000000, 2.99000000000000, 3.58000000000000, \
+        4.27000000000000, 5.06000000000000, 5.95000000000000, \
+        6.94000000000000, 8.03000000000000, 9.79500000000000, \
+        13.3277669529664, 19.4831291701244, 28.8707244343160, \
+        41.9984368640029])[0:n_soil_layer]
+
+    examples_to_plot = 5
+    if true_soc is not None:
+        n_cols = 2
+    else:
+        n_cols = 1
+    fig, axeslist = plt.subplots(examples_to_plot, n_cols, figsize=(5*n_cols, 5*examples_to_plot), squeeze=False, layout="constrained")
+    for i in range(examples_to_plot):  # Loop through examples
+        for p in range(pred_soc_pool_layer.shape[1]):  # Loop through pools
+            # PREDICTED
+            # Plot at 20 fixed depths
+            pool_p, = axeslist[i, 0].plot(pred_soc_pool_layer[i, p, :].cpu().detach().numpy(), 
+                                          zsoi.cpu().detach().numpy(), 
+                                          'o-', label=f"Pool {p}")
+            
+            # Plot at interpolated depths
+            axeslist[i, 0].scatter(pred_interpolated_soc[i, p, :].cpu().detach().numpy(),
+                                obs_depths[i, :].cpu().detach().numpy(),
+                                color=pool_p.get_color(), marker="*")
+
+            # TRUE
+            # Plot at interpolated depths
+            if true_soc is not None:
+                axeslist[i, 1].plot(true_soc[i, p, :].cpu().detach().numpy(),
+                                    obs_depths[i, :].cpu().detach().numpy(),
+                                    color=pool_p.get_color(),
+                                    marker="*", label=f"Pool {p} (Interpolated)")
+
+        # Row/column labels
+        axeslist[i, 0].set_ylim(0.0, 2.6)
+        axeslist[i, 0].invert_yaxis()
+        axeslist[i, 0].set_ylabel(f"Example {i}", rotation=0, size="large", labelpad=50)
+        axeslist[i, 0].legend()
+        if i == 0:
+            axeslist[i, 0].set_title("Predicted")
+
+        if true_soc is not None:
+            axeslist[i, 1].set_ylim(0.0, 2.6)
+            axeslist[i, 1].invert_yaxis()
+            axeslist[i, 1].legend()
+            if i == 0:
+                axeslist[i, 1].set_title("True")
+
+    plt.title(f"True vs predicted SOC by depth")
+    plt.legend()
+    plt.savefig(os.path.join(plot_dir, "example_profiles.png"))
+    plt.close()
+
+            
+
+    # # Predicted SOC at 20 layers
+    # pred_y_twenty = fun_model_prediction(para, example_x, args.vertical_mixing)[0, 0:20]
+
+    # # Depths of 20 layers (zsoi in code)
+    # depths_twenty = torch.tensor([1.000000000000000E-002, 4.000000000000000E-002, 9.000000000000000E-002, \
+    #         0.160000000000000, 0.260000000000000, 0.400000000000000, \
+    #         0.580000000000000, 0.800000000000000, 1.06000000000000, \
+    #         1.36000000000000, 1.70000000000000, 2.08000000000000, \
+    #         2.50000000000000, 2.99000000000000, 3.58000000000000, \
+    #         4.27000000000000, 5.06000000000000, 5.95000000000000, \
+    #         6.94000000000000, 8.03000000000000, 9.79500000000000, \
+    #         13.3277669529664, 19.4831291701244, 28.8707244343160, \
+    #         41.9984368640029])[0:20]
+
+    # # Predicted SOC at observed depths
+    # pred_y = fun_model_simu(para, example_x, example_z, args.vertical_mixing)
+    # loss, nse = compute_loss_and_nse(pred_y, example_y)
+
+    # # Plot observations (depth vertically)
+    # plt.scatter(example_y, example_z, label="Observed")
+    # plt.scatter(pred_y, example_z, label="Predicted (at observed depths)")
+    # plt.scatter(pred_y_twenty, depths_twenty, label="Predicted (at default depths)")
+    # plt.gca().set_ylim(0.2, 2.6)
+    # plt.gca().invert_yaxis()
+    # plt.title(f"True vs predicted SOC by depth: NSE={nse.item():.3f}")
+    # plt.legend()
+    # plt.show()

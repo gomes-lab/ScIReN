@@ -62,7 +62,7 @@ from matplotlib import pyplot as plt
 # Import CLM5 process-based model #
 ###################################
 # fun_model_simu predicts at user-specified depths. fun_model_prediction predicts at 20 default layers.
-from fun_matrix_clm5_experimental import fun_model_simu, fun_model_prediction
+from fun_matrix_clm5_experimental import fun_model_simu, fun_model_prediction, fun_model_simu_pools
 
 # fun_bulk_simu returns additional components (quantities describing physical processes)
 from fun_matrix_clm5_vectorized_bulk_converge import fun_bulk_simu
@@ -125,7 +125,8 @@ parser.add_argument("--val_ratio", type=float, default=0.1, help="Fraction of da
 parser.add_argument("--test_ratio", type=float, default=0.1, help="Fraction of datapoints in test set. Only used if not doing cross-validation.")
 parser.add_argument("--batching", type=str, default='random', choices=['random', 'block'],
 					help='How to generate minibatches. If `block`, samples examples from contiguous spatial block for each batch.')
-parser.add_argument("--labels", type=str, default='real', choices=['real', 'synthetic_proda', 'synthetic_function'], help="Whether to use real labels, synthetic SOC labels generated from PRODA parameters, or synthetic SOC labels generated from synthetic parameters, which are generated using prescribed functional relationships.")
+parser.add_argument("--labels", type=str, default='real', choices=['real', 'synthetic_proda', 'synthetic_function', 'synthetic_constant'], help="Whether to use real labels, synthetic SOC labels generated from PRODA parameters, or synthetic SOC labels generated from synthetic parameters, which are generated using prescribed functional relationships.")
+parser.add_argument("--indiv_pools", type=int, default=0, choices=[0, 1], help="If 1, use data for individual pools for training (or only SOC). Currently we only have this data if it's synthetically generated.")
 parser.add_argument("--label_noise_std", type=float, default=0., help="epsilon, where we multiply SOC labels by N(1, epsilon). Only used if args.labels is synthetic_proda or synthetic_function.")
 
 # Transformations
@@ -830,11 +831,13 @@ current_PRODA_para = np.clip(current_PRODA_para, a_min=0, a_max=1)
 # Fetch directory where cached labels are saved
 if args.labels != "real":
 	# If using synthetic datasets, save the labels to a directory
-	label_dir = os.path.join(data_dir_input, f"labels_{args.labels}_para={args.para_to_predict}_seed={args.seed}")
+	label_dir = os.path.join(data_dir_input, f"labels_{args.labels}_para={args.para_to_predict}_noise={args.label_noise_std}_seed={args.seed}")
 	if args.representative_sample:
 		label_dir += "_representative"
 	elif args.n_datapoints != -1:
 		label_dir += "_datapoints={args.n_datapoints}"
+	if args.indiv_pools == 1:
+		label_dir += "_POOLS"
 	os.makedirs(label_dir, exist_ok=True)
 
 if args.labels == "synthetic_proda":
@@ -843,7 +846,10 @@ if args.labels == "synthetic_proda":
 		PRODA_soc_simu = np.load(synthetic_label_path)
 		current_data_y = PRODA_soc_simu
 	else:   # Otherwise compute synthetic labels from the PRODA parameters
-		PRODA_soc_simu = np.ones((len(current_data_profile_id), 200))*np.nan
+		if args.indiv_pools == 1:
+			PRODA_soc_simu = np.ones((len(current_data_profile_id), 7, 200))*np.nan
+		else:
+			PRODA_soc_simu = np.ones((len(current_data_profile_id), 200))*np.nan
 
 		start_time = time.time()
 		for i in range(len(current_data_profile_id)):
@@ -858,7 +864,11 @@ if args.labels == "synthetic_proda":
 			current_PRODA_para_simu = torch.tensor(current_PRODA_para_simu, dtype=torch.float32).unsqueeze(0)
 
 			# Run the simulation
-			PRODA_soc_simu[i, :] = fun_model_simu(current_PRODA_para_simu, current_data_x_simu, current_data_z_simu, args.vertical_mixing, args.vectorized)
+			if args.indiv_pools == 1:
+				# Individual pools
+				PRODA_soc_simu[i, :, :] = fun_model_simu_pools(current_PRODA_para_simu, current_data_x_simu, current_data_z_simu, args.vertical_mixing, args.vectorized)[1].squeeze(axis=0)
+			else:
+				PRODA_soc_simu[i, :] = fun_model_simu(current_PRODA_para_simu, current_data_x_simu, current_data_z_simu, args.vertical_mixing, args.vectorized).squeeze(axis=0)
 
 			# If any simulation is over 1,000,000 gC/m2, set it to nan
 			if np.any(PRODA_soc_simu[i, :] > 1000000):
@@ -890,16 +900,25 @@ if args.labels == "synthetic_proda":
 		np.save(synthetic_label_path, PRODA_soc_simu)
 
 elif args.labels == "synthetic_function":
-	print("loading synthetic_function", label_dir, flush=True)
 
 	synthetic_label_path = os.path.join(label_dir, "synthetic_soc.npy")
 	if os.path.exists(synthetic_label_path) and False:
+		print("loading synthetic function", label_dir, flush=True)
+
+		# Load true KAN (mainly done to try to preserve random seeds)
+		import kan
+		true_kan = kan.KAN(width=[len(var4nn), len(para_index)], device="cpu",
+						   input_size=len(var4nn), base_fun="identity", seed=args.data_seed)  # TODO This sets global pytorch/numpy seeds! Maybe it shouldn't
+		true_kan.load_state_dict(torch.load(os.path.join(label_dir, "true_kan.pth"), weights_only=True))
+
+		# Load synthetic SOC and parameter values
 		PRODA_soc_simu = np.load(synthetic_label_path)
 		current_data_y = PRODA_soc_simu
 		current_PRODA_para = np.load(os.path.join(label_dir, "synthetic_para.npy"))
 		sym_mask = np.load(os.path.join(label_dir, "relationship_types.npy"))
 		true_relationships = np.load(os.path.join(label_dir, "true_relationships.npy"))
-		# relationship_mask = torch.tensor(sym_mask != 0, dtype=int)  # 1 if relationship exists between input i and output j
+		relationship_mask = torch.tensor(sym_mask != 0, dtype=int)  # 1 if relationship exists between input i and output j
+		constant_para = (relationship_mask.sum(dim=0) == 0)  # parameters with no functional relationships (constant). should not contain anything now.
 	else:
 		print("computing synthetic_function", label_dir, flush=True)
 
@@ -986,7 +1005,7 @@ elif args.labels == "synthetic_function":
 
 			# for parameters with no functional relationships, set them to 0.5
 			prescribed_para[:, constant_para] = 0.5
-			current_PRODA_para = torch.ones((len(current_data_profile_id), len(para_names))) * 0.5
+			current_PRODA_para = np.ones((len(current_data_profile_id), len(para_names))) * 0.5
 			current_PRODA_para[:, para_index] = prescribed_para
 
 			# Plot true functional relationships
@@ -1016,7 +1035,10 @@ elif args.labels == "synthetic_function":
 			true_relationships /= true_relationships.sum(axis=0, keepdims=True)
 
 			# Use these synthetic parameters to generate SOC
-			PRODA_soc_simu = np.ones((len(current_data_profile_id), 200))*np.nan
+			if args.indiv_pools == 1:
+				PRODA_soc_simu = np.ones((len(current_data_profile_id), 7, 200))*np.nan
+			else:
+				PRODA_soc_simu = np.ones((len(current_data_profile_id), 200))*np.nan
 			start_time = time.time()
 			for i in range(len(current_data_profile_id)):
 				# Get the current profile's data
@@ -1030,7 +1052,10 @@ elif args.labels == "synthetic_function":
 				current_PRODA_para_simu = torch.tensor(current_PRODA_para_simu, dtype=torch.float32).unsqueeze(0)
 
 				# Run the simulation
-				PRODA_soc_simu[i, :] = fun_model_simu(current_PRODA_para_simu, current_data_x_simu, current_data_z_simu, args.vertical_mixing, args.vectorized)
+				if args.indiv_pools == 1:
+					PRODA_soc_simu[i, :, :] = fun_model_simu_pools(current_PRODA_para_simu, current_data_x_simu, current_data_z_simu, args.vertical_mixing, args.vectorized)[1].squeeze(axis=0)
+				else:
+					PRODA_soc_simu[i, :] = fun_model_simu(current_PRODA_para_simu, current_data_x_simu, current_data_z_simu, args.vertical_mixing, args.vectorized).squeeze(axis=0)
 
 				# If any simulation is over 1,000,000 gC/m2, set it to nan
 				if np.any(PRODA_soc_simu[i, :] > 1000000):
@@ -1042,7 +1067,12 @@ elif args.labels == "synthetic_function":
 					print("SOC obs", current_data_y[i, valid_loc])
 
 			# Drop the profiles with all nan values
-			valid_profile_loc = np.where(np.all(np.isnan(PRODA_soc_simu), axis=1) == False)[0]
+			print("Proda SOC SIMU", PRODA_soc_simu.shape)
+			if args.indiv_pools == 1:
+				valid_profile_loc = np.where(np.all(np.isnan(PRODA_soc_simu), axis=(1,2)) == False)[0]
+			else:
+				valid_profile_loc = np.where(np.all(np.isnan(PRODA_soc_simu), axis=1) == False)[0]
+
 			current_data_y = current_data_y[valid_profile_loc, :]
 			current_data_z = current_data_z[valid_profile_loc, :]
 			current_data_c = current_data_c[valid_profile_loc, :]
@@ -1068,8 +1098,75 @@ elif args.labels == "synthetic_function":
 			np.save(os.path.join(label_dir, "synthetic_para.npy"), current_PRODA_para)
 			np.save(os.path.join(label_dir, "relationship_types.npy"), sym_mask)
 			np.save(os.path.join(label_dir, "true_relationships.npy"), true_relationships)
-			torch.save(true_kan, os.path.join(label_dir, "true_kan.pth"))
+			torch.save(true_kan.state_dict(), os.path.join(label_dir, "true_kan.pth"))
 			print("Finished synthetic data generation")
+
+elif args.labels == "synthetic_constant":
+	# Global constant set of parameters
+	prescribed_para = np.random.rand(len(para_names)) * 0.8 + 0.1
+	current_PRODA_para = np.tile(prescribed_para, (len(current_data_profile_id), 1))
+	print("Current proda", current_PRODA_para.shape, current_PRODA_para[0:3, :])
+
+	# Use these synthetic parameters to generate SOC
+	if args.indiv_pools == 1:
+		PRODA_soc_simu = np.ones((len(current_data_profile_id), 7, 200))*np.nan
+	else:
+		PRODA_soc_simu = np.ones((len(current_data_profile_id), 200))*np.nan
+	start_time = time.time()
+	for i in range(len(current_data_profile_id)):
+		# Get the current profile's data
+		current_data_x_simu = current_data_x[i, :, :, :]
+		current_data_z_simu = current_data_z[i, :]
+		current_PRODA_para_simu = current_PRODA_para[i, :]
+
+		# Convert the data to tensor, reshape to shape [1, 60, 12, 13] and [1, 21]
+		current_data_x_simu = torch.tensor(current_data_x_simu, dtype=torch.float32).unsqueeze(0)
+		current_data_z_simu = torch.tensor(current_data_z_simu, dtype=torch.float32).unsqueeze(0)
+		current_PRODA_para_simu = torch.tensor(current_PRODA_para_simu, dtype=torch.float32).unsqueeze(0)
+
+		# Run the simulation
+		if args.indiv_pools == 1:
+			PRODA_soc_simu[i, :, :] = fun_model_simu_pools(current_PRODA_para_simu, current_data_x_simu, current_data_z_simu, args.vertical_mixing, args.vectorized)[1].squeeze(axis=0)
+		else:
+			PRODA_soc_simu[i, :] = fun_model_simu(current_PRODA_para_simu, current_data_x_simu, current_data_z_simu, args.vertical_mixing, args.vectorized).squeeze(axis=0)
+
+		# If any simulation is over 1,000,000 gC/m2, set it to nan
+		if np.any(PRODA_soc_simu[i, :] > 1000000):
+			print(">>>>>>>>>>>>>>>>>>>>>>>> Extreme simulated SOC. Coordinates", current_data_c[i, :])
+			print("PRODA params", current_PRODA_para[i, :])
+			valid_loc = ~np.isnan(current_data_z[i, :])
+			print("Depths", current_data_z[i, valid_loc])
+			print("SOC simu", PRODA_soc_simu[i, valid_loc])
+			print("SOC obs", current_data_y[i, valid_loc])
+
+	# Drop the profiles with all nan values
+	print("Proda SOC SIMU", PRODA_soc_simu.shape)
+	if args.indiv_pools == 1:
+		valid_profile_loc = np.where(np.all(np.isnan(PRODA_soc_simu), axis=(1,2)) == False)[0]
+	else:
+		valid_profile_loc = np.where(np.all(np.isnan(PRODA_soc_simu), axis=1) == False)[0]
+
+	current_data_y = current_data_y[valid_profile_loc, :]
+	current_data_z = current_data_z[valid_profile_loc, :]
+	current_data_c = current_data_c[valid_profile_loc, :]
+	current_data_x = current_data_x[valid_profile_loc, :, :, :]
+	current_data_profile_id = current_data_profile_id[valid_profile_loc]
+	current_PRODA_para = current_PRODA_para[valid_profile_loc, :]
+	PRODA_soc_simu = PRODA_soc_simu[valid_profile_loc, :]
+	obs_upper_depth_matrix = obs_upper_depth_matrix[valid_profile_loc, :]
+	obs_lower_depth_matrix = obs_lower_depth_matrix[valid_profile_loc, :]
+
+	print("Time taken to run PRODA soc simu", time.time() - start_time)
+	print("Shape of PRODA soc simu", PRODA_soc_simu.shape)
+	print("Shape of current data x", current_data_x.shape, current_PRODA_para.shape)
+
+	# Label noise
+	if args.label_noise_std > 0:
+		eps = torch.nn.init.trunc_normal_(torch.empty(PRODA_soc_simu.shape, requires_grad=False), mean=0, std=args.label_noise_std, a=-0.95, b=0.95)
+		PRODA_soc_simu = PRODA_soc_simu * (1 + eps).detach().cpu().numpy()
+
+	# Treat the simulated SOC as the true labels
+	current_data_y = PRODA_soc_simu
 
 
 
@@ -1460,14 +1557,23 @@ predict_data_x = torch.tensor(predict_data_x, dtype=torch.float32)
 predict_data_z = torch.tensor(predict_data_z, dtype=torch.float32)
 predict_data_c = torch.tensor(predict_data_c, dtype=torch.float32)
 if args.labels == "synthetic_function":
-	# Get the prescribed parameters
-	grid_features = torch.tensor(predict_data_x[:, 0:len(var4nn), 0, 0], dtype=torch.float32)
-	prescribed_para = true_kan(grid_features)
-	prescribed_para[:, constant_para] = 0.5  # for parameters with no functional relationships, set them to 0.5
-	grid_PRODA_para = torch.ones((predict_data_x.shape[0], len(para_names))) * 0.5
-	grid_PRODA_para[:, para_index] = prescribed_para
-else:
-	grid_PRODA_para = torch.tensor(grid_PRODA_para, dtype=torch.float32)
+	if os.path.exists(os.path.join(label_dir, "grid_proda_para.npy")):
+		# Grid parameters already precomputed
+		grid_PRODA_para = np.load(os.path.join(label_dir, "grid_proda_para.npy"))
+	else:
+		# Compute prescribed parameters for grid data
+		grid_features = predict_data_x[:, 0:len(var4nn), 0, 0]
+		prescribed_para = true_kan(grid_features)
+		prescribed_para[:, constant_para] = 0.5  # for parameters with no functional relationships, set them to 0.5
+		grid_PRODA_para = np.ones((predict_data_x.shape[0], len(para_names))) * 0.5
+		grid_PRODA_para[:, para_index] = prescribed_para.detach().cpu().numpy()
+		np.save(os.path.join(label_dir, "grid_proda_para.npy"), grid_PRODA_para)
+elif args.labels == "synthetic_constant":
+	grid_PRODA_para = np.tile(prescribed_para, (predict_data_x.shape[0], 1))
+	print("grid proda para", grid_PRODA_para.shape)
+	print("Grid proda para", grid_PRODA_para[0:3])
+
+grid_PRODA_para = torch.tensor(grid_PRODA_para, dtype=torch.float32)
 
 # Helper function to combine the training data into a single tensor
 class MergeDataset(Dataset):
@@ -1584,8 +1690,16 @@ def worker(rank, world_size, job_id, port):
 	PLOT_DIR = os.path.join(data_dir_output, 'neural_network', job_id, 'visualizations')
 	os.makedirs(PLOT_DIR, exist_ok=True)  # Note: this should already exist from create_output_folders
 
-	# Save printed output to file. Does not seem to work on Slurm.
-	# sys.stdout = misc_utils.Logger(os.path.join(data_dir_output, "neural_network", job_id, "output.txt"))
+	# # Save printed output to file
+	# log_file = os.path.join(data_dir_output, "neural_network", job_id, "output.txt")
+	# print("Logging to", log_file, flush=True)
+	# if sys.stdout.isatty():
+	# 	# Actual terminal: write to both terminal and file
+	# 	sys.stdout = misc_utils.Logger(log_file)
+	# else:
+	# 	# If stdout is already being redirected (e.g. this is a slurm job),
+	# 	# the above doesn't work (not sure why). Just redirect the output to log file. 
+	# 	sys.stdout = open(log_file, "w")
 
 	# Set up distributed environment
 	if args.use_ddp == 1:
@@ -1642,6 +1756,7 @@ def worker(rank, world_size, job_id, port):
 
 	# Create distributed version of the model
 	if args.use_ddp == 1:
+		model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
 		if torch.cuda.is_available():
 			model = DDP(model, device_ids=[device])
 		else:  # CPU only
@@ -1706,19 +1821,23 @@ def worker(rank, world_size, job_id, port):
 		epochs_without_improvement = 0
 
 		# Save observations
-		binn_obs_soc = np.ones((wosis_profile_info.shape[0], 200))*np.nan
-		binn_obs_soc[current_data_profile_id, :] = current_data_y
+		if args.indiv_pools == 1:
+			binn_obs_soc = np.ones((wosis_profile_info.shape[0], 7, 200))*np.nan
+			binn_obs_soc[current_data_profile_id, :, :] = current_data_y		
+		else:
+			binn_obs_soc = np.ones((wosis_profile_info.shape[0], 200))*np.nan
+			binn_obs_soc[current_data_profile_id, :] = current_data_y
 
 		# Define starting epoch
 		start_epoch = 0
 
-		if rank == 1:
+		if rank == 1 and args.indiv_pools == 0:
 			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_obs_soc_' + job_id + '.csv', binn_obs_soc, delimiter = ',')
 			# print the model structure
 			print(model)
 
 			# # try to save the predicted parameters before training.
-		elif rank == 0:
+		elif rank == 0 and args.indiv_pools == 0:
 			# model.eval()  # TODO Can't really use eval mode before model is trained, since batchnorm stats are not there yet
 			print("Rank 0 About to val model before training", flush=True)
 			with torch.no_grad():
@@ -1749,8 +1868,12 @@ def worker(rank, world_size, job_id, port):
 		epochs_without_improvement = checkpoint_worker['epochs_without_improvement']
 
 		# Save observations
-		binn_obs_soc = np.ones((wosis_profile_info.shape[0], 200))*np.nan
-		binn_obs_soc[current_data_profile_id, :] = current_data_y
+		if args.indiv_pools:
+			binn_obs_soc = np.ones((wosis_profile_info.shape[0], 7, 200))*np.nan
+			binn_obs_soc[current_data_profile_id, :, :] = current_data_y		
+		else:
+			binn_obs_soc = np.ones((wosis_profile_info.shape[0], 200))*np.nan
+			binn_obs_soc[current_data_profile_id, :] = current_data_y
 
 		# Define starting epoch
 		start_epoch = checkpoint_worker['epoch']
@@ -1865,7 +1988,8 @@ def worker(rank, world_size, job_id, port):
 			#------------ 1 forward
 			# train_nn_start = time.time()
 			# Normal models return predicted (1) SOC, (2) parameters
-			batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0, PRODA_para=batch_proda_para)
+			batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0, PRODA_para=batch_proda_para, indiv_pools=args.indiv_pools, 
+												 plot_dir=(PLOT_DIR if (ibatch == 1 and iepoch % 50 == 0) else None), true_soc=batch_y)
 
 			# Check if batch_pred_para is nan or inf
 			if batch_y_hat is None or batch_pred_para is None:
@@ -2023,7 +2147,7 @@ def worker(rank, world_size, job_id, port):
 				batch_profile_id = batch_profile_id.to(device)
 
 				# 1 forward
-				batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0, PRODA_para=batch_proda_para)
+				batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0, PRODA_para=batch_proda_para, indiv_pools=args.indiv_pools)
 
 				# 2 compute the objective function
 				l1_loss, smooth_l1_loss, l2_loss, param_reg_loss, val_NSE, corr = fun_loss(batch_y_hat, batch_y, batch_pred_para)
@@ -2149,10 +2273,10 @@ def worker(rank, world_size, job_id, port):
 		# Pad arrays to this length
 		def pad_tensor(tensor, new_length, device):
 			"""
-			Given tensor of shape [L, D], pads it to shape [new_length, D], where the
+			Given tensor of shape [L, ...], pads it to shape [new_length, ...], where the
 			extra rows are filled with nan. new_length must be greater than L.
 			"""
-			padded = torch.full([new_length, tensor.shape[1]], torch.nan, device=device)
+			padded = torch.full([new_length] + list(tensor.shape)[1:], torch.nan, device=device)
 			padded[0:tensor.shape[0]] = tensor
 			return padded
 
@@ -2174,14 +2298,23 @@ def worker(rank, world_size, job_id, port):
 		train_proda_para_list = [torch.full([train_examples_per_rank, len(para_names)], torch.nan, device=device) for _ in range(world_size)]  # Empty list of per-rank PRODA paras
 		train_coords_list = [torch.full([train_examples_per_rank, 2], torch.nan, device=device) for _ in range(world_size)]
 		train_z_list = [torch.full([train_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]
-		train_pred_soc_list = [torch.full([train_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]  # Empty list of per-rank pred SOCs
-		train_true_soc_list = [torch.full([train_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]
 		val_pred_para_list = [torch.full([val_examples_per_rank, len(para_names)], torch.nan, device=device) for _ in range(world_size)]
 		val_proda_para_list = [torch.full([val_examples_per_rank, len(para_names)], torch.nan, device=device) for _ in range(world_size)]
 		val_coords_list = [torch.full([val_examples_per_rank, 2], torch.nan, device=device) for _ in range(world_size)]
 		val_z_list = [torch.full([val_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]
-		val_pred_soc_list = [torch.full([val_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]
-		val_true_soc_list = [torch.full([val_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]
+
+		if args.indiv_pools == 1:
+			# If using individual pools, record SOC amount in each pool
+			train_pred_soc_list = [torch.full([train_examples_per_rank, 7, 200], torch.nan, device=device) for _ in range(world_size)]  # Empty list of per-rank pred SOCs
+			train_true_soc_list = [torch.full([train_examples_per_rank, 7, 200], torch.nan, device=device) for _ in range(world_size)]
+			val_pred_soc_list = [torch.full([val_examples_per_rank, 7, 200], torch.nan, device=device) for _ in range(world_size)]
+			val_true_soc_list = [torch.full([val_examples_per_rank, 7, 200], torch.nan, device=device) for _ in range(world_size)]
+		else:
+			# Otherwise for each observation, only aggregate SOC amount
+			train_pred_soc_list = [torch.full([train_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]  # Empty list of per-rank pred SOCs
+			train_true_soc_list = [torch.full([train_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]
+			val_pred_soc_list = [torch.full([val_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]
+			val_true_soc_list = [torch.full([val_examples_per_rank, 200], torch.nan, device=device) for _ in range(world_size)]
 		dist.all_gather(train_pred_para_list, all_train_pred_para)
 		dist.all_gather(train_proda_para_list, all_train_proda_para)
 		dist.all_gather(train_coords_list, all_train_coords)
@@ -2214,7 +2347,7 @@ def worker(rank, world_size, job_id, port):
 		allrank_train_mae, allrank_train_mse, allrank_train_NSE = allrank_train_mae.item(), allrank_train_mse.item(), allrank_train_NSE.item() 
 		allrank_val_mae, allrank_val_mse, allrank_val_NSE = allrank_val_mae.item(), allrank_val_mse.item(), allrank_val_NSE.item()
 
-		if args.plot and (iepoch % 50 == 0) and rank == 0:
+		if args.plot and (iepoch % 25 == 0) and rank == 0:
 			print("Creating plots", datetime.now(), flush=True)
 
 			# KAN-specific visualizations
@@ -2296,11 +2429,26 @@ def worker(rank, world_size, job_id, port):
 			for i in range(len(LAYER_BOUNDARIES) - 1):  # Loop through layers
 				layer_loc_train = (allrank_train_z >= LAYER_BOUNDARIES[i]) & (allrank_train_z < LAYER_BOUNDARIES[i+1])  # nan considered false, which is good
 				layer_loc_val = (allrank_val_z >= LAYER_BOUNDARIES[i]) & (allrank_val_z < LAYER_BOUNDARIES[i+1])  # nan considered false, which is good
+				if args.indiv_pools == 1:
+					layer_loc_train = layer_loc_train.unsqueeze(1).repeat((1, 7, 1))  # repeat masks for layer dimension
+					layer_loc_val = layer_loc_val.unsqueeze(1).repeat((1, 7, 1))
 				y_hats.extend([allrank_train_pred_soc[layer_loc_train], allrank_val_pred_soc[layer_loc_val]])
 				ys.extend([allrank_train_true_soc[layer_loc_train], allrank_val_true_soc[layer_loc_val]])
 				layer_str = f'{LAYER_BOUNDARIES[i]}-{LAYER_BOUNDARIES[i+1]}m'
 				titles.extend([f'Train: {layer_str}', f'Val: {layer_str}'])
 			visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, f"epoch{iepoch}_scatters.png"), y_hats, ys, titles, cols=2)
+
+			# Scatters by pool
+			if args.indiv_pools == 1:
+				titles = []
+				y_hats = []
+				ys = []
+				print("plotting pool", allrank_train_pred_soc.shape, allrank_train_true_soc.shape)
+				for p in range(7):
+					y_hats.extend([allrank_train_pred_soc[:, p, :], allrank_val_pred_soc[:, p, :]])
+					ys.extend([allrank_train_true_soc[:, p, :], allrank_val_true_soc[:, p, :]])
+					titles.extend([f'Train: Pool {p}', f'Val: Pool {p}'])
+				visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, f"epoch{iepoch}_scatters_pool.png"), y_hats, ys, titles, cols=2)
 
 			# Parameter scatters (predicted vs PRODA/prescribed parameters). Each row is a parameter, each column represents a split (train/val)
 			if args.model != "nn_only":
@@ -2595,20 +2743,23 @@ def worker(rank, world_size, job_id, port):
 		with torch.no_grad():
 			# Get predictions for train examples, compute loss & plot
 			best_guess_train_y_hat, best_guess_train_pred_para = best_guess_model(train_x.to(device), train_z.to(device), train_c.to(device),
-																				  whether_predict=0, PRODA_para=train_proda_para.to(device))
+																				  whether_predict=0, PRODA_para=train_proda_para.to(device),
+																				  indiv_pools=args.indiv_pools)
 			train_mae, train_smooth_l1_loss, train_mse, _, train_NSE, train_corr = fun_loss(best_guess_train_y_hat, train_y.to(device), best_guess_train_pred_para)
 			print(f'Train - MSE: {train_mse.item():.2f}, MAE: {train_mae.item():.2f}, NSE: {train_NSE.item():.2f}')
 
 			# Get predictions for val examples, compute loss & plot
 			best_guess_val_y_hat, best_guess_val_pred_para = best_guess_model(val_x.to(device), val_z.to(device), val_c.to(device),
-																			  whether_predict=0, PRODA_para=val_proda_para.to(device))
+																			  whether_predict=0, PRODA_para=val_proda_para.to(device),
+																			  indiv_pools=args.indiv_pools)
 			val_mae, val_smooth_l1_loss, val_mse, _, val_NSE, val_corr = fun_loss(best_guess_val_y_hat, val_y.to(device), best_guess_val_pred_para)
 			print(f'Val - MSE: {val_mse.item():.2f}, MAE: {val_mae.item():.2f}, NSE: {val_NSE.item():.2f}')
 
 			if test_split_ratio != 0:
 				# Get predictions for test examples, compute loss & plot
 				best_guess_test_y_hat, best_guess_test_pred_para = best_guess_model(test_x.to(device), test_z.to(device), test_c.to(device),
-																					whether_predict=0, PRODA_para=test_proda_para.to(device))
+																					whether_predict=0, PRODA_para=test_proda_para.to(device),
+																					indiv_pools=args.indiv_pools)
 				test_mae, test_smooth_l1_loss, test_mse, _, test_NSE, test_corr = fun_loss(best_guess_test_y_hat, test_y.to(device), best_guess_test_pred_para)
 				print(f'Test - MSE: {test_mse.item():.2f}, MAE: {test_mae.item():.2f}, NSE: {test_NSE.item():.2f}')
 
@@ -2618,13 +2769,19 @@ def worker(rank, world_size, job_id, port):
 				test_para_corr = torch.corrcoef(torch.stack((pred_para, true_para)))[0, 1]
 
 			# Also generate PREDICTED SOC for EACH SOIL LAYER (20)
-			train_simu_all_layers, _ = best_guess_model(train_x.to(device), train_z.to(device), train_c.to(device), whether_predict=1, PRODA_para=train_proda_para.to(device))
-			val_simu_all_layers, _ = best_guess_model(val_x.to(device), val_z.to(device), val_c.to(device), whether_predict=1, PRODA_para=val_proda_para.to(device))
-			test_simu_all_layers, _ = best_guess_model(test_x.to(device), test_z.to(device), test_c.to(device), whether_predict=1, PRODA_para=test_proda_para.to(device))
-			simu_soc_all_layers = torch.tensor(np.ones((wosis_profile_info.shape[0], 20))*np.nan, device=device, dtype = torch.float32)  # dtype = torch.float32,
-			simu_soc_all_layers[train_profile_id, :] = train_simu_all_layers[:, 0:20]
-			simu_soc_all_layers[val_profile_id, :] = val_simu_all_layers[:, 0:20]
-			simu_soc_all_layers[test_profile_id, :] = test_simu_all_layers[:, 0:20]
+			train_simu_all_layers, _ = best_guess_model(train_x.to(device), train_z.to(device), train_c.to(device), whether_predict=1, PRODA_para=train_proda_para.to(device), indiv_pools=args.indiv_pools)
+			val_simu_all_layers, _ = best_guess_model(val_x.to(device), val_z.to(device), val_c.to(device), whether_predict=1, PRODA_para=val_proda_para.to(device), indiv_pools=args.indiv_pools)
+			test_simu_all_layers, _ = best_guess_model(test_x.to(device), test_z.to(device), test_c.to(device), whether_predict=1, PRODA_para=test_proda_para.to(device), indiv_pools=args.indiv_pools)
+			if args.indiv_pools == 1:
+				simu_soc_all_layers = torch.tensor(np.ones((wosis_profile_info.shape[0], 7, 20))*np.nan, device=device, dtype = torch.float32)  # dtype = torch.float32,
+				simu_soc_all_layers[train_profile_id, :, :] = train_simu_all_layers[:, :, 0:20]
+				simu_soc_all_layers[val_profile_id, :, :] = val_simu_all_layers[:, :, 0:20]
+				simu_soc_all_layers[test_profile_id, :, :] = test_simu_all_layers[:, :, 0:20]
+			else:
+				simu_soc_all_layers = torch.tensor(np.ones((wosis_profile_info.shape[0], 20))*np.nan, device=device, dtype = torch.float32)  # dtype = torch.float32,
+				simu_soc_all_layers[train_profile_id, :] = train_simu_all_layers[:, 0:20]
+				simu_soc_all_layers[val_profile_id, :] = val_simu_all_layers[:, 0:20]
+				simu_soc_all_layers[test_profile_id, :] = test_simu_all_layers[:, 0:20]
 
 		# create folder for the results
 		os.makedirs(data_dir_output + 'neural_network/' + job_id + '/Validation', exist_ok=True)
@@ -2754,16 +2911,32 @@ def worker(rank, world_size, job_id, port):
 
 	if rank == 0 and args.plot:
 		# Predict the SOC values based on Grid environmental information using the best model
+		print("Grid data")
+		print(predict_data_x[0, 0:10, 0, 0])
+		print(predict_data_z[0:2])
+		print(predict_data_c[0:2])
+		print(grid_PRODA_para[0:2, :])
 		grid_simu_soc, grid_pred_para = best_guess_model(predict_data_x.to(device), predict_data_z.to(device), predict_data_c.to(device),
-														 whether_predict = 1, PRODA_para=grid_PRODA_para.to(device))
-
+														 whether_predict = 1, PRODA_para=grid_PRODA_para.to(device), indiv_pools=args.indiv_pools)
+		print("Grid simu soc", grid_simu_soc.shape)
+		print("Grid pred para", grid_pred_para.shape)
 		# Save the predicted SOC values, parameters and location data into csv files
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_simu_soc_' + job_id + '.csv', grid_simu_soc.detach().cpu().numpy(), delimiter = ',')
-		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_pred_para_' + job_id + '.csv', grid_pred_para.detach().cpu().numpy(), delimiter = ',')
+		if args.indiv_pools == 0:
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_simu_soc_' + job_id + '.csv', grid_simu_soc.detach().cpu().numpy(), delimiter = ',')
+			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_pred_para_' + job_id + '.csv', grid_pred_para.detach().cpu().numpy(), delimiter = ',')
 		# save grid_env_info_US['Original_Lat'] and grid_env_info_US['Original_Lon'] to csv files
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_lons_' + job_id + '.csv', grid_env_info_US['original_lon'], delimiter = ',')
 		np.savetxt(data_dir_output + 'neural_network/' + job_id + '/Prediction/nn_grid_lats_' + job_id + '.csv', grid_env_info_US['original_lat'], delimiter = ',')
 		print("----------------- Predictions for grid data " + str(datetime.now()) + "-----------------")
+
+		# # NOTE: Add extra pool dimension to train_z if we're using individual pools, so the indices align with y.
+		if args.indiv_pools == 1:
+			train_z_new = train_z.unsqueeze(1).repeat((1, 7, 1))
+			val_z_new = val_z.unsqueeze(1).repeat((1, 7, 1))
+			test_z_new = test_z.unsqueeze(1).repeat((1, 7, 1))
+			predict_data_z_new = predict_data_z.unsqueeze(1).repeat((1, 7, 1))
+		else:
+			train_z_new, val_z_new, test_z_new, predict_data_z_new = train_z, val_z, test_z, predict_data_z
 
 		# FINAL SUMMARY MAPS
 		# Scatters of true-vs-predicted SOC (grid).
@@ -2773,9 +2946,10 @@ def worker(rank, world_size, job_id, port):
 		ys = [train_y.flatten().to(device), val_y.flatten().to(device), test_y.flatten().to(device)]  # labels
 		LAYER_BOUNDARIES = [0, 0.1, 0.3, 1.0, 50.0]
 		for i in range(len(LAYER_BOUNDARIES) - 1):  # Loop through layers
-			layer_loc_train = (train_z >= LAYER_BOUNDARIES[i]) & (train_z < LAYER_BOUNDARIES[i+1])  # True for observations within this layer that are non-nan
-			layer_loc_val = (val_z >= LAYER_BOUNDARIES[i]) & (val_z < LAYER_BOUNDARIES[i+1]) 
-			layer_loc_test = (test_z >= LAYER_BOUNDARIES[i]) & (test_z < LAYER_BOUNDARIES[i+1]) 
+			layer_loc_train = (train_z_new >= LAYER_BOUNDARIES[i]) & (train_z_new < LAYER_BOUNDARIES[i+1])  # True for observations within this layer that are non-nan
+			layer_loc_val = (val_z_new >= LAYER_BOUNDARIES[i]) & (val_z_new < LAYER_BOUNDARIES[i+1]) 
+			layer_loc_test = (test_z_new >= LAYER_BOUNDARIES[i]) & (test_z_new < LAYER_BOUNDARIES[i+1])
+
 			y_hats.extend([best_guess_train_y_hat[layer_loc_train], best_guess_val_y_hat[layer_loc_val], best_guess_test_y_hat[layer_loc_test]])
 			ys.extend([train_y[layer_loc_train].to(device), val_y[layer_loc_val].to(device), test_y[layer_loc_test].to(device)])
 			layer_str = f'{LAYER_BOUNDARIES[i]}-{LAYER_BOUNDARIES[i+1]}m'
@@ -2783,46 +2957,60 @@ def worker(rank, world_size, job_id, port):
 		visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, f"FINAL_scatters.png"), y_hats, ys, titles, cols=3)
 		print("----------------- True vs predicted scatters " + str(datetime.now()) + "-----------------")
 
+		# Scatters by pool
+		if args.indiv_pools == 1:
+			titles = []
+			y_hats = []
+			ys = []
+			print("plotting pool", allrank_train_pred_soc.shape, allrank_train_true_soc.shape)
+			for p in range(7):
+				y_hats.extend([best_guess_train_y_hat[:, p, :], best_guess_val_y_hat[:, p, :], best_guess_test_y_hat[:, p, :]])
+				ys.extend([train_y[:, p, :], val_y[:, p, :], test_y[:, p, :]])
+				titles.extend([f'Train: Pool {p}', f'Val: Pool {p}', f'Test: Pool {p}'])
+			visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, f"FINAL_scatters_pool.png"), y_hats, ys, titles, cols=2)
+
+
 		# Maps of true-vs-predicted SOC (grid)
 		# Each row represents a layer, each column represents a split (train/val/test) and {true or predicted}
-		lons_list = []
-		lats_list = []
-		values_list = []
-		vars_list = []
+		if args.indiv_pools == 0:
+			lons_list = []
+			lats_list = []
+			values_list = []
+			vars_list = []
 
-		for i in range(len(LAYER_BOUNDARIES) - 1):
-			# For each site: compute average SOC over observations in this layer
-			layer_loc_train = (train_z >= LAYER_BOUNDARIES[i]) & (train_z < LAYER_BOUNDARIES[i+1])  # True for observations within this layer that are non-nan
-			train_true_soc = torch.where(layer_loc_train.to(device), train_y.to(device), torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
-			train_true_soc = torch.nanmean(train_true_soc, dim=1)  # For each site, average over observations in this layer. If none, return nan.
-			train_pred_soc = torch.where(layer_loc_train.to(device), best_guess_train_y_hat, torch.nan)  # Same for predictions
-			train_pred_soc = torch.nanmean(train_pred_soc, dim=1)
+			for i in range(len(LAYER_BOUNDARIES) - 1):
+				# For each site: compute average SOC over observations in this layer
+				layer_loc_train = (train_z_new >= LAYER_BOUNDARIES[i]) & (train_z_new < LAYER_BOUNDARIES[i+1])  # True for observations within this layer that are non-nan
+				train_true_soc = torch.where(layer_loc_train.to(device), train_y.to(device), torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
+				train_true_soc = torch.nanmean(train_true_soc, dim=1)  # For each site, average over observations in this layer. If none, return nan.
+				train_pred_soc = torch.where(layer_loc_train.to(device), best_guess_train_y_hat, torch.nan)  # Same for predictions
+				train_pred_soc = torch.nanmean(train_pred_soc, dim=1)
 
-			# Repeat above for val data
-			layer_loc_val = (val_z >= LAYER_BOUNDARIES[i]) & (val_z < LAYER_BOUNDARIES[i+1])  # True for observations within this layer that are non-nan
-			val_true_soc = torch.where(layer_loc_val.to(device), val_y.to(device), torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
-			val_true_soc = torch.nanmean(val_true_soc, dim=1)  # For each site, average over observations in this layer. If none, return nan.
-			val_pred_soc = torch.where(layer_loc_val.to(device), best_guess_val_y_hat, torch.nan)  # Same for predictions
-			val_pred_soc = torch.nanmean(val_pred_soc, dim=1)
+				# Repeat above for val data
+				layer_loc_val = (val_z_new >= LAYER_BOUNDARIES[i]) & (val_z_new < LAYER_BOUNDARIES[i+1])  # True for observations within this layer that are non-nan
+				val_true_soc = torch.where(layer_loc_val.to(device), val_y.to(device), torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
+				val_true_soc = torch.nanmean(val_true_soc, dim=1)  # For each site, average over observations in this layer. If none, return nan.
+				val_pred_soc = torch.where(layer_loc_val.to(device), best_guess_val_y_hat, torch.nan)  # Same for predictions
+				val_pred_soc = torch.nanmean(val_pred_soc, dim=1)
 
-			# Repeat above for test data
-			layer_loc_test = (test_z >= LAYER_BOUNDARIES[i]) & (test_z < LAYER_BOUNDARIES[i+1])  # True for observations within this layer that are non-nan
-			test_true_soc = torch.where(layer_loc_test.to(device), test_y.to(device), torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
-			test_true_soc = torch.nanmean(test_true_soc, dim=1)  # For each site, average over observations in this layer. If none, return nan.
-			test_pred_soc = torch.where(layer_loc_test.to(device), best_guess_test_y_hat, torch.nan)  # Same for predictions
-			test_pred_soc = torch.nanmean(test_pred_soc, dim=1)
+				# Repeat above for test data
+				layer_loc_test = (test_z_new >= LAYER_BOUNDARIES[i]) & (test_z_new < LAYER_BOUNDARIES[i+1])  # True for observations within this layer that are non-nan
+				test_true_soc = torch.where(layer_loc_test.to(device), test_y.to(device), torch.nan)  # Create tensor: only observations in this layer, nan elsewhere
+				test_true_soc = torch.nanmean(test_true_soc, dim=1)  # For each site, average over observations in this layer. If none, return nan.
+				test_pred_soc = torch.where(layer_loc_test.to(device), best_guess_test_y_hat, torch.nan)  # Same for predictions
+				test_pred_soc = torch.nanmean(test_pred_soc, dim=1)
 
-			# Collect results
-			lons_list.extend([train_c[:, 0], train_c[:, 0], val_c[:, 0], val_c[:, 0], test_c[:, 0], test_c[:, 0]])
-			lats_list.extend([train_c[:, 1], train_c[:, 1], val_c[:, 1], val_c[:, 1], test_c[:, 1], test_c[:, 1]])
-			values_list.extend([train_true_soc, train_pred_soc, val_true_soc, val_pred_soc, test_true_soc, test_pred_soc])
-			layer_str = f'{LAYER_BOUNDARIES[i]}-{LAYER_BOUNDARIES[i+1]}m'
-			vars_list.extend([f'True SOC - Train: {layer_str}', f'Predicted SOC - Train: {layer_str}',
-								f'True SOC - Val: {layer_str}', f'Predicted SOC - Val: {layer_str}',
-								f'True SOC - Test: {layer_str}', f'Predicted SOC - Test: {layer_str}',])
-		visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"FINAL_soc_maps.png"),
-				lons_list, lats_list, values_list, vars_list, us_only=True, cols=6)
-		print("----------------- True vs predicted maps " + str(datetime.now()) + "-----------------")
+				# Collect results
+				lons_list.extend([train_c[:, 0], train_c[:, 0], val_c[:, 0], val_c[:, 0], test_c[:, 0], test_c[:, 0]])
+				lats_list.extend([train_c[:, 1], train_c[:, 1], val_c[:, 1], val_c[:, 1], test_c[:, 1], test_c[:, 1]])
+				values_list.extend([train_true_soc, train_pred_soc, val_true_soc, val_pred_soc, test_true_soc, test_pred_soc])
+				layer_str = f'{LAYER_BOUNDARIES[i]}-{LAYER_BOUNDARIES[i+1]}m'
+				vars_list.extend([f'True SOC - Train: {layer_str}', f'Predicted SOC - Train: {layer_str}',
+									f'True SOC - Val: {layer_str}', f'Predicted SOC - Val: {layer_str}',
+									f'True SOC - Test: {layer_str}', f'Predicted SOC - Test: {layer_str}',])
+			visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"FINAL_soc_maps.png"),
+					lons_list, lats_list, values_list, vars_list, us_only=True, cols=6)
+			print("----------------- True vs predicted maps " + str(datetime.now()) + "-----------------")
 
 		if args.model != "nn_only":
 			# Parameter maps. Each row is a parameter, each column represents a split (train/val/test/grid).

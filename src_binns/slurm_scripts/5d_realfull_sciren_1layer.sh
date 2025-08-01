@@ -11,15 +11,15 @@
 #SBATCH --exclude=c0020,c0002
 
 # Name the job so it's meaningful in the job list
-#SBATCH -J 4d_real_sciren_1layer
+#SBATCH -J 5d_real_sciren_1layer
 # Request 4 GPUs 
 # #SBATCH --gpus 4
 # Request 4 CPU cores (8 hyperthreads).
-#SBATCH -c 16
+#SBATCH -c 64
 # Specify the resources should be assigned to a single task on one node.
 #SBATCH -N 1 -n 1
 # Request a total of 80GB RAM
-#SBATCH --mem=80GB
+#SBATCH --mem=200GB
 # Request a walltime limit of 72 hours
 #SBATCH -t 72:00:00
 
@@ -29,33 +29,30 @@ source .venv/bin/activate
 
 for LR in 1e-2
 do
-    for LAM1 in 0
+    for LAM1 in 0.1 1 10
     do
-        for LAM2 in 1 10 100
+        for LAM3 in 0
         do
-            for LAM3 in 100 1000
+            for FOLD in 1
             do
-                for FOLD in 1
-                do
-                    if [ $FOLD -eq 1 ]; then
-                        PLOT_STR="--plot"
-                    else
-                        PLOT_STR=""
-                    fi
-                    SEED=$FOLD
+                if [ $FOLD -eq 1 ]; then
+                    PLOT_STR="--plot"
+                else
+                    PLOT_STR=""
+                fi
+                SEED=$FOLD
+                LAM2=$LAM1
 
-                    python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-                        --optimizer AdamW --lr $LR --weight_decay 0 \
-                        --seed $SEED --init default --min_temp 1 --max_temp 1 \
-                        --features ten --labels real \
-                        --model kan --num_layers 1 \
-                        --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable --kan_absolute_deviation \
-                        --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 1000 $LAM1 $LAM2 0 $LAM3 \
-                        --loss_weighting two_stage --second_start 50 --second_lambdas 1 0 1000 $LAM1 $LAM2 0 $LAM3 \
-                        --param_constraint hardsigmoid \
-                        --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note 4D_REAL_SCIREN_1LAYER_TWOSTAGE $PLOT_STR
+                python3 binns_DDP.py --data_seed 12345 --split grid2 --cross_val_idx $FOLD --n_folds 5 \
+                    --optimizer AdamW --lr $LR --weight_decay 0 \
+                    --seed $SEED --init default --min_temp 1 --max_temp 1 \
+                    --features ten --labels real \
+                    --model kan --num_layers 1 \
+                    --kan_grid 3 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable --kan_absolute_deviation \
+                    --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 1000 $LAM1 $LAM2 0 $LAM3 \
+                    --param_constraint hardsigmoid \
+                    --num_CPU 32 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note 5D_REAL_SCIREN_1LAYER_GRID3 $PLOT_STR
 
-                done
             done
         done
     done

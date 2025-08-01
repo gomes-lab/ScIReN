@@ -273,7 +273,10 @@ class mlp_wrapper(nn.Module):
 
 
 	def forward(self, input_var, wosis_depth, coords, whether_predict, PRODA_para=None,
-			 	return_spatial_embedding=False, ignore_input=False):
+			 	return_spatial_embedding=False, indiv_pools=0, plot_dir=None, true_soc=None):
+		"""
+		true_soc only used for visualizations, optional
+		"""
 
 		predictor = input_var[:, 0:self.input_vars, 0, 0]
 		forcing = input_var[:, :, :, :]
@@ -368,13 +371,19 @@ class mlp_wrapper(nn.Module):
 			print("predicted_para had nan")
 
 		# CLM5 process-based model
-		if whether_predict == 1:
-			simu_soc = fun_matrix_clm5_experimental.fun_model_prediction(predicted_para[valid_mask], forcing, self.vertical_mixing, self.vectorized)
+		if indiv_pools == 1:
+			if whether_predict == 1:
+				simu_soc, _ = fun_matrix_clm5_experimental.fun_model_simu_pools(predicted_para[valid_mask], forcing, None, self.vertical_mixing, self.vectorized, plot_dir=plot_dir, true_soc=true_soc)
+			else:
+				_, simu_soc = fun_matrix_clm5_experimental.fun_model_simu_pools(predicted_para[valid_mask], forcing, obs_depth, self.vertical_mixing, self.vectorized, plot_dir=plot_dir, true_soc=true_soc)
 		else:
-			simu_soc = fun_matrix_clm5_experimental.fun_model_simu(predicted_para[valid_mask], forcing, obs_depth, self.vertical_mixing, self.vectorized)
+			if whether_predict == 1:
+				simu_soc = fun_matrix_clm5_experimental.fun_model_prediction(predicted_para[valid_mask], forcing, self.vertical_mixing, self.vectorized)
+			else:
+				simu_soc = fun_matrix_clm5_experimental.fun_model_simu(predicted_para[valid_mask], forcing, obs_depth, self.vertical_mixing, self.vectorized)
 
-		simu_soc_with_nan = torch.full((predicted_para.shape[0], simu_soc.shape[1]), float('nan'), device=input_var.device)
-		simu_soc_with_nan[valid_mask] = simu_soc
+		simu_soc_with_nan = torch.full([predicted_para.shape[0]] + list(simu_soc.shape)[1:], float('nan'), device=input_var.device)
+		simu_soc_with_nan[valid_mask, :] = simu_soc
 
 		if return_spatial_embedding:
 			return simu_soc_with_nan, predicted_para, spatial_embeddings

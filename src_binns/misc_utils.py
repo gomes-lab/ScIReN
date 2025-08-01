@@ -179,8 +179,10 @@ class Logger(object):
 	Source: https://stackoverflow.com/questions/14906764/how-to-redirect-stdout-to-both-file-and-console-with-scripting
 	"""
 	def __init__(self, log_file):
+		print("Creating Logger", log_file, flush=True)
 		self.terminal = sys.stdout
-		self.log = open(log_file, "a")
+		self.log = open(log_file, "w")  # "a")
+		print("Redirecting logs to", self.log, self.terminal, flush=True)
    
 	def write(self, message):
 		self.terminal.write(message)
