@@ -27,11 +27,11 @@
 source .venv/bin/activate
 
 
-for LR in 1e-1 1e-2 1e-3 1e-4
+for LR in 1e-1
 do
     for WD in 0
     do
-        for FOLD in 1
+        for FOLD in 1 2 3 4 5
         do
             if [ $FOLD -eq 1 ]; then
                 PLOT_STR="--plot"
@@ -50,3 +50,6 @@ do
         done
     done
 done
+
+
+# NEXT: Try 1 CPU

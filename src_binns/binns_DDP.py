@@ -1931,7 +1931,7 @@ def worker(rank, world_size, job_id, port):
 
 				# NOTE: the lamb values passed are completely unused, as we direclty obtain the individual loss components and weight them later.
 				# For default weights see https://github.com/KindXiaoming/pykan/blob/master/kan/MultKAN.py#L1411
-				kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss, kan_coefdiff2_loss = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., 
+				kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss, kan_coefdiff2_loss, kan_conn_cost = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1.,
 																																return_indiv=True, flat_entropy=args.kan_flat_entropy)
 				# model_without_ddp.mlp.get_reg(reg_metric='node_influence_on_output', lamb_l1=0., lamb_entropy=1., lamb_coef=0., lamb_coefdiff=0.)
 
@@ -2057,7 +2057,7 @@ def worker(rank, world_size, job_id, port):
 					assert args.model == "kan"
 
 					# NOTE: the lamb values passed are completely unused, as we direclty obtain the individual loss components and weight them later.
-					kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss, kan_coefdiff2_loss = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1., 
+					kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss, kan_coefdiff2_loss, kan_conn_cost = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1.,
 																													 				return_indiv=True, flat_entropy=args.kan_flat_entropy)
 
 				loss_dict = {"l1": l1_loss,
