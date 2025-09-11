@@ -3,6 +3,10 @@ import torch
 import torch.nn
 import numpy as np
 from mlp import mlp_wrapper, nn_only
+import warnings
+import os
+import matplotlib.pyplot as plt
+import math
 
 
 @torch.no_grad()
@@ -285,12 +289,46 @@ def get_model(args, var4nn, var_idx_to_emb, device, para_index, train_x, train_y
 	return model_class, model_kwargs
 
 
+
+@torch.no_grad()
+def get_wd_params(model: torch.nn.Module):
+    """
+    Do not apply weight decay on biases.
+    Returns (1) list of parameters to apply weight decay (all non-bias params)
+    and (2) list of parameters to NOT apply weight decay (biases).
+
+    Source: https://discuss.pytorch.org/t/weight-decay-only-for-weights-of-nn-linear-and-nn-conv/114348
+    """
+    decay = list()
+    no_decay = list()
+    for name, param in model.named_parameters():
+        # print('checking {}'.format(name))
+        if hasattr(param,'requires_grad') and not param.requires_grad:
+            continue
+        if 'bias' in name:
+            no_decay.append(param)
+        else:
+            decay.append(param)
+        # if 'weight' in name and 'norm' not in name and 'bn' not in name:
+        #     decay.append(param)
+        # else:
+        #     no_decay.append(param)
+    return decay, no_decay
+
+
 def get_optimizer_and_scheduler(model, args):
 	# Optimizer
+	no_decay, decay = get_wd_params(model)
 	if args.optimizer == "AdamW":
-		optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+		optimizer = torch.optim.AdamW([{'params': no_decay, 'weight_decay': 0},
+										{'params': decay, 'weight_decay': args.weight_decay}],
+										lr=args.lr)
+		# optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 	elif args.optimizer == "SGD":
-		optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+		optimizer = torch.optim.SGD([{'params': no_decay, 'weight_decay': 0},
+										{'params': decay, 'weight_decay': args.weight_decay}],
+										lr=args.lr, momentum=args.momentum)
+		# optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
 	# elif args.optimizer == "LBFGS":
 	#   # NOTE: currently disabling LBFGS as it requires creating a closure to wrap the forward pass, which is ugly.
 	# 	# From the KAN repo https://github.com/KindXiaoming/pykan/blob/master/kan/MultKAN.py#L1498
@@ -317,10 +355,14 @@ def get_optimizer_and_scheduler(model, args):
 
 def kl_divergence(true, pred):
 	"""
-	Assumes each COLUMN of true/pred is a prob dist, numpy
+	Assumes each COLUMN of true/pred is a prob dist, Tensor or numpy
 	"""
-	kl = (true * np.log(1e-6 + true / pred)).sum(axis=0).mean()
+	if torch.is_tensor(true):
+		kl = (true * torch.log(1e-6 + true / pred)).sum(dim=0).mean()
+	else:  # Assume Numpy
+		kl = (true * np.log(1e-6 + true / pred)).sum(axis=0).mean()
 	return kl
+
 
 
 def compute_metrics(true, pred):
@@ -332,3 +374,102 @@ def compute_metrics(true, pred):
 	mae = mean_absolute_error(true, pred)
 	corr = np.corrcoef(true, pred)[0, 1]
 	return r2, mse, mae, corr
+
+
+def plot_functional_relationships(args, best_guess_model, input_names, output_names, plot_dir, epoch_str, true_relationships=None):
+	"""
+	Plot functional relationships learned by the model
+	"""
+	# Test functional relationship retrieval
+	if args.model != "nn_only":
+		cached_nn_input = best_guess_model.new_input
+
+		# Feature importance by Jacobian
+		jacobian = best_guess_model.get_jacobian(cached_nn_input)  # [batch, n_params, n_inputs]
+		avg_jacobian_magnitude = jacobian.abs().mean(dim=0).detach().cpu().numpy().T  # transpose to [n_inputs, n_params]
+		jacobian_importances = avg_jacobian_magnitude / avg_jacobian_magnitude.sum(axis=0, keepdims=True)
+
+		# Special predictor function to use NN (alibi library)
+		from alibi.explainers import ALE, PartialDependenceVariance, plot_ale, plot_pd_variance
+		@torch.no_grad()
+		def predictor(X: np.ndarray) -> np.ndarray:
+			assert best_guess_model.mlp.training == False, "Model must be in eval mode"
+			X = torch.as_tensor(X, device=cached_nn_input.device)
+			return best_guess_model.mlp(X).cpu().numpy()
+
+		# Feature importance: log PDP Variance scores
+		with warnings.catch_warnings():  # suppress warnings inside alibi code
+			warnings.simplefilter("ignore")
+			pd_variance = PartialDependenceVariance(predictor=predictor,
+													feature_names=input_names,
+													target_names=output_names)
+			exp_importance = pd_variance.explain(cached_nn_input.detach().cpu().numpy(), method='importance')
+			importance_scores = exp_importance.data['feature_importance'].T  # transpose to [n_inputs, n_params]
+			pdv_importances = importance_scores / importance_scores.sum(axis=0, keepdims=True)
+
+			# Plot PDP variance
+			plot_pd_variance(exp=exp_importance)
+			plt.savefig(os.path.join(plot_dir, f"{epoch_str}_pd_variance.png"))
+			plt.close()
+
+			# Accumulated Local Effects plot (similar to partial dependence plot
+			# but better with correlated features)
+			ale = ALE(predictor, feature_names=input_names, target_names=output_names)
+			exp = ale.explain(cached_nn_input.detach().cpu().numpy())
+			plot_ale(exp)
+			plt.savefig(os.path.join(plot_dir, f"{epoch_str}_ale.png"))
+			plt.close()
+
+		method_str = "Blackbox-Hybrid" if args.model == "new_mlp" else f"KAN {args.num_layers}-layer"
+		predicted_importances_all = {f"{method_str} (Jacobian)": jacobian_importances,
+										f"{method_str}\n(Partial Dependence Variance)": pdv_importances}
+		if args.model == "kan" and args.num_layers == 1:
+			# If using one-layer KAN, read off functional relationships with mask
+			kan_importances = best_guess_model.mlp.edge_scores[0].permute(1, 0).detach().cpu().numpy()
+			predicted_importances_all["KAN"] = kan_importances / kan_importances.sum(axis=0, keepdims=True)
+
+			# set importances of pruned edges to zero
+			kan_pruned_importances = kan_importances.copy()
+			kan_pruned_importances[best_guess_model.mlp.act_fun[0].mask == 0] = 0.
+			predicted_importances_all["KAN_pruned"] = kan_pruned_importances / kan_pruned_importances.sum(axis=0, keepdims=True)
+
+		# Save picture of functional relationships. Source: https://stackoverflow.com/questions/69986007/matplotlib-imshow-with-1-color-for-each-discrete-value
+		n_plots = len(predicted_importances_all) if true_relationships is None else len(predicted_importances_all)+1
+		fig, axeslist = plt.subplots(1, n_plots, figsize=(6*n_plots, 6))
+		cmap = plt.get_cmap('Greens')
+		for pred_idx, (pred_method, pred_rel) in enumerate(predicted_importances_all.items()):
+			im = axeslist[pred_idx].imshow(pred_rel, cmap=cmap, vmin=0, vmax=1)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
+			axeslist[pred_idx].set_xticks(np.arange(len(output_names)))
+			axeslist[pred_idx].set_yticks(np.arange(len(input_names)))
+			axeslist[pred_idx].set_xticklabels(output_names, rotation='vertical')
+			axeslist[pred_idx].set_yticklabels(input_names)
+
+			# If functional relationships are known, compare KAN's predicted relationships with ground-truth relationships
+			if true_relationships is not None:
+				relationship_kl = kl_divergence(true_relationships, pred_rel)
+				relationship_l2 = math.sqrt(((true_relationships - pred_rel) ** 2).sum())
+				functional_acc_str = f"\n(KL: {relationship_kl:.3f}, Euclidean dist: {relationship_l2:.3f})"
+			else:
+				functional_acc_str = ""
+			axeslist[pred_idx].set_title(f"Predicted by {pred_method}{functional_acc_str}")
+
+		if true_relationships is not None:
+			im = axeslist[-1].imshow(true_relationships, cmap=cmap, vmin=0, vmax=1)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
+			axeslist[-1].set_xticks(np.arange(len(output_names)))
+			axeslist[-1].set_yticks(np.arange(len(input_names)))
+			axeslist[-1].set_xticklabels(output_names, rotation='vertical')
+			axeslist[-1].set_yticklabels(input_names)
+			axeslist[-1].set_title("Ground-truth")
+		fig.colorbar(im, orientation="vertical", ax=axeslist[-1])
+		plt.tight_layout()
+		plt.savefig(os.path.join(plot_dir, f"{epoch_str}_functional_relationships.png"))
+		plt.close()
+
+	# Return predicted relationships for "default" method (+accuracy metrics if true relationships known)
+	DEFAULT_REL = "KAN" if "KAN" in predicted_importances_all else f"{method_str}\n(Partial Dependence Variance)"
+	if args.model != "nn_only" and true_relationships is not None:
+		default_kl = kl_divergence(true_relationships, predicted_importances_all[DEFAULT_REL])
+		default_l2 = math.sqrt(((true_relationships - predicted_importances_all[DEFAULT_REL]) ** 2).sum())
+	else:
+		default_kl, default_l2 = None, None
+	return predicted_importances_all[DEFAULT_REL], default_kl, default_l2

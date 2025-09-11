@@ -20,6 +20,7 @@ from mlp import ConstantParameters
 from torch.optim.swa_utils import AveragedModel, SWALR
 from losses import binns_loss, compute_param_matching_loss, compute_param_violation_loss, compute_unconstrained_param_loss
 import visualization_utils
+import glob
 
 # Set HDF5_DISABLE_VERSION_CHECK to suppress version mismatch error
 import os
@@ -152,7 +153,7 @@ parser.add_argument("--clip_value", type=float, default=-1, help="Clip value for
 # Losses and loss weights
 # TO DELETE: "spectral", "lipmlp", "cure", "senn_robustness", "senn_l1", "senn_sparsity", "nam_l2", "nam_entropy", "spatial_error", "spatial_emb_smoothness", "param_smoothness", "residual"
 parser.add_argument("--losses", nargs="+", choices=["l1", "smooth_l1", "l2", "param_reg", "param_violation", "unconstrained_param", "param_matching", "jacobian",
-													"jacobian_sparsity", "kan_l1", "kan_entropy", "kan_coef", "kan_coefdiff", "kan_coefdiff2"], default=["smooth_l1", "param_reg"],
+													"jacobian_sparsity", "kan_l1", "kan_entropy", "kan_coef", "kan_coefdiff", "kan_coefdiff2", "kan_diversity"], default=["smooth_l1", "param_reg"],
 					help="Losses to use (can list any number). Note jacobian_sparsity cannot be optimized (non-differentiable): it is just something we track.")
 parser.add_argument("--loss_weighting", default="manual", choices=["manual", "relobralo", "two_stage"])
 parser.add_argument("--lambdas", nargs="+", type=float, default=[1.0, 10.0], help="If loss_weighting is manual, provide weights in the same order as `args.losses`")
@@ -195,10 +196,12 @@ def set_seeds(seed):
 	torch.manual_seed(seed)
 	if torch.cuda.is_available():
 		torch.cuda.manual_seed(seed)
+		torch.cuda.manual_seed_all(args.seed)
 	torch.backends.cudnn.deterministic = True
 
-	# Below two lines help reproducibility but may harm performance
+	# Below lines help reproducibility but may harm performance
 	# https://docs.pytorch.org/docs/stable/notes/randomness.html
+	os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'  # Needed to run lstsq (in pykan/spline.py) deterministically
 	torch.backends.cudnn.benchmark = False
 	torch.use_deterministic_algorithms(True)
 
@@ -466,7 +469,7 @@ if args.representative_sample:
 	print("Profile collection after sample profile ID", profile_collection.shape)
 
 if args.n_datapoints != -1:
-	# Choose random subset of profiles for testing.
+	# Choose random subset of profiles for training.
 	rng = np.random.default_rng(seed=args.data_seed)
 	profile_collection = rng.choice(profile_collection, args.n_datapoints, replace=False)
 	print("Profile collection after choice", profile_collection.shape)
@@ -826,6 +829,8 @@ current_PRODA_para = np.clip(current_PRODA_para, a_min=0, a_max=1)
 #############################
 # PRODA soc simulation data #
 #############################
+true_relationships = None
+
 # Fetch directory where cached labels are saved
 if args.labels != "real":
 	# If using synthetic datasets, save the labels to a directory
@@ -1095,6 +1100,13 @@ if args.whether_resume == 1:
 	except OSError:
 		pass
 
+# Load functional relationships inferred from previous runs so
+# we can explore new relationships.
+prev_relationships = []
+prev_files = glob.glob(os.path.join(data_dir_output, "neural_network/*" + args.note + "*/visualizations/predicted_relationships.npy"))
+print("PREV RELATIONSHIP FILES", prev_files)
+for filename in prev_files:
+	prev_relationships.append(np.load(filename))
 
 ################################################################
 # Data splitting
@@ -1898,6 +1910,7 @@ def worker(rank, world_size, job_id, port):
 			kan_coef_loss = np.nan
 			kan_coefdiff_loss = np.nan
 			kan_coefdiff2_loss = np.nan
+			kan_diversity_loss = np.nan
 
 			# Parameter losses
 			if "param_violation" in args.losses:  # Penalty if unconstrained params are outside [-3, 3]. Only used with hardsigmoid.
@@ -1935,6 +1948,17 @@ def worker(rank, world_size, job_id, port):
 																																return_indiv=True, flat_entropy=args.kan_flat_entropy)
 				# model_without_ddp.mlp.get_reg(reg_metric='node_influence_on_output', lamb_l1=0., lamb_entropy=1., lamb_coef=0., lamb_coefdiff=0.)
 
+			if "kan_diversity" in args.losses:
+				# TODO Only works with single layer KAN for now. Check plot_functional_relationships for additional.
+				kan_importances = model_without_ddp.mlp.edge_scores[0].permute(1, 0)  # .detach().cpu().numpy()
+				kan_importances = kan_importances / kan_importances.sum(dim=0, keepdim=True)
+				kan_diversity_loss = torch.tensor(0., device=device)
+				print("CUR relationship", kan_importances)
+				for prev_relationship in prev_relationships:
+					print("Prev relationships", prev_relationship)
+					print("KL", misc_utils.kl_divergence(torch.tensor(prev_relationship, device=device), kan_importances))
+					kan_diversity_loss -= misc_utils.kl_divergence(torch.tensor(prev_relationship, device=device), kan_importances)
+
 			#------------ 3 cleaning gradients
 			optimizer.zero_grad()
 
@@ -1952,7 +1976,8 @@ def worker(rank, world_size, job_id, port):
 						"kan_entropy": kan_entropy_loss,
 						"kan_coef": kan_coef_loss,
 						"kan_coefdiff": kan_coefdiff_loss,
-						"kan_coefdiff2": kan_coefdiff2_loss}
+						"kan_coefdiff2": kan_coefdiff2_loss,
+						"kan_diversity": kan_diversity_loss}
 
 			# Store losses in a tensor, in the order of args.losses
 			train_losses = torch.stack([loss_dict[loss] for loss in args.losses]).to(device)
@@ -2039,6 +2064,7 @@ def worker(rank, world_size, job_id, port):
 				kan_coef_loss = np.nan
 				kan_coefdiff_loss = np.nan
 				kan_coefdiff2_loss = np.nan
+				kan_diversity_loss = np.nan
 
 				if "param_violation" in args.losses:
 					param_violation_loss = compute_param_violation_loss(model_without_ddp.unconstrained_params)
@@ -2060,6 +2086,14 @@ def worker(rank, world_size, job_id, port):
 					kan_l1_loss, kan_entropy_loss, kan_coef_loss, kan_coefdiff_loss, kan_coefdiff2_loss, kan_conn_cost = model_without_ddp.mlp.reg(reg_metric='edge_backward', lamb_l1=1., lamb_entropy=1., lamb_coef=1., lamb_coefdiff=1.,
 																													 				return_indiv=True, flat_entropy=args.kan_flat_entropy)
 
+				if "kan_diversity" in args.losses:
+					# TODO Only works with single layer KAN for now. Check plot_functional_relationships for additional.
+					kan_importances = model_without_ddp.mlp.edge_scores[0].permute(1, 0)  #.detach().cpu().numpy()
+					kan_importances = kan_importances / kan_importances.sum(dim=0, keepdim=True)
+					kan_diversity_loss = torch.tensor(0., device=device)
+					for prev_relationship in prev_relationships:
+						kan_diversity_loss -= misc_utils.kl_divergence(torch.tensor(prev_relationship, device=device), kan_importances)
+
 				loss_dict = {"l1": l1_loss,
 				 			"smooth_l1": smooth_l1_loss,
 							"l2": l2_loss,
@@ -2073,7 +2107,8 @@ def worker(rank, world_size, job_id, port):
 							"kan_entropy": kan_entropy_loss,
 							"kan_coef": kan_coef_loss,
 							"kan_coefdiff": kan_coefdiff_loss,
-							"kan_coefdiff2": kan_coefdiff2_loss}
+							"kan_coefdiff2": kan_coefdiff2_loss,
+							"kan_diversity": kan_diversity_loss}
 
 				# Record losses
 				# Store losses in a tensor, in the order of args.losses
@@ -2226,65 +2261,69 @@ def worker(rank, world_size, job_id, port):
 				model_without_ddp.mlp.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.13)
 				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_kan_plot.png"))
 				plt.close()
-			
-			# Test functional relationship retrieval
-			if args.labels == "synthetic_function" and args.model != "nn_only":
-				# Feature importance by Jacobian
-				jacobian = model_without_ddp.get_jacobian()  # [batch, n_params, n_inputs]
-				avg_jacobian_magnitude = jacobian.abs().mean(dim=0).detach().cpu().numpy().T  # transpose to [n_inputs, n_params]
-				jacobian_importances = avg_jacobian_magnitude / avg_jacobian_magnitude.sum(axis=0, keepdims=True)
 
-				# Special predictor function to use NN (alibi library)
-				from alibi.explainers import ALE, PartialDependenceVariance, plot_ale, plot_pd_variance
-				@torch.no_grad()
-				def predictor(X: np.ndarray) -> np.ndarray:
-					assert model_without_ddp.mlp.training == False, "Model must be in eval mode"
-					X = torch.as_tensor(X, device=device)
-					return model_without_ddp.mlp(X).cpu().numpy()
+			predicted_relationships, default_kl, default_l2 = misc_utils.plot_functional_relationships(args, model_without_ddp, var4nn, predicted_para_names, 
+																							  		   PLOT_DIR, f"epoch{iepoch}", true_relationships)
 
-				# Feature importance: log PDP Variance scores
-				with warnings.catch_warnings():  # suppress warnings inside alibi code
-					warnings.simplefilter("ignore")
-					cached_nn_input = model_without_ddp.new_input
-					pd_variance = PartialDependenceVariance(predictor=predictor,
-															feature_names=var4nn,
-															target_names=predicted_para_names)
-					exp_importance = pd_variance.explain(cached_nn_input.detach().cpu().numpy(), method='importance')
-					importance_scores = exp_importance.data['feature_importance'].T  # transpose to [n_inputs, n_params]
-					pdv_importances = importance_scores / importance_scores.sum(axis=0, keepdims=True)
 
-				# Combine feature importances by different methods
-				method_str = "Blackbox-Hybrid" if args.model == "new_mlp" else f"ScIReN {args.num_layers}-layer"
-				predicted_importances_all = {f"{method_str} (Jacobian)": jacobian_importances,
-											 f"{method_str}\n(Partial Dependence Variance)": pdv_importances}
-				if args.model == "kan" and args.num_layers == 1:
-					# If using one-layer KAN, read off functional relationships with mask
-					kan_importances = model_without_ddp.mlp.edge_scores[0].permute(1, 0).detach().cpu().numpy()
-					predicted_importances_all["KAN"] = kan_importances / kan_importances.sum(axis=0, keepdims=True)
+			# # Test functional relationship retrieval
+			# if args.labels == "synthetic_function" and args.model != "nn_only":
+			# 	# Feature importance by Jacobian
+			# 	jacobian = model_without_ddp.get_jacobian()  # [batch, n_params, n_inputs]
+			# 	avg_jacobian_magnitude = jacobian.abs().mean(dim=0).detach().cpu().numpy().T  # transpose to [n_inputs, n_params]
+			# 	jacobian_importances = avg_jacobian_magnitude / avg_jacobian_magnitude.sum(axis=0, keepdims=True)
 
-				# If functional relationships are known, compare KAN's predicted relationships with ground-truth relationships
-				# Save picture of functional relationships. Source: https://stackoverflow.com/questions/69986007/matplotlib-imshow-with-1-color-for-each-discrete-value
-				fig, axeslist = plt.subplots(1, len(predicted_importances_all)+1, figsize=(6*(len(predicted_importances_all)+1), 6))
-				cmap = plt.get_cmap('Greens')
-				for pred_idx, (pred_method, pred_rel) in enumerate(predicted_importances_all.items()):
-					relationship_kl = misc_utils.kl_divergence(true_relationships, pred_rel)
-					relationship_l2 = math.sqrt(((true_relationships - pred_rel) ** 2).sum())
-					im = axeslist[pred_idx].imshow(pred_rel, cmap=cmap, vmin=0, vmax=1)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
-					axeslist[pred_idx].set_xticks(np.arange(len(predicted_para_names)))
-					axeslist[pred_idx].set_yticks(np.arange(len(var4nn)))
-					axeslist[pred_idx].set_xticklabels(predicted_para_names, rotation='vertical')
-					axeslist[pred_idx].set_yticklabels(var4nn)
-					axeslist[pred_idx].set_title(f"Predicted by {pred_method}\n(KL: {relationship_kl:.3f}, Euclidean dist: {relationship_l2:.3f})")
-				im = axeslist[-1].imshow(true_relationships, cmap=cmap, vmin=0, vmax=1)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
-				axeslist[-1].set_xticks(np.arange(len(predicted_para_names)))
-				axeslist[-1].set_yticks(np.arange(len(var4nn)))
-				axeslist[-1].set_xticklabels(predicted_para_names, rotation='vertical')
-				axeslist[-1].set_yticklabels(var4nn)
-				axeslist[-1].set_title("Ground-truth")
-				fig.colorbar(im, orientation="vertical", ax=axeslist[-1])
-				plt.tight_layout()
-				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_functional_relationships.png"))
-				plt.close()
+			# 	# Special predictor function to use NN (alibi library)
+			# 	from alibi.explainers import ALE, PartialDependenceVariance, plot_ale, plot_pd_variance
+			# 	@torch.no_grad()
+			# 	def predictor(X: np.ndarray) -> np.ndarray:
+			# 		assert model_without_ddp.mlp.training == False, "Model must be in eval mode"
+			# 		X = torch.as_tensor(X, device=device)
+			# 		return model_without_ddp.mlp(X).cpu().numpy()
+
+			# 	# Feature importance: log PDP Variance scores
+			# 	with warnings.catch_warnings():  # suppress warnings inside alibi code
+			# 		warnings.simplefilter("ignore")
+			# 		cached_nn_input = model_without_ddp.new_input
+			# 		pd_variance = PartialDependenceVariance(predictor=predictor,
+			# 												feature_names=var4nn,
+			# 												target_names=predicted_para_names)
+			# 		exp_importance = pd_variance.explain(cached_nn_input.detach().cpu().numpy(), method='importance')
+			# 		importance_scores = exp_importance.data['feature_importance'].T  # transpose to [n_inputs, n_params]
+			# 		pdv_importances = importance_scores / importance_scores.sum(axis=0, keepdims=True)
+
+			# 	# Combine feature importances by different methods
+			# 	method_str = "Blackbox-Hybrid" if args.model == "new_mlp" else f"ScIReN {args.num_layers}-layer"
+			# 	predicted_importances_all = {f"{method_str} (Jacobian)": jacobian_importances,
+			# 								 f"{method_str}\n(Partial Dependence Variance)": pdv_importances}
+			# 	if args.model == "kan" and args.num_layers == 1:
+			# 		# If using one-layer KAN, read off functional relationships with mask
+			# 		kan_importances = model_without_ddp.mlp.edge_scores[0].permute(1, 0).detach().cpu().numpy()
+			# 		predicted_importances_all["KAN"] = kan_importances / kan_importances.sum(axis=0, keepdims=True)
+
+			# 	# If functional relationships are known, compare KAN's predicted relationships with ground-truth relationships
+			# 	# Save picture of functional relationships. Source: https://stackoverflow.com/questions/69986007/matplotlib-imshow-with-1-color-for-each-discrete-value
+			# 	fig, axeslist = plt.subplots(1, len(predicted_importances_all)+1, figsize=(6*(len(predicted_importances_all)+1), 6))
+			# 	cmap = plt.get_cmap('Greens')
+			# 	for pred_idx, (pred_method, pred_rel) in enumerate(predicted_importances_all.items()):
+			# 		relationship_kl = misc_utils.kl_divergence(true_relationships, pred_rel)
+			# 		relationship_l2 = math.sqrt(((true_relationships - pred_rel) ** 2).sum())
+			# 		im = axeslist[pred_idx].imshow(pred_rel, cmap=cmap, vmin=0, vmax=1)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
+			# 		axeslist[pred_idx].set_xticks(np.arange(len(predicted_para_names)))
+			# 		axeslist[pred_idx].set_yticks(np.arange(len(var4nn)))
+			# 		axeslist[pred_idx].set_xticklabels(predicted_para_names, rotation='vertical')
+			# 		axeslist[pred_idx].set_yticklabels(var4nn)
+			# 		axeslist[pred_idx].set_title(f"Predicted by {pred_method}\n(KL: {relationship_kl:.3f}, Euclidean dist: {relationship_l2:.3f})")
+			# 	im = axeslist[-1].imshow(true_relationships, cmap=cmap, vmin=0, vmax=1)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
+			# 	axeslist[-1].set_xticks(np.arange(len(predicted_para_names)))
+			# 	axeslist[-1].set_yticks(np.arange(len(var4nn)))
+			# 	axeslist[-1].set_xticklabels(predicted_para_names, rotation='vertical')
+			# 	axeslist[-1].set_yticklabels(var4nn)
+			# 	axeslist[-1].set_title("Ground-truth")
+			# 	fig.colorbar(im, orientation="vertical", ax=axeslist[-1])
+			# 	plt.tight_layout()
+			# 	plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_functional_relationships.png"))
+			# 	plt.close()
 
 			# Scatters of true-vs-predicted SOC (grid).
 			# Each row represents a layer (or all layers), each column represents a split (train/val)
@@ -2651,89 +2690,12 @@ def worker(rank, world_size, job_id, port):
 			plt.close()
 
 		# # NOTE Try testing on the pruned model!
+		best_guess_model.new_input = cached_nn_input
+		predicted_relationships, default_kl, default_l2 = misc_utils.plot_functional_relationships(args, best_guess_model, var4nn, predicted_para_names, PLOT_DIR, "FINAL", true_relationships)
 		# best_guess_model.mlp.act_fun[0].mask = pruned_model.act_fun[0].mask
+		print("PRedicted relationships shape", predicted_relationships.shape)
+		np.save(os.path.join(PLOT_DIR, "predicted_relationships.npy"), predicted_relationships)  #.detach().cpu().numpy())
 
-		# Test functional relationship retrieval
-		if args.labels == "synthetic_function" and args.model != "nn_only":
-			# Feature importance by Jacobian
-			jacobian = best_guess_model.get_jacobian(cached_nn_input)  # [batch, n_params, n_inputs]
-			avg_jacobian_magnitude = jacobian.abs().mean(dim=0).detach().cpu().numpy().T  # transpose to [n_inputs, n_params]
-			jacobian_importances = avg_jacobian_magnitude / avg_jacobian_magnitude.sum(axis=0, keepdims=True)
-
-			# Special predictor function to use NN (alibi library)
-			from alibi.explainers import ALE, PartialDependenceVariance, plot_ale, plot_pd_variance
-			@torch.no_grad()
-			def predictor(X: np.ndarray) -> np.ndarray:
-				assert best_guess_model.mlp.training == False, "Model must be in eval mode"
-				X = torch.as_tensor(X, device=device)
-				return best_guess_model.mlp(X).cpu().numpy()
-
-			# Feature importance: log PDP Variance scores
-			with warnings.catch_warnings():  # suppress warnings inside alibi code
-				warnings.simplefilter("ignore")
-				pd_variance = PartialDependenceVariance(predictor=predictor,
-														feature_names=var4nn,
-														target_names=predicted_para_names)
-				exp_importance = pd_variance.explain(cached_nn_input.detach().cpu().numpy(), method='importance')
-				importance_scores = exp_importance.data['feature_importance'].T  # transpose to [n_inputs, n_params]
-				pdv_importances = importance_scores / importance_scores.sum(axis=0, keepdims=True)
-
-				# Plot PDP variance
-				plot_pd_variance(exp=exp_importance)
-				plt.savefig(os.path.join(PLOT_DIR, f"FINAL_pd_variance.png"))
-				plt.close()
-
-				# Accumulated Local Effects plot (similar to partial dependence plot
-				# but better with correlated features)
-				ale = ALE(predictor, feature_names=var4nn, target_names=predicted_para_names)
-				exp = ale.explain(cached_nn_input.detach().cpu().numpy())
-				plot_ale(exp)
-				plt.savefig(os.path.join(PLOT_DIR, f"FINAL_ale.png"))
-				plt.close()
-
-			method_str = "Blackbox-Hybrid" if args.model == "new_mlp" else f"KAN {args.num_layers}-layer"
-			predicted_importances_all = {f"{method_str} (Jacobian)": jacobian_importances,
-											f"{method_str}\n(Partial Dependence Variance)": pdv_importances}
-			if args.model == "kan" and args.num_layers == 1:
-				# If using one-layer KAN, read off functional relationships with mask
-				kan_importances = best_guess_model.mlp.edge_scores[0].permute(1, 0).detach().cpu().numpy()
-				predicted_importances_all["KAN"] = kan_importances / kan_importances.sum(axis=0, keepdims=True)
-
-				# set importances of pruend edges to zero
-				kan_pruned_importances = kan_importances.copy()
-				kan_pruned_importances[best_guess_model.mlp.act_fun[0].mask == 0] = 0.
-				predicted_importances_all["KAN_pruned"] = kan_pruned_importances / kan_pruned_importances.sum(axis=0, keepdims=True)
-
-			DEFAULT_REL = "KAN" if "KAN" in predicted_importances_all else f"{method_str}\n(Partial Dependence Variance)"
-			default_kl = misc_utils.kl_divergence(true_relationships, predicted_importances_all[DEFAULT_REL])
-			default_l2 = math.sqrt(((true_relationships - predicted_importances_all[DEFAULT_REL]) ** 2).sum())
-
-			# If functional relationships are known, compare KAN's predicted relationships with ground-truth relationships
-			# Save picture of functional relationships. Source: https://stackoverflow.com/questions/69986007/matplotlib-imshow-with-1-color-for-each-discrete-value
-			fig, axeslist = plt.subplots(1, len(predicted_importances_all)+1, figsize=(6*(len(predicted_importances_all)+1), 6))
-			cmap = plt.get_cmap('Greens')
-			for pred_idx, (pred_method, pred_rel) in enumerate(predicted_importances_all.items()):
-				relationship_kl = misc_utils.kl_divergence(true_relationships, pred_rel)
-				relationship_l2 = math.sqrt(((true_relationships - pred_rel) ** 2).sum())
-				im = axeslist[pred_idx].imshow(pred_rel, cmap=cmap, vmin=0, vmax=1)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
-				axeslist[pred_idx].set_xticks(np.arange(len(predicted_para_names)))
-				axeslist[pred_idx].set_yticks(np.arange(len(var4nn)))
-				axeslist[pred_idx].set_xticklabels(predicted_para_names, rotation='vertical')
-				axeslist[pred_idx].set_yticklabels(var4nn)
-				axeslist[pred_idx].set_title(f"Predicted by {pred_method}\n(KL: {relationship_kl:.3f}, Euclidean dist: {relationship_l2:.3f})")
-
-			im = axeslist[-1].imshow(true_relationships, cmap=cmap, vmin=0, vmax=1)  #, vmin=-0.5, vmax=5.5, cmap=cmap, interpolation="none")
-			axeslist[-1].set_xticks(np.arange(len(predicted_para_names)))
-			axeslist[-1].set_yticks(np.arange(len(var4nn)))
-			axeslist[-1].set_xticklabels(predicted_para_names, rotation='vertical')
-			axeslist[-1].set_yticklabels(var4nn)
-			axeslist[-1].set_title("Ground-truth")
-			fig.colorbar(im, orientation="vertical", ax=axeslist[-1])
-			plt.tight_layout()
-			plt.savefig(os.path.join(PLOT_DIR, f"FINAL_functional_relationships.png"))
-			plt.close()
-		else:
-			default_kl, default_l2 = None, None
 
 		# Summary csv file of all results. Create this if it doesn't exist
 		results_summary_file = os.path.join(data_dir_output, f"neural_network/results_summary_{args.note}.csv")

@@ -29,31 +29,62 @@ source .venv/bin/activate
 # 1 CPU
 for LR in 1e-2
 do
-    for LAM1 in 0.1
+    for LAM1 in 1
     do
-        for LAM2 in 1
+        for LAM2 in 10
         do
             for LAM3 in 1000
             do
-                for FOLD in 5
+                for FOLD in 1
                 do
-                    if [ $FOLD -eq 1 ]; then
-                        PLOT_STR="--plot"
-                    else
-                        PLOT_STR=""
-                    fi
-                    SEED=$FOLD
+                    for SEED in 1 2 3
+                    do
+                        if [ $FOLD -eq 1 ]; then
+                            PLOT_STR="--plot"
+                        else
+                            PLOT_STR=""
+                        fi
 
-                    python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-                        --optimizer AdamW --lr $LR --weight_decay 0 --batch_size 32 \
-                        --seed $SEED --init default --min_temp 1 --max_temp 1 \
-                        --features ten --labels real \
-                        --model kan --num_layers 1 \
-                        --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity \
-                        --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 100 1000 $LAM1 $LAM2 0 $LAM3 \
-                        --param_constraint hardsigmoid \
-                        --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note 4D_REAL_SCIREN_1LAYER_8CPU_ATTEMPT2 $PLOT_STR
+                        # python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
+                        #     --optimizer AdamW --lr $LR --weight_decay 0 --batch_size 32 \
+                        #     --seed $SEED --init default --min_temp 1 --max_temp 1 \
+                        #     --features ten --labels real \
+                        #     --model kan --num_layers 1 \
+                        #     --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity \
+                        #     --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 kan_diversity --lambdas 1 100 1000 $LAM1 $LAM2 0 $LAM3 0 \
+                        #     --param_constraint hardsigmoid \
+                        #     --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note 4DNEW_REAL_SCIREN_1LAYER_0DIVERSITY $PLOT_STR
 
+                        python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
+                            --optimizer AdamW --lr $LR --weight_decay 0 --batch_size 32 \
+                            --seed $SEED --init default --min_temp 1 --max_temp 1 \
+                            --features ten --labels real \
+                            --model kan --num_layers 1 \
+                            --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity \
+                            --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 kan_diversity --lambdas 1 100 1000 $LAM1 $LAM2 0 $LAM3 1 \
+                            --param_constraint hardsigmoid \
+                            --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note 4DNEWREAL_SCIREN_1LAYER_1CPU_1DIVERSITY $PLOT_STR
+
+                        # python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
+                        #     --optimizer AdamW --lr $LR --weight_decay 0 --batch_size 32 \
+                        #     --seed $SEED --init default --min_temp 1 --max_temp 1 \
+                        #     --features ten --labels real \
+                        #     --model kan --num_layers 1 \
+                        #     --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity \
+                        #     --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 kan_diversity --lambdas 1 100 1000 $LAM1 $LAM2 0 $LAM3 100 \
+                        #     --param_constraint hardsigmoid \
+                        #     --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note 4D_REAL_SCIREN_1LAYER_100DIVERSITY $PLOT_STR
+
+                        # python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
+                        #     --optimizer AdamW --lr $LR --weight_decay 0 --batch_size 32 \
+                        #     --seed $SEED --init default --min_temp 1 --max_temp 1 \
+                        #     --features ten --labels real \
+                        #     --model kan --num_layers 1 \
+                        #     --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity \
+                        #     --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 100 1000 $LAM1 $LAM2 0 $LAM3 \
+                        #     --param_constraint hardsigmoid \
+                        #     --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note 4D_REAL_SCIREN_1LAYER_1CPU_SEEDS $PLOT_STR
+                    done
                 done
             done
         done
