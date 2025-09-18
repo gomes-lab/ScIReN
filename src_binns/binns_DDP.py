@@ -95,6 +95,11 @@ parser.add_argument("--kan_affine_trainable", action='store_true')
 parser.add_argument("--kan_absolute_deviation", action='store_true')
 parser.add_argument("--kan_flat_entropy", type=int, default=1)
 
+# DropKAN
+parser.add_argument("--kan_drop_rate", type=float, default=0.0, help="Drop rate for DropKAN")
+parser.add_argument("--kan_drop_mode", type=str, choices=['postspline', 'postact', 'postact_input', 'dropout'], default='postact', help="Drop mode: 'postspline' the drop mask is applied to the layer's postsplines, 'postact' the drop mask is applied to the layer's postacts, 'dropout' applies a standard dropout layer to the inputs.")
+parser.add_argument("--kan_drop_scale", action='store_true', help='If true, the retained postsplines/postacts are scaled by a factor of 1/(1-drop_rate)')
+
 # Process-based model settings
 parser.add_argument("--vertical_mixing", type=str, default='original', choices=['original', 'simple_one_intercept', 'simple_two_intercepts'], help="""Vertical mixing matrix parameterization. Original explicitly models diffusion.
 						 simple_one_intercept approximates with a log-log relationship with depth (upwards/downwards
@@ -1953,10 +1958,10 @@ def worker(rank, world_size, job_id, port):
 				kan_importances = model_without_ddp.mlp.edge_scores[0].permute(1, 0)  # .detach().cpu().numpy()
 				kan_importances = kan_importances / kan_importances.sum(dim=0, keepdim=True)
 				kan_diversity_loss = torch.tensor(0., device=device)
-				print("CUR relationship", kan_importances)
+				# print("CUR relationship", kan_importances)
 				for prev_relationship in prev_relationships:
-					print("Prev relationships", prev_relationship)
-					print("KL", misc_utils.kl_divergence(torch.tensor(prev_relationship, device=device), kan_importances))
+					# print("Prev relationships", prev_relationship)
+					# print("KL", misc_utils.kl_divergence(torch.tensor(prev_relationship, device=device), kan_importances))
 					kan_diversity_loss -= misc_utils.kl_divergence(torch.tensor(prev_relationship, device=device), kan_importances)
 
 			#------------ 3 cleaning gradients
