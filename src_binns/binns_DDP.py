@@ -113,6 +113,7 @@ parser.add_argument("--para_to_predict", type=str, default="all", choices=["all"
 parser.add_argument("--min_temp", type=float, default=10., help="Min temp for sigmoid")
 parser.add_argument("--max_temp", type=float, default=109., help="Max temp for sigmoid")
 parser.add_argument("--init", type=str, default="default", choices=["default", "xavier_uniform", "kaiming_uniform"], help="Initialization for weights. For xavier_uniform/kaiming_uniform, biases are initialized to zero.")
+parser.add_argument("--final_bias", type=str, default="none", choices=["none", "zero_init", "uniform2_init"], help="Final bias after model/temp.")
 
 # Data split
 parser.add_argument("--data_seed", type=int, default=-1, help="Random seed for splitting data. -1 means use same as args.seed")

@@ -240,6 +240,7 @@ def get_model(args, var4nn, var_idx_to_emb, device, para_index, train_x, train_y
 						"device": device,
 						"min_temp": args.min_temp,
 						"max_temp": args.max_temp,
+						"final_bias": args.final_bias,
 						"init": args.init,
 						"width": args.width,
 						"num_layers": args.num_layers,

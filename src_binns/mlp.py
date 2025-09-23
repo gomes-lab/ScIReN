@@ -154,7 +154,7 @@ class mlp_wrapper(nn.Module):
 				 base_model="new_mlp", one_hot=False, use_bn=False, dropout_prob=0.0,
 				 activation='relu', param_constraint='sigmoid',
 				 device="cpu", train_x=None,
-				 min_temp=10, max_temp=109, init="xavier_uniform", width=128,
+				 min_temp=10, max_temp=109, init="xavier_uniform", final_bias="none", width=128,
 				 para_index=None, num_layers=4, residual=False,
 				 kan_grid=3, kan_grid_margin=0.0, kan_noise=0.3, kan_base_fun="silu", kan_affine_trainable=False,
 				 kan_absolute_deviation=False, kan_drop_rate=0.0, kan_drop_mode="postact", kan_drop_scale=True):
@@ -271,6 +271,14 @@ class mlp_wrapper(nn.Module):
 		self.temp_sigmoid = nn.Parameter(torch.tensor(0.0), requires_grad=True)
 		self.min_temp = min_temp
 		self.max_temp = max_temp
+		if final_bias == "none":
+			self.final_bias = 0.
+		elif final_bias == "zero_init":
+			self.final_bias = nn.Parameter(torch.zeros(self.num_params), requires_grad=True)
+		elif final_bias == "uniform2_init":  # Unif[-2, 2]
+			self.final_bias = nn.Parameter(torch.rand(self.num_params) * 4 - 2, requires_grad=True)
+		else:
+			raise ValueError("Invalid value of final_bias")
 
 
 	def forward(self, input_var, wosis_depth, coords, whether_predict, PRODA_para=None,
@@ -346,7 +354,8 @@ class mlp_wrapper(nn.Module):
 			mlp_output += spatial_embeddings
 
 		# Pass biogeochemical parameters through sigmoid, constraining them between [0, 1]
-		self.unconstrained_params = mlp_output / clamped_temp_sigmoid
+		print("Final bias", self.final_bias)
+		self.unconstrained_params = (mlp_output / clamped_temp_sigmoid) + self.final_bias
 		constrained_params = self.sigmoid(self.unconstrained_params)
 
 		if PRODA_para is None:  #  or len(self.para_index) == constrained_params.shape[1]:  # If we are predicting all params, don't need to copy PRODA_para
