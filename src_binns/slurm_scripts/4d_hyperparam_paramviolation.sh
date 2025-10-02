@@ -30,7 +30,7 @@ source .venv/bin/activate
 # 1 CPU
 for LR in 1e-2
 do
-    for LAM0 in 1 100 10000
+    for LAM0 in 1 10 100 1000 10000
     do
         for LAM1 in 1
         do

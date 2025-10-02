@@ -30,9 +30,9 @@ source .venv/bin/activate
 # 1 CPU
 for LR in 1e-2
 do
-    for LAM0 in 1 100 10000
+    for LAM0 in 1000
     do
-        for LAM1 in 1
+        for LAM1 in 0 0.1 1 10
         do
             LAM2=$LAM1
 
@@ -55,7 +55,7 @@ do
                         --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity \
                         --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 $LAM0 $LAM1 $LAM2 0 $LAM3 \
                         --param_constraint hardsigmoid \
-                        --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note 4D_HYPERPARAMS_PARAMVIOLATION $PLOT_STR
+                        --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note 4D_HYPERPARAMS_SPARSITY $PLOT_STR
                 done
             done
         done
