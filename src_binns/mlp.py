@@ -258,7 +258,8 @@ class mlp_wrapper(nn.Module):
 					  		   input_size=len(self.non_categorical_indices), noise_scale=kan_noise,
 							   base_fun=kan_base_fun, affine_trainable=kan_affine_trainable, grid_eps=1.0, 
 							   grid_margin=kan_grid_margin, absolute_deviation=kan_absolute_deviation,
-							   drop_rate=kan_drop_rate, drop_mode=kan_drop_mode, drop_scale=kan_drop_scale)
+							   drop_rate=kan_drop_rate, drop_mode=kan_drop_mode, drop_scale=kan_drop_scale,
+							   batch_norm_spline=use_bn)
 			# self.mlp.speed()  # Disable symbolic branch
 		else:
 			raise ValueError("Unsupported base_model")
@@ -277,6 +278,8 @@ class mlp_wrapper(nn.Module):
 			self.final_bias = nn.Parameter(torch.zeros(self.num_params), requires_grad=True)
 		elif final_bias == "uniform2_init":  # Unif[-2, 2]
 			self.final_bias = nn.Parameter(torch.rand(self.num_params) * 4 - 2, requires_grad=True)
+		elif final_bias == "uniform1_init":
+			self.final_bias = nn.Parameter(torch.rand(self.num_params) * 2 - 1, requires_grad=True)
 		else:
 			raise ValueError("Invalid value of final_bias")
 
@@ -354,9 +357,12 @@ class mlp_wrapper(nn.Module):
 			mlp_output += spatial_embeddings
 
 		# Pass biogeochemical parameters through sigmoid, constraining them between [0, 1]
-		print("Final bias", self.final_bias)
+		# print("Dist of mlp_output", mlp_output.mean(dim=0), mlp_output.std(dim=0))
+		# print("Final bias", self.final_bias)
 		self.unconstrained_params = (mlp_output / clamped_temp_sigmoid) + self.final_bias
+		# print("Dist of unconstrained params", self.unconstrained_params.mean(dim=0), self.unconstrained_params.std(dim=0))
 		constrained_params = self.sigmoid(self.unconstrained_params)
+		# print("Dist of constrained params", constrained_params.mean(dim=0), constrained_params.std(dim=0))
 
 		if PRODA_para is None:  #  or len(self.para_index) == constrained_params.shape[1]:  # If we are predicting all params, don't need to copy PRODA_para
 			 # If PRODA parameters not provided, neural network must output all params

@@ -397,7 +397,7 @@ def plot_functional_relationships(args, best_guess_model, input_names, output_na
 		from alibi.explainers import ALE, PartialDependenceVariance, plot_ale, plot_pd_variance
 		@torch.no_grad()
 		def predictor(X: np.ndarray) -> np.ndarray:
-			assert best_guess_model.mlp.training == False, "Model must be in eval mode"
+			# assert best_guess_model.mlp.training == False, "Model must be in eval mode"
 			X = torch.as_tensor(X, device=cached_nn_input.device)
 			return best_guess_model.mlp(X).cpu().numpy()
 

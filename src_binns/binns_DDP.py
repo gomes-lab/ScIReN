@@ -113,7 +113,7 @@ parser.add_argument("--para_to_predict", type=str, default="all", choices=["all"
 parser.add_argument("--min_temp", type=float, default=10., help="Min temp for sigmoid")
 parser.add_argument("--max_temp", type=float, default=109., help="Max temp for sigmoid")
 parser.add_argument("--init", type=str, default="default", choices=["default", "xavier_uniform", "kaiming_uniform"], help="Initialization for weights. For xavier_uniform/kaiming_uniform, biases are initialized to zero.")
-parser.add_argument("--final_bias", type=str, default="none", choices=["none", "zero_init", "uniform2_init"], help="Final bias after model/temp.")
+parser.add_argument("--final_bias", type=str, default="none", choices=["none", "zero_init", "uniform2_init", "uniform1_init"], help="Final bias after model/temp.")
 
 # Data split
 parser.add_argument("--data_seed", type=int, default=-1, help="Random seed for splitting data. -1 means use same as args.seed")
@@ -1734,8 +1734,9 @@ def worker(rank, world_size, job_id, port):
 			# print the model structure
 			print(model)
 
-			# # try to save the predicted parameters before training.
 		elif rank == 0:
+			# ===================== VISUALIZATIONS AT INITIALIZATION =========================
+			# Try to save predicted parameters and make plots before training (initialization)
 			# model.eval()  # TODO Can't really use eval mode before model is trained, since batchnorm stats are not there yet
 			print("Rank 0 About to val model before training", flush=True)
 			with torch.no_grad():
@@ -1750,6 +1751,78 @@ def worker(rank, world_size, job_id, port):
 				val_pred_para[val_profile_id, :] = temp_pred_para.detach()
 				np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_training_history/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_soc.detach().cpu().numpy(), delimiter = ',')
 				np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_para.detach().cpu().numpy(), delimiter = ',')
+	
+				# KAN-specific visualizations
+				if args.model == "kan" and not args.residual:  # TODO pruning doesn't work for residual?
+					# Produce edge/node importance scores
+					model_without_ddp.mlp.attribute()
+					model_without_ddp.mlp.node_attribute()
+
+					# Plot the unpruned model
+					model_without_ddp.mlp.plot(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.13)
+					plt.savefig(os.path.join(PLOT_DIR, f"INIT_kan_plot.png"))
+					plt.close()
+
+				# For reference, plot functional relationships
+				predicted_relationships, default_kl, default_l2 = misc_utils.plot_functional_relationships(args, model_without_ddp, var4nn, predicted_para_names, 
+																										PLOT_DIR, "INIT", true_relationships)
+
+				# # Scatters of true-vs-predicted SOC (grid).
+				# # Each row represents a layer (or all layers), each column represents a split (train/val)
+				# titles = ["Val: All Depths"]
+				# y_hats = [temp_SOC.flatten()]  # predictions
+				# ys = [val_y.flatten()]  # labels
+				# LAYER_BOUNDARIES = [0, 0.1, 0.3, 1.0, 50.0]
+				# for i in range(len(LAYER_BOUNDARIES) - 1):  # Loop through layers
+				# 	layer_loc_val = (val_z >= LAYER_BOUNDARIES[i]) & (val_z < LAYER_BOUNDARIES[i+1])  # nan considered false, which is good
+				# 	y_hats.extend([temp_SOC[layer_loc_val]])
+				# 	ys.extend([val_y[layer_loc_val]])
+				# 	layer_str = f'{LAYER_BOUNDARIES[i]}-{LAYER_BOUNDARIES[i+1]}m'
+				# 	titles.extend([f'Val: {layer_str}'])
+				# visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, "INIT_scatters.png"), y_hats, ys, titles, cols=2)
+
+				# Get predicted parameters on all sets
+				train_y_hat, train_pred_para = model.module(train_x.to(device), train_z.to(device), train_c.to(device),
+															whether_predict=1, PRODA_para=train_proda_para.to(device))
+				val_y_hat, val_pred_para = model.module(val_x.to(device), val_z.to(device), val_c.to(device),
+														whether_predict=1, PRODA_para=val_proda_para.to(device))
+				test_y_hat, test_pred_para = model.module(test_x.to(device), test_z.to(device), test_c.to(device),
+											  			  whether_predict=1, PRODA_para=test_proda_para.to(device))
+				grid_y_hat, grid_pred_para = model.module(predict_data_x.to(device), predict_data_z.to(device), predict_data_c.to(device),
+											  			  whether_predict=1, PRODA_para=grid_PRODA_para.to(device))
+
+				# Parameter scatters (predicted vs PRODA/prescribed parameters). Each row is a parameter, each column represents a split (train/val)
+				if args.model != "nn_only":
+					y_hats = []
+					ys = []
+					titles = []
+					for para_idx in para_index:  # Only plot parameters that were predicted by model
+						y_hats.extend([train_pred_para[:, para_idx], val_pred_para[:, para_idx], test_pred_para[:, para_idx], grid_pred_para[:, para_idx]])
+						ys.extend([train_proda_para[:, para_idx], val_proda_para[:, para_idx], test_proda_para[:, para_idx], grid_PRODA_para[:, para_idx]])
+						para_name = para_names[para_idx]
+						titles.extend([f'Train: {para_name}', f'Val: {para_name}', f'Test: {para_name}', f'Grid: {para_name}'])
+					visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, "INIT_para_scatters.png"), y_hats, ys, titles, cols=2)
+
+				# Parameter maps. Each row is a parameter, each column represents a split (train/val/test/grid).
+				# Use PRODA parameters as "labels" to compare with our predicted parameters
+				lons_list = []
+				lats_list = []
+				values_list = []
+				vars_list = []
+				for para_idx in para_index:  # Only plot parameters that were predicted by NN
+					# NOTE: Only plot the grid maps for now as this takes a long time.
+					lons_list.extend([predict_data_c[:, 0], predict_data_c[:, 0]])
+					lats_list.extend([predict_data_c[:, 1], predict_data_c[:, 1]])
+					values_list.extend([grid_PRODA_para[:, para_idx].to(device), grid_pred_para[:, para_idx]])
+					para_name = para_names[para_idx]
+					vars_list.extend([f'PRODA para {para_name} - Grid', f'Predicted para {para_name} - Grid'])
+				visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"INIT_para_maps.png"),
+						lons_list, lats_list, values_list, vars_list, us_only=True, cols=2)
+				torch.save({'train': train_pred_para,
+							'val': val_pred_para,
+							'test': test_pred_para,
+							'grid': grid_pred_para}, os.path.join(PLOT_DIR, "INIT_para.pt"))
+
 	else:
 		# If resuming from a checkpoint, load loss history
 		train_loss_history = checkpoint_worker['train_loss_history']
@@ -1860,6 +1933,7 @@ def worker(rank, world_size, job_id, port):
 			batch_c = batch_c.to(device)
 			batch_proda_para = batch_proda_para.to(device)
 			batch_profile_id = batch_profile_id.to(device)
+			# print(f"IEPOCH {iepoch} BATCH {ibatch} BEFORE UPDATE GRID", model_without_ddp.mlp.act_fun[0].coef[0, 0])
 
 			# KAN: update grid
 			if args.model == "kan" and ibatch == 1 and iepoch < 10 and args.kan_update_grid == 1:
@@ -1878,11 +1952,11 @@ def worker(rank, world_size, job_id, port):
 							model_without_ddp.mlp.act_fun[i].silu_input_offset.data /= world_size
 					dist.barrier()  # MAKE SURE THIS DOES NOT CAUSE ISSUES. (Old run - this was every batch outside the if statement)
 
-
 			#------------ 1 forward
 			# train_nn_start = time.time()
 			# Normal models return predicted (1) SOC, (2) parameters
 			batch_y_hat, batch_pred_para = model(batch_x, batch_z, batch_c, whether_predict=0, PRODA_para=batch_proda_para)
+			# print(f"IEPOCH {iepoch} BATCH {ibatch}", model_without_ddp.mlp.act_fun[0].coef[0, 0])
 
 			# Check if batch_pred_para is nan or inf
 			if batch_y_hat is None or batch_pred_para is None:
@@ -2446,6 +2520,7 @@ def worker(rank, world_size, job_id, port):
 
 		# Ensure all processes reach this point before proceeding
 		dist.barrier()
+		print("IEPOCH END", iepoch, model_without_ddp.mlp.act_fun[0].coef[0, 0])
 
 		# # Add a learning rate scheduler
 		if iepoch >= args.bias_only_epochs:
@@ -2605,6 +2680,7 @@ def worker(rank, world_size, job_id, port):
 		best_guess_model.load_state_dict(new_checkpoint['model_state_dict'])
 		best_guess_model = best_guess_model.module  # Remove DDP wrapper as this will only be run on one rank
 	print("Loaded model for rank: {}".format(rank))
+	print("FINAL", best_guess_model.mlp.act_fun[0].coef[0, 0])
 
 	dist.barrier()
 
