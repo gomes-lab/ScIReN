@@ -35,7 +35,7 @@ do
                 do
                     for FOLD in 1
                     do
-                        for NOISE in 1 
+                        for NOISE in 10 
                         do
                             for SEED in 1
                             do
@@ -46,14 +46,14 @@ do
                                 fi
 
                                 python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-                                    --optimizer AdamW --lr $LR --weight_decay 0 --batch_size 32 --n_epochs 2 \
+                                    --optimizer AdamW --lr $LR --weight_decay 0 --batch_size 4 --n_epochs 5 \
                                     --seed $SEED --init default --min_temp $TEMP --max_temp $TEMP  \
                                     --features ten --labels real \
                                     --model kan --num_layers 1 \
                                     --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_noise $NOISE \
                                     --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 kan_diversity --lambdas 1 100 1000 $LAM1 $LAM2 0 $LAM3 0 \
                                     --param_constraint hardsigmoid \
-                                    --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "5D_SCIREN_30" $PLOT_STR
+                                    --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "5D_SCIREN_30" $PLOT_STR
                             done
                         done
                     done

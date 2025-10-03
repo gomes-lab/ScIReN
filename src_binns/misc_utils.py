@@ -249,6 +249,7 @@ def get_model(args, var4nn, var_idx_to_emb, device, para_index, train_x, train_y
 						"kan_grid": args.kan_grid,
 						"kan_grid_margin": args.kan_grid_margin,
 						"kan_noise": args.kan_noise,
+						"kan_scale_base_sigma": args.kan_scale_base_sigma,
 						"kan_base_fun": args.kan_base_fun,
 						"kan_affine_trainable": args.kan_affine_trainable,
 						"kan_absolute_deviation": args.kan_absolute_deviation,

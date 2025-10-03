@@ -90,6 +90,7 @@ parser.add_argument("--kan_grid", type=int, default=3, help="Number of grid inte
 parser.add_argument("--kan_update_grid", type=int, default=1, help="Whether to update grids for KAN every epoch (default true)")
 parser.add_argument("--kan_grid_margin", type=float, default=1.0, help="How much margin to use (in units of input range) when creating grids for KAN. Only used if kan_update_grid is 1.")
 parser.add_argument("--kan_noise", type=float, default=0.3, help="Noise scale for KAN")
+parser.add_argument("--kan_scale_base_sigma", type=float, default=1.0, help="Standard deviation for base slope")
 parser.add_argument("--kan_base_fun", type=str, default="silu", choices=["silu", "identity", "silu_identity", "zero"], help="Base function for KAN")
 parser.add_argument("--kan_affine_trainable", action='store_true')
 parser.add_argument("--kan_absolute_deviation", action='store_true')
@@ -1731,10 +1732,11 @@ def worker(rank, world_size, job_id, port):
 
 		if rank == 1:
 			np.savetxt(data_dir_output + 'neural_network/' + job_id + '/nn_obs_soc_' + job_id + '.csv', binn_obs_soc, delimiter = ',')
+
+		elif rank == 0:
 			# print the model structure
 			print(model)
 
-		elif rank == 0:
 			# ===================== VISUALIZATIONS AT INITIALIZATION =========================
 			# Try to save predicted parameters and make plots before training (initialization)
 			# model.eval()  # TODO Can't really use eval mode before model is trained, since batchnorm stats are not there yet
@@ -1951,6 +1953,19 @@ def worker(rank, world_size, job_id, port):
 							dist.all_reduce(model_without_ddp.mlp.act_fun[i].silu_input_offset, op=dist.ReduceOp.SUM)
 							model_without_ddp.mlp.act_fun[i].silu_input_offset.data /= world_size
 					dist.barrier()  # MAKE SURE THIS DOES NOT CAUSE ISSUES. (Old run - this was every batch outside the if statement)
+
+					# Visualize KAN after update grid
+					if args.model == "kan" and not args.residual and rank == 0:  # TODO pruning doesn't work for residual?
+						# Produce edge/node importance scores
+						model_without_ddp.forward(batch_x, batch_z, batch_c, whether_predict=False, PRODA_para=batch_proda_para)
+						model_without_ddp.mlp.attribute()
+						model_without_ddp.mlp.node_attribute()
+
+						# Plot the unpruned model
+						model_without_ddp.mlp.plot(folder=os.path.join(PLOT_DIR, "splines_afterupdategrid"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.13)
+						plt.savefig(os.path.join(PLOT_DIR, f"INIT_kan_plot_afterupdategrid.png"))
+						plt.close()
+						exit(1)
 
 			#------------ 1 forward
 			# train_nn_start = time.time()
