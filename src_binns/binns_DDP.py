@@ -1955,7 +1955,7 @@ def worker(rank, world_size, job_id, port):
 					dist.barrier()  # MAKE SURE THIS DOES NOT CAUSE ISSUES. (Old run - this was every batch outside the if statement)
 
 					# Visualize KAN after update grid
-					if args.model == "kan" and not args.residual and rank == 0:  # TODO pruning doesn't work for residual?
+					if args.model == "kan" and not args.residual and iepoch == 1 and ibatch == 1 and rank == 0:  # TODO pruning doesn't work for residual?
 						# Produce edge/node importance scores
 						model_without_ddp.forward(batch_x, batch_z, batch_c, whether_predict=False, PRODA_para=batch_proda_para)
 						model_without_ddp.mlp.attribute()
@@ -1965,7 +1965,7 @@ def worker(rank, world_size, job_id, port):
 						model_without_ddp.mlp.plot(folder=os.path.join(PLOT_DIR, "splines_afterupdategrid"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.13)
 						plt.savefig(os.path.join(PLOT_DIR, f"INIT_kan_plot_afterupdategrid.png"))
 						plt.close()
-						exit(1)
+			print("After KAN vis")
 
 			#------------ 1 forward
 			# train_nn_start = time.time()
@@ -2349,6 +2349,7 @@ def worker(rank, world_size, job_id, port):
 			# KAN-specific visualizations
 			if args.model == "kan" and not args.residual:  # TODO pruning doesn't work for residual?
 				# Produce edge/node importance scores
+				model_without_ddp.forward(val_x.to(device), val_z.to(device), val_c.to(device), whether_predict=0, PRODA_para=val_proda_para.to(device))
 				model_without_ddp.mlp.attribute()
 				model_without_ddp.mlp.node_attribute()
 
@@ -2535,7 +2536,6 @@ def worker(rank, world_size, job_id, port):
 
 		# Ensure all processes reach this point before proceeding
 		dist.barrier()
-		print("IEPOCH END", iepoch, model_without_ddp.mlp.act_fun[0].coef[0, 0])
 
 		# # Add a learning rate scheduler
 		if iepoch >= args.bias_only_epochs:
