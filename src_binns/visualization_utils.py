@@ -248,7 +248,7 @@ def plot_observations_world_map(lons, lats, values, plot_dir, var_name, title=No
 
     # Plot points
     gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat))
-    gdf.plot(column=var_name, ax=ax, marker='o', markersize=8, legend=True, zorder=10, vmin=min_val, vmax=max_val, legend_kwds={'label': f'Change to {var_name}'})  # legend_kwds={'shrink': 0.7},
+    gdf.plot(column=var_name, ax=ax, marker='o', markersize=8, legend=True, zorder=10, vmin=min_val, vmax=max_val, legend_kwds={'label': f'{var_name}'})  # legend_kwds={'shrink': 0.7},
     ax.set_title(title)
 
     if plot_dir is not None:

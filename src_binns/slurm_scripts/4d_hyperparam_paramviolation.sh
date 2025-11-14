@@ -30,7 +30,7 @@ source .venv/bin/activate
 # 1 CPU
 for LR in 1e-2
 do
-    for LAM0 in 0 1 100 1000 10000
+    for LAM0 in 0 1 10 100 1000 10000
     do
         for LAM1 in 1
         do
@@ -48,7 +48,7 @@ do
                     SEED=$FOLD
 
                     python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-                        --optimizer AdamW --lr $LR --weight_decay 0 --batch_size 4 \
+                        --optimizer AdamW --lr $LR --weight_decay 0 --batch_size 32 \
                         --seed $SEED --init default --min_temp 1 --max_temp 1 \
                         --features ten --labels real \
                         --model kan --num_layers 1 \

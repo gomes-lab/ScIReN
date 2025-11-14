@@ -447,6 +447,14 @@ class mlp_wrapper(nn.Module):
 
 		If input is not provided, assume something is cached in self.new_input
 		"""
+
+		# Torchfunc isn't very compatible with BatchNorm since BatchNorm uses in-place operations
+		# to update running stats.
+		# One way around this is to be in eval mode (don't update running stats).
+		# https://docs.pytorch.org/docs/stable/func.batch_norm.html#option-4-eval-mode
+		was_training = self.training
+		self.eval()
+
 		if input is None:
 			input = self.new_input
 		if noise_std > 0:
@@ -457,6 +465,8 @@ class mlp_wrapper(nn.Module):
 		# perturbed_input = self.new_input + 0.1*torch.randn_like(self.new_input)  # Add noise to input
 		batch_jacobian1 = torch.func.jacrev(self.predict_params_summed, argnums=1)(self.mlp, input)  # [n_params, batch, n_inputs]
 		batch_jacobian1 = batch_jacobian1.permute((1, 0, 2))  # [batch, n_params, n_inputs]
+		self.train(was_training)
+
 		return batch_jacobian1
 
 

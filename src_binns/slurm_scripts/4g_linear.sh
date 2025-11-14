@@ -11,7 +11,7 @@
 #SBATCH --exclude=c0020,c0002
 
 # Name the job so it's meaningful in the job list
-#SBATCH -J 4c_real_blackboxhybrid_hardsigmoid
+#SBATCH -J 4g_linear
 # Request 4 GPUs 
 # #SBATCH --gpus 4
 # Request 4 CPU cores (8 hyperthreads).
@@ -27,30 +27,33 @@
 source .venv/bin/activate
 
 
-for LR in 1e-4 1e-3 1e-2 1e-1
+for LR in 1e-2
 do
-    for WD in 0 1e-4
+    for WD in 0
     do
-        for TEMP in 1
+        for BS in 8
         do
-            for PREG in 0
+            for TEMP in 1
             do
-                for FOLD in 1 2 3 4 5
+                for PREG in 0
                 do
-                    if [ $FOLD -eq 1 -a $LR = 1e-2 ]; then
-                        PLOT_STR="--plot"
-                    else
-                        PLOT_STR=""
-                    fi
-                    SEED=$FOLD
+                    for FOLD in 1 2 3 4 5
+                    do
+                        if [ $FOLD -eq 1 -a $LR = 1e-2 ]; then
+                            PLOT_STR="--plot"
+                        else
+                            PLOT_STR=""
+                        fi
+                        SEED=$FOLD
 
-                    python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-                        --optimizer AdamW --lr $LR --weight_decay $WD \
-                        --seed $SEED --init default --min_temp $TEMP --max_temp $TEMP \
-                        --model new_mlp --num_layers 1 \
-                        --features ten --labels real \
-                        --losses smooth_l1 param_reg param_violation --lambdas 1 $PREG 1000 --param_constraint hardsigmoid \
-                        --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 71.5 --note "4G_LINEAR" $PLOT_STR
+                        python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
+                            --optimizer AdamW --lr $LR --weight_decay $WD --batch_size $BS \
+                            --seed $SEED --init default --min_temp $TEMP --max_temp $TEMP \
+                            --model new_mlp --num_layers 1 \
+                            --features ten --labels real \
+                            --losses smooth_l1 param_reg param_violation --lambdas 1 $PREG 1000 --param_constraint hardsigmoid \
+                            --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 71.5 --note "4G_LINEAR" $PLOT_STR
+                    done
                 done
             done
         done

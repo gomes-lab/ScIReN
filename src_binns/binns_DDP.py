@@ -76,7 +76,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--note", type=str, default="", help="Optional name to give to the model")
 parser.add_argument("--model", type=str, default="new_mlp", choices=['new_mlp', 'kan', 'nn_only'], help="Model type")
 parser.add_argument("--width", type=int, default=128, help="Size of hidden layers (new_mlp or nn_only)")
-parser.add_argument("--num_layers", type=int, default=3, help="Size of hidden layers (new_mlp or nn_only)")
+parser.add_argument("--num_layers", type=int, default=3, help="Number of layers (if new_mlp, 1 is linear network)")
 parser.add_argument("--residual", action='store_true', help="Whether to add residual connections in neural network portion (MLP)")
 parser.add_argument("--categorical", type=str, default="embedding", choices=["embedding", "one_hot"], help="How to embed categorical variables")
 parser.add_argument("--embed_dim", type=int, default=5, help="Embedding dim for each categorical variable (if using embeddings)")
@@ -841,7 +841,7 @@ true_relationships = None
 # Fetch directory where cached labels are saved
 if args.labels != "real":
 	# If using synthetic datasets, save the labels to a directory
-	label_dir = os.path.join(data_dir_input, f"labels_{args.labels}_para={args.para_to_predict}_seed={args.seed}")
+	label_dir = os.path.join(data_dir_input, f"labels_{args.labels}_para={args.para_to_predict}_seed={args.seed}_noise={args.label_noise_std}")
 	if args.representative_sample:
 		label_dir += "_representative"
 	elif args.n_datapoints != -1:
@@ -901,16 +901,43 @@ if args.labels == "synthetic_proda":
 		np.save(synthetic_label_path, PRODA_soc_simu)
 
 elif args.labels == "synthetic_function":
-	print("loading synthetic_function", label_dir, flush=True)
+	import kan
+
+	# Set seed to data_seed temporarily
+	set_seeds(args.data_seed)
+
+	# Explicitly defining functions since lambda functions cannot be pickled
+	def zero_fn(x):
+		return x*0
+	def linear_fn(x):
+		return x
+	def quadratic_fn(x):
+		return x**2
+	def log_fn(x):
+		return torch.log2(x + 2.5)
+	def exp_fn(x):
+		return 2**x
+	def abs_fn(x):
+		return torch.abs(x)
+	functions = [zero_fn, linear_fn, quadratic_fn, log_fn, exp_fn, abs_fn]
 
 	synthetic_label_path = os.path.join(label_dir, "synthetic_soc.npy")
-	if os.path.exists(synthetic_label_path) and False:
+
+	if os.path.exists(synthetic_label_path):
+		print("loading synthetic_function", label_dir, flush=True)
 		PRODA_soc_simu = np.load(synthetic_label_path)
 		current_data_y = PRODA_soc_simu
 		current_PRODA_para = np.load(os.path.join(label_dir, "synthetic_para.npy"))
 		sym_mask = np.load(os.path.join(label_dir, "relationship_types.npy"))
+		print("SYM MASK", sym_mask)
 		true_relationships = np.load(os.path.join(label_dir, "true_relationships.npy"))
-		# relationship_mask = torch.tensor(sym_mask != 0, dtype=int)  # 1 if relationship exists between input i and output j
+		# true_kan = torch.load(os.path.join(label_dir, "true_kan.pth"), weights_only=False)
+		true_kan = kan.KAN(width=[len(var4nn), len(para_index)], device="cpu",
+					  	   input_size=len(var4nn), base_fun="identity")
+		true_kan.load_state_dict(torch.load(os.path.join(label_dir, "true_kan.pth"), weights_only=True))
+		relationship_mask = torch.tensor(sym_mask != 0, dtype=int)  # 1 if relationship exists between input i and output j
+		constant_para = (relationship_mask.sum(dim=0) == 0)  # parameters with no functional relationships (constant). should not contain anything now.
+
 	else:
 		print("computing synthetic_function", label_dir, flush=True)
 
@@ -918,7 +945,6 @@ elif args.labels == "synthetic_function":
 		# input features and biogeochemical parameters. We mainly use the KAN infrastructure
 		# for its plotting functionality.
 		# Assume no categorical features for now.
-		import kan
 		true_kan = kan.KAN(width=[len(var4nn), len(para_index)], device="cpu",
 					  	   input_size=len(var4nn), base_fun="identity")
 		with torch.no_grad():
@@ -936,34 +962,30 @@ elif args.labels == "synthetic_function":
 				row_indices = rng.permutation(len(var4nn))[:2]
 
 				# For these 2 inputs, assign a random relationship type (between 1 and 5 inclusive)
-				# 1=linear, 2=quadratic, 3=exp, 4=log, 5=relu.
+				# 1=linear, 2=quadratic, 3=exp, 4=log, 5=abs.
 				sym_mask[row_indices, col_idx] = rng.integers(low=1, high=6, size=row_indices.shape)
 			relationship_mask = torch.tensor(sym_mask != 0, dtype=int)  # 1 if relationship exists between input i and output j
 
-			# Explicitly defining functions since lambda functions cannot be pickled
-			def zero_fn(x):
-				return x*0
-			def linear_fn(x):
-				return x
-			def quadratic_fn(x):
-				return x**2
-			def log_fn(x):
-				return torch.log2(x + 2.5)
-			def exp_fn(x):
-				return 2**x
-			def abs_fn(x):
-				return torch.abs(x)
-			functions = [zero_fn, linear_fn, quadratic_fn, log_fn, exp_fn, abs_fn]
+			# Fix functions
 			for i in range(sym_mask.shape[0]):
 				for j in range(sym_mask.shape[1]):
 					true_kan.fix_symbolic(0, i, j, fun_name=functions[sym_mask[i, j]], random=True, fit_params_bool=False, verbose=False)
-			true_kan.symbolic_fun[0].mask = relationship_mask.T  # Transpose because Symbolic_KANLayer's mask is [out_dim, in_dim] 
+			true_kan.symbolic_fun[0].mask = relationship_mask.T  # Transpose because Symbolic_KANLayer's mask is [out_dim, in_dim]
+
+			# Shift inputs to symbolic functions such that it's mean 0, std 1.
+			# We want to compute y = (X - mu) / sigma.
+			# Expressed in affine form (aX+b), this is (1/sigma) * X + (-mu / sigma)
+			input_features = torch.tensor(current_data_x[:, 0:len(var4nn), 0, 0], dtype=torch.float32)  # This is the way to extract input features from current_data_x. [examples, features]
+			feature_means = input_features.mean(dim=0, keepdim=True)  # [1, features]
+			feature_stds = input_features.std(dim=0, keepdim=True)  # [1, features]
+			true_kan.symbolic_fun[0].affine[:, :, 0] = 1 / feature_stds
+			true_kan.symbolic_fun[0].affine[:, :, 1] = - feature_means / feature_stds
 
 			# Obtain parameters based on prescribed functional relationships.
-			input_features = torch.tensor(current_data_x[:, 0:len(var4nn), 0, 0], dtype=torch.float32)  # This is the way to extract input features from current_data_x
 			prescribed_para = true_kan(input_features)
 
-			# Rescale so that each function's output is mean 0, std 1
+			# Rescale so that each function's output is mean 0, std 1. This makes each functional
+			# relationship roughly equal in importance.
 			postacts = true_kan.spline_postacts[0]  # [batch, out_dim, in_dim]
 			postacts_mean = postacts.mean(dim=0)
 			postacts_std = postacts.std(dim=0)
@@ -975,7 +997,7 @@ elif args.labels == "synthetic_function":
 			true_kan.symbolic_fun[0].affine[:, :, 3] = (true_kan.symbolic_fun[0].affine[:, :, 3] - postacts_mean) / postacts_std
 			true_kan.symbolic_fun[0].affine[:, :, 3] = torch.nan_to_num(true_kan.symbolic_fun[0].affine[:, :, 3], nan=0.0, posinf=0.0, neginf=0.0)
 
-			# get the parameters based on rescale KAN
+			# get the parameters based on rescaled KAN
 			prescribed_para = true_kan(input_features)
 
 			# # verify that the postacts are mean 0, std 1
@@ -1079,9 +1101,11 @@ elif args.labels == "synthetic_function":
 			np.save(os.path.join(label_dir, "synthetic_para.npy"), current_PRODA_para)
 			np.save(os.path.join(label_dir, "relationship_types.npy"), sym_mask)
 			np.save(os.path.join(label_dir, "true_relationships.npy"), true_relationships)
-			torch.save(true_kan, os.path.join(label_dir, "true_kan.pth"))
+			torch.save(true_kan.state_dict(), os.path.join(label_dir, "true_kan.pth"))
 			print("Finished synthetic data generation")
 
+	# Restore original seed
+	set_seeds(args.seed)
 
 
 ###############################################################
@@ -1755,7 +1779,7 @@ def worker(rank, world_size, job_id, port):
 				np.savetxt(data_dir_output + 'neural_network/' + job_id + '/model_parameters/nn_val_pred_soc_' + job_id + "_initial" + '.csv', val_pred_para.detach().cpu().numpy(), delimiter = ',')
 	
 				# KAN-specific visualizations
-				if args.model == "kan" and not args.residual:  # TODO pruning doesn't work for residual?
+				if args.model == "kan" and not args.residual:
 					# Produce edge/node importance scores
 					model_without_ddp.mlp.attribute()
 					model_without_ddp.mlp.node_attribute()
@@ -1765,23 +1789,9 @@ def worker(rank, world_size, job_id, port):
 					plt.savefig(os.path.join(PLOT_DIR, f"INIT_kan_plot.png"))
 					plt.close()
 
-				# For reference, plot functional relationships
-				predicted_relationships, default_kl, default_l2 = misc_utils.plot_functional_relationships(args, model_without_ddp, var4nn, predicted_para_names, 
-																										PLOT_DIR, "INIT", true_relationships)
-
-				# # Scatters of true-vs-predicted SOC (grid).
-				# # Each row represents a layer (or all layers), each column represents a split (train/val)
-				# titles = ["Val: All Depths"]
-				# y_hats = [temp_SOC.flatten()]  # predictions
-				# ys = [val_y.flatten()]  # labels
-				# LAYER_BOUNDARIES = [0, 0.1, 0.3, 1.0, 50.0]
-				# for i in range(len(LAYER_BOUNDARIES) - 1):  # Loop through layers
-				# 	layer_loc_val = (val_z >= LAYER_BOUNDARIES[i]) & (val_z < LAYER_BOUNDARIES[i+1])  # nan considered false, which is good
-				# 	y_hats.extend([temp_SOC[layer_loc_val]])
-				# 	ys.extend([val_y[layer_loc_val]])
-				# 	layer_str = f'{LAYER_BOUNDARIES[i]}-{LAYER_BOUNDARIES[i+1]}m'
-				# 	titles.extend([f'Val: {layer_str}'])
-				# visualization_utils.plot_true_vs_predicted_multiple(os.path.join(PLOT_DIR, "INIT_scatters.png"), y_hats, ys, titles, cols=2)
+					# For reference, plot functional relationships
+					predicted_relationships, default_kl, default_l2 = misc_utils.plot_functional_relationships(args, model_without_ddp, var4nn, predicted_para_names,
+																											PLOT_DIR, "INIT", true_relationships)
 
 				# Get predicted parameters on all sets
 				train_y_hat, train_pred_para = model.module(train_x.to(device), train_z.to(device), train_c.to(device),
@@ -1798,7 +1808,7 @@ def worker(rank, world_size, job_id, port):
 					y_hats = []
 					ys = []
 					titles = []
-					for para_idx in para_index:  # Only plot parameters that were predicted by model
+					for para_idx in para_index:
 						y_hats.extend([train_pred_para[:, para_idx], val_pred_para[:, para_idx], test_pred_para[:, para_idx], grid_pred_para[:, para_idx]])
 						ys.extend([train_proda_para[:, para_idx], val_proda_para[:, para_idx], test_proda_para[:, para_idx], grid_PRODA_para[:, para_idx]])
 						para_name = para_names[para_idx]
@@ -1811,7 +1821,7 @@ def worker(rank, world_size, job_id, port):
 				lats_list = []
 				values_list = []
 				vars_list = []
-				for para_idx in para_index:  # Only plot parameters that were predicted by NN
+				for para_idx in para_index:
 					# NOTE: Only plot the grid maps for now as this takes a long time.
 					lons_list.extend([predict_data_c[:, 0], predict_data_c[:, 0]])
 					lats_list.extend([predict_data_c[:, 1], predict_data_c[:, 1]])
@@ -1965,7 +1975,6 @@ def worker(rank, world_size, job_id, port):
 						model_without_ddp.mlp.plot(folder=os.path.join(PLOT_DIR, "splines_afterupdategrid"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.13)
 						plt.savefig(os.path.join(PLOT_DIR, f"INIT_kan_plot_afterupdategrid.png"))
 						plt.close()
-			print("After KAN vis")
 
 			#------------ 1 forward
 			# train_nn_start = time.time()
@@ -1983,13 +1992,13 @@ def worker(rank, world_size, job_id, port):
 						print(f"Epoch {iepoch} batch {ibatch} parameter {ipara} is {batch_pred_para[ipara]}")
 
 			# Check range of parameter values
-			if rank == 0 and ibatch == 1 and iepoch % 10 == 0:
+			if rank == 0 and ibatch == 1 and iepoch % 50 == 0:
 				print("Predicted para", batch_pred_para)
 
-			# If KAN, plot activation statistics
-			if rank == 0 and args.model == "kan" and (ibatch == 1 and iepoch % 50 == 0):
-				import pykan
-				model_without_ddp.mlp.plot_activation_statistics(os.path.join(PLOT_DIR, f"epoch{iepoch}_KAN_activation_stats.png"))
+			# # If KAN, plot activation statistics
+			# if rank == 0 and args.model == "kan" and (ibatch == 1 and iepoch % 50 == 0):
+			# 	import pykan
+			# 	model_without_ddp.mlp.plot_activation_statistics(os.path.join(PLOT_DIR, f"epoch{iepoch}_KAN_activation_stats.png"))
 
 			#------------ 2 compute the objective function
 			l1_loss, smooth_l1_loss, l2_loss, param_reg_loss, train_NSE, corr = fun_loss(batch_y_hat, batch_y, batch_pred_para)
@@ -2358,6 +2367,12 @@ def worker(rank, world_size, job_id, port):
 				plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_kan_plot.png"))
 				plt.close()
 
+				# # Plot the unpruned model
+				# model_without_ddp.mlp.plot_horizontal(folder=os.path.join(PLOT_DIR, "splines"), in_vars=var4nn, out_vars=predicted_para_names, scale=5, varscale=0.13)
+				# plt.savefig(os.path.join(PLOT_DIR, f"epoch{iepoch}_kan_plot_HORIZONTAL.png"))
+				# plt.close()
+				# exit(1)
+
 			predicted_relationships, default_kl, default_l2 = misc_utils.plot_functional_relationships(args, model_without_ddp, var4nn, predicted_para_names, 
 																							  		   PLOT_DIR, f"epoch{iepoch}", true_relationships)
 
@@ -2611,7 +2626,7 @@ def worker(rank, world_size, job_id, port):
 							f.write(f'#!/bin/bash\n')
 							f.write(f'#SBATCH -p full\n')
 							f.write(f'#SBATCH -J binn_resume\n')
-							f.write(f'#SBATCH --gpus {args.num_CPU}\n')
+							# f.write(f'#SBATCH --gpus {args.num_CPU}\n')
 							f.write(f'#SBATCH -c {args.num_CPU*2}\n')
 							f.write(f'#SBATCH -N 1 -n 1\n')
 							f.write(f'#SBATCH --mem=50GB\n')
@@ -2695,7 +2710,6 @@ def worker(rank, world_size, job_id, port):
 		best_guess_model.load_state_dict(new_checkpoint['model_state_dict'])
 		best_guess_model = best_guess_model.module  # Remove DDP wrapper as this will only be run on one rank
 	print("Loaded model for rank: {}".format(rank))
-	print("FINAL", best_guess_model.mlp.act_fun[0].coef[0, 0])
 
 	dist.barrier()
 
@@ -2786,13 +2800,11 @@ def worker(rank, world_size, job_id, port):
 			plt.savefig(os.path.join(PLOT_DIR, f"FINAL_kan_plot.png"))
 			plt.close()
 
-		# # NOTE Try testing on the pruned model!
 		best_guess_model.new_input = cached_nn_input
 		predicted_relationships, default_kl, default_l2 = misc_utils.plot_functional_relationships(args, best_guess_model, var4nn, predicted_para_names, PLOT_DIR, "FINAL", true_relationships)
-		# best_guess_model.mlp.act_fun[0].mask = pruned_model.act_fun[0].mask
-		print("PRedicted relationships shape", predicted_relationships.shape)
-		np.save(os.path.join(PLOT_DIR, "predicted_relationships.npy"), predicted_relationships)  #.detach().cpu().numpy())
-
+		if predicted_relationships is not None:
+			print("Predicted relationships shape", predicted_relationships.shape)
+			np.save(os.path.join(PLOT_DIR, "predicted_relationships.npy"), predicted_relationships)  #.detach().cpu().numpy())
 
 		# Summary csv file of all results. Create this if it doesn't exist
 		results_summary_file = os.path.join(data_dir_output, f"neural_network/results_summary_{args.note}.csv")
@@ -2890,24 +2902,24 @@ def worker(rank, world_size, job_id, port):
 			values_list = []
 			vars_list = []
 			for para_idx in para_index:  # Only plot parameters that were predicted by NN
-				# NOTE: Only plot the grid maps for now as this takes a long time.
-				lons_list.extend([predict_data_c[:, 0], predict_data_c[:, 0]])
-				lats_list.extend([predict_data_c[:, 1], predict_data_c[:, 1]])
-				values_list.extend([grid_PRODA_para[:, para_idx].to(device), grid_pred_para[:, para_idx]])
-				para_name = para_names[para_idx]
-				vars_list.extend([f'PRODA para {para_name} - Grid', f'Predicted para {para_name} - Grid'])
-
-				# lons_list.extend([train_c[:, 0], train_c[:, 0], val_c[:, 0], val_c[:, 0], test_c[:, 0], test_c[:, 0], predict_data_c[:, 0], predict_data_c[:, 0]])
-				# lats_list.extend([train_c[:, 1], train_c[:, 1], val_c[:, 1], val_c[:, 1], test_c[:, 1], test_c[:, 1], predict_data_c[:, 1], predict_data_c[:, 1]])
-				# values_list.extend([train_proda_para[:, para_idx].to(device), best_guess_train_pred_para[:, para_idx],
-				# 					val_proda_para[:, para_idx].to(device), best_guess_val_pred_para[:, para_idx],
-				# 					test_proda_para[:, para_idx].to(device), best_guess_test_pred_para[:, para_idx],
-				# 					grid_PRODA_para[:, para_idx].to(device), grid_pred_para[:, para_idx]])
+				# # NOTE: Only plot the grid maps for now as this takes a long time.
+				# lons_list.extend([predict_data_c[:, 0], predict_data_c[:, 0]])
+				# lats_list.extend([predict_data_c[:, 1], predict_data_c[:, 1]])
+				# values_list.extend([grid_PRODA_para[:, para_idx].to(device), grid_pred_para[:, para_idx]])
 				# para_name = para_names[para_idx]
-				# vars_list.extend([f'PRODA para {para_name} - Train', f'Predicted para {para_name} - Train',
-				# 					f'PRODA para {para_name} - Val', f'Predicted para {para_name} - Val',
-				# 					f'PRODA para {para_name} - Test', f'Predicted para {para_name} - Test',
-				# 					f'PRODA para {para_name} - Grid', f'Predicted para {para_name} - Grid'])
+				# vars_list.extend([f'PRODA para {para_name} - Grid', f'Predicted para {para_name} - Grid'])
+
+				lons_list.extend([train_c[:, 0], train_c[:, 0], val_c[:, 0], val_c[:, 0], test_c[:, 0], test_c[:, 0], predict_data_c[:, 0], predict_data_c[:, 0]])
+				lats_list.extend([train_c[:, 1], train_c[:, 1], val_c[:, 1], val_c[:, 1], test_c[:, 1], test_c[:, 1], predict_data_c[:, 1], predict_data_c[:, 1]])
+				values_list.extend([train_proda_para[:, para_idx].to(device), best_guess_train_pred_para[:, para_idx],
+									val_proda_para[:, para_idx].to(device), best_guess_val_pred_para[:, para_idx],
+									test_proda_para[:, para_idx].to(device), best_guess_test_pred_para[:, para_idx],
+									grid_PRODA_para[:, para_idx].to(device), grid_pred_para[:, para_idx]])
+				para_name = para_names[para_idx]
+				vars_list.extend([f'PRODA para {para_name} - Train', f'Predicted para {para_name} - Train',
+									f'PRODA para {para_name} - Val', f'Predicted para {para_name} - Val',
+									f'PRODA para {para_name} - Test', f'Predicted para {para_name} - Test',
+									f'PRODA para {para_name} - Grid', f'Predicted para {para_name} - Grid'])
 			visualization_utils.plot_map_grid(os.path.join(PLOT_DIR, f"FINAL_para_maps.png"),
 					lons_list, lats_list, values_list, vars_list, us_only=True, cols=2)
 
