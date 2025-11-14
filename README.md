@@ -1,9 +1,16 @@
-# ScIReN
+# ScIReN: Scientifically-Interpretable Reasoning Network
 
 This repo contains the code for ["Scientifically-Interpretable Reasoning Network (ScIReN):
 Discovering Hidden Relationships in the Carbon Cycle and Beyond"](https://arxiv.org/pdf/2506.14054) (AAAI 2026).
 
 ![alt text](/figures/ScIReN_Structure.png "Logo Title Text 1")
+
+If you find this code helpful, please consider citing the following papers:
+
+- Fan, J., Xu, H., Tao, F., Nasim, M., Grimson, M., Luo, Y., & Gomes, C. P. (2025). Scientifically-Interpretable Reasoning Network (ScIReN): Uncovering the Black-Box of Nature. arXiv preprint arXiv:2506.14054.
+- Xu, H., Fan, J., Tao, F., Jiang, L., You, F., Houlton, B. Z., ... & Luo, Y. (2025). Biogeochemistry-informed neural network (binn) for improving accuracy of model prediction and scientific understanding of soil organic carbon. arXiv preprint arXiv:2502.00672. 
+
+
 
 
 ## Dataset download
