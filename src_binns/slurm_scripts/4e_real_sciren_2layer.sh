@@ -27,98 +27,35 @@
 source .venv/bin/activate
 
 
-for LR in 1e-2 
+for LR in 1e-2
 do
     for LAM1 in 1
     do
-        for LAM3 in 100
+        for LAM2 in 1
         do
-            for FOLD in 1 2 3 4 5
+            for LAM3 in 100
             do
-                if [ $FOLD -eq 1 ]; then
-                    PLOT_STR="--plot"
-                else
-                    PLOT_STR=""
-                fi
-                SEED=$FOLD
-                LAM2=$LAM1
+                for FOLD in 1 2 3 4 5
+                do
+                    if [ $FOLD -eq 1 ]; then
+                        PLOT_STR="--plot"
+                    else
+                        PLOT_STR=""
+                    fi
+                    SEED=$FOLD
 
-                # ATTENTION: This uses 128 hidden units which is probably too high!
-                python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-                     --optimizer AdamW --lr $LR --weight_decay 0 --batch_size 32 \
-                     --seed $SEED --init default --min_temp 1 --max_temp 1 \
-                     --features ten --labels real \
-                     --model kan --num_layers 2 --width 16 \
-                     --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity \
-                     --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 1000 $LAM1 $LAM2 0 $LAM3 \
-                     --param_constraint hardsigmoid \
-                     --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note 4E_REAL_SCIREN_2LAYER_WIDTH16 $PLOT_STR
+                    python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
+                        --optimizer AdamW --lr $LR --weight_decay 0 --batch_size 32 \
+                        --seed $SEED --init default --min_temp 1 --max_temp 1 \
+                        --features ten --labels real \
+                        --model kan --num_layers 1 \
+                        --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable --kan_absolute_deviation \
+                        --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 1000 $LAM1 $LAM2 0 $LAM3 \
+                        --param_constraint hardsigmoid \
+                        --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note 4D_REAL_SCIREN_2LAYER $PLOT_STR
+
+                done
             done
         done
     done
 done
-
-# for LR in 1e-2 1e-1
-# do
-#     for LAM1 in 1 10
-#     do
-#         for LAM3 in 100 1000
-#         do
-#             for FOLD in 1 
-#             do
-#                 if [ $FOLD -eq 1 -a $LR = 1e-2 ]; then
-#                     PLOT_STR="--plot"
-#                 else
-#                     PLOT_STR=""
-#                 fi
-#                 SEED=$FOLD
-#                 LAM2=$LAM1
-#                 # LAM2=$(echo "$LAM1*2" | bc)
-#                 # echo $LAM2
-#                 python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-#                      --optimizer AdamW --lr $LR --weight_decay 0 \
-#                      --seed $SEED --init default --min_temp 1 --max_temp 1 \
-#                      --features ten --labels real \
-#                      --model kan --num_layers 1 \
-#                      --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable \
-#                      --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 1000 $LAM1 $LAM2 0 $LAM3 \
-#                      --param_constraint hardsigmoid \
-#                      --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note REAL_KAN_NOWD_STDEV_TUNE --plot
-
-#             done
-#         done
-#     done
-# done
-
-
-# for LR in 1e-2
-# do
-#     for LAM1 in 1 10
-#     do
-#         for LAM3 in 100
-#         do
-#             for FOLD in 1 2 3 4 5
-#             do
-#                 if [ $FOLD -eq 1 -a $LR = 1e-2 ]; then
-#                     PLOT_STR="--plot"
-#                 else
-#                     PLOT_STR=""
-#                 fi
-#                 SEED=$FOLD
-#                 LAM2=$LAM1
-#                 # LAM2=$(echo "$LAM1*2" | bc)
-#                 # echo $LAM2
-
-#                 python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2  --cross_val_idx $FOLD --n_folds 5 \
-#                     --optimizer AdamW --lr $LR --weight_decay 0 \
-#                     --seed $SEED --init default --min_temp 1 --max_temp 1 \
-#                     --features ten --labels real \
-#                     --model kan --num_layers 2 \
-#                     --kan_grid 30 --kan_update_grid 1 --kan_grid_margin 2.0 --kan_base_fun identity --kan_affine_trainable --kan_absolute_deviation \
-#                     --losses smooth_l1 param_reg param_violation kan_l1 kan_entropy kan_coefdiff kan_coefdiff2 --lambdas 1 0 1000 $LAM1 $LAM2 0 $LAM3 \
-#                     --param_constraint hardsigmoid \
-#                     --num_CPU 8 --use_ddp 1 --job_scheduler slurm --time_limit 23.5 --note "REAL_KAN2" $PLOT_STR
-#             done
-#         done
-#     done
-# done

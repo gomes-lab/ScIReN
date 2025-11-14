@@ -27,10 +27,10 @@
 source .venv/bin/activate
 
 
-# Noise 0.1
-for WD in 0
+
+for LR in 1e-2
 do
-    for LR in 1e-2
+    for WD in 1e-4
     do
         for FOLD in 1 2 3 4 5
         do
@@ -45,66 +45,15 @@ do
                 --optimizer AdamW --lr $LR --weight_decay $WD \
                 --seed $SEED --init default \
                 --model nn_only --num_layers 3 --residual --activation leaky_relu --use_bn \
-                --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0.1 --standardize_output \
+                --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0 --standardize_output \
                 --losses smooth_l1 --lambdas 1 \
-                --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 71.5 --note "3NA_SYNTHETIC_PURENN_FIXEDNOISE01" $PLOT_STR
+                --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 71.5 --note "3RA_SYNTHETIC_PURENN_NONOISE" $PLOT_STR
         done
     done
 done
-
-
-# # Noise 0.1
-# for WD in 0 1e-4
+# for LR in 1e-4 1e-3 1e-2 1e-1
 # do
-#     for LR in 1e-4 1e-3 1e-2 1e-1
-#     do
-#         for FOLD in 1
-#         do
-#             if [ $FOLD -eq 1 ]; then
-#                 PLOT_STR="--plot"
-#             else
-#                 PLOT_STR=""
-#             fi
-#             SEED=$FOLD
-
-#             python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-#                 --optimizer AdamW --lr $LR --weight_decay $WD \
-#                 --seed $SEED --init default \
-#                 --model nn_only --num_layers 3 --residual --activation leaky_relu --use_bn \
-#                 --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0.1 --standardize_output \
-#                 --losses smooth_l1 --lambdas 1 \
-#                 --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 71.5 --note "3NA_SYNTHETIC_PURENN_FIXEDNOISE01" $PLOT_STR
-#         done
-#     done
-# done
-
-# for WD in 1e-4
-# do
-#     for LR in 1e-2
-#     do
-#         for FOLD in 1 2 3 4 5
-#         do
-#             if [ $FOLD -eq 1 ]; then
-#                 PLOT_STR="--plot"
-#             else
-#                 PLOT_STR=""
-#             fi
-#             SEED=$FOLD
-
-#             python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-#                 --optimizer AdamW --lr $LR --weight_decay $WD \
-#                 --seed $SEED --init default \
-#                 --model nn_only --num_layers 3 --residual --activation leaky_relu --use_bn \
-#                 --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0 --standardize_output \
-#                 --losses smooth_l1 --lambdas 1 \
-#                 --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 71.5 --note "3RA_SYNTHETIC_PURENN_NONOISE" $PLOT_STR
-#         done
-#     done
-# done
-
-# for WD in 0 1e-4
-# do
-#     for LR in 1e-4 1e-3 1e-2 1e-1
+#     for WD in 0 1e-4
 #     do
 #         for FOLD in 1
 #         do

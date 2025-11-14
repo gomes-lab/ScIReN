@@ -26,39 +26,11 @@
 # Activate environment (virtualenv version)
 source .venv/bin/activate
 
-# for WD in 1e-4
-# do
-#     for LR in 1e-2
-#     do
-#         for TEMP in 1
-#         do
-#             for PREG in 0
-#             do
-#                 for FOLD in 2 3 4 5
-#                 do
-#                     if [ $FOLD -eq 1 ]; then
-#                         PLOT_STR="--plot"
-#                     else
-#                         PLOT_STR=""
-#                     fi
-#                     SEED=$FOLD
 
-#                     python3 binns_DDP.py --data_seed 12345 --representative_sample --split grid2 --cross_val_idx $FOLD --n_folds 5 \
-#                         --optimizer AdamW --lr $LR --weight_decay $WD \
-#                         --seed $SEED --init default --min_temp $TEMP --max_temp $TEMP \
-#                         --model new_mlp --num_layers 3 --residual --activation leaky_relu --use_bn \
-#                         --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0.1\
-#                         --losses smooth_l1 param_reg param_violation --lambdas 1 $PREG 1000 --param_constraint hardsigmoid \
-#                         --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 71.5 --note "3NC_SYNTHETIC_BLACKBOXHYBRID_HARDSIGMOID_FIXEDNOISE01" $PLOT_STR
-#                 done
-#             done
-#         done
-#     done
-# done
 
-for WD in 0 1e-4
+for LR in 1e-2
 do
-    for LR in 1e-4 1e-3 1e-2 1e-1
+    for WD in 1e-4
     do
         for TEMP in 1
         do
@@ -77,9 +49,9 @@ do
                         --optimizer AdamW --lr $LR --weight_decay $WD \
                         --seed $SEED --init default --min_temp $TEMP --max_temp $TEMP \
                         --model new_mlp --num_layers 3 --residual --activation leaky_relu --use_bn \
-                        --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0.1 \
+                        --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0 \
                         --losses smooth_l1 param_reg param_violation --lambdas 1 $PREG 1000 --param_constraint hardsigmoid \
-                        --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "3NC_SYNTHETIC_BLACKBOXHYBRID_HARDSIGMOID_FIXEDNOISE01" $PLOT_STR
+                        --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "3NC_SYNTHETIC_BLACKBOXHYBRID_HARDSIGMOID_NONOISE" $PLOT_STR
                 done
             done
         done
@@ -88,7 +60,7 @@ done
 
 # for LR in 1e-4 1e-3 1e-2 1e-1
 # do
-#     for WD in 0
+#     for WD in 0 1e-4
 #     do
 #         for TEMP in 1
 #         do
@@ -96,7 +68,7 @@ done
 #             do
 #                 for FOLD in 1
 #                 do
-#                     if [ $FOLD -eq 1 -a $LR = 1e-2 ]; then
+#                     if [ $FOLD -eq 1 ]; then
 #                         PLOT_STR="--plot"
 #                     else
 #                         PLOT_STR=""
@@ -109,7 +81,7 @@ done
 #                         --model new_mlp --num_layers 3 --residual --activation leaky_relu --use_bn \
 #                         --features ten --para_to_predict four --labels synthetic_function --label_noise_std 0 \
 #                         --losses smooth_l1 param_reg param_violation --lambdas 1 $PREG 1000 --param_constraint hardsigmoid \
-#                         --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "BINNHARDSIGMOID_SYNTHETICFUNCTION_FOUR_TUNING" $PLOT_STR
+#                         --num_CPU 1 --use_ddp 1 --job_scheduler slurm --time_limit 11.5 --note "3NC_SYNTHETIC_BLACKBOXHYBRID_HARDSIGMOID_NONOISE" $PLOT_STR
 #                 done
 #             done
 #         done
