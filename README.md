@@ -153,9 +153,9 @@ The covariates and biogeochemical parameters are described in the Appendix.
 
 This codebase is built on the following public repositories:
 
-BINN (Biogeochemistry-Informed Neural Networks, MIT License): https://github.com/Hardyxu8067/BINN
-Q10Hybrid (Apache License): https://github.com/bask0/q10hybrid
-pykan (MIT License): https://github.com/KindXiaoming/pykan
+- BINN (Biogeochemistry-Informed Neural Networks, MIT License): https://github.com/Hardyxu8067/BINN
+- Q10Hybrid (Apache License): https://github.com/bask0/q10hybrid
+- pykan (MIT License): https://github.com/KindXiaoming/pykan
 
 In addition, the datasets used in the CLM5 experiments are drawn from this paper, which cites the original data sources (such as WoSIS and MODIS NPP):
 
