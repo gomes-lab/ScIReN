@@ -3,7 +3,7 @@
 This repo contains the code for ["Scientifically-Interpretable Reasoning Network (ScIReN):
 Discovering Hidden Relationships in the Carbon Cycle and Beyond"](https://arxiv.org/pdf/2506.14054) (AAAI 2026).
 
-![alt text](https://github.com/gomes-lab/ScIREN/figures/ScIReN_Structure.png "Logo Title Text 1")
+![alt text](/figures/ScIReN_Structure.png "Logo Title Text 1")
 
 
 ## Dataset download
@@ -142,10 +142,11 @@ sbatch slurm_scripts/4e_real_sciren_2layer.sh
 The covariates and biogeochemical parameters are described in the Appendix.
 
 
-## Licenses
+## Sources
 
 This codebase is built on the following public repositories:
 
+BINN (Biogeochemistry-Informed Neural Networks, MIT License): https://github.com/Hardyxu8067/BINN
 Q10Hybrid (Apache License): https://github.com/bask0/q10hybrid
 pykan (MIT License): https://github.com/KindXiaoming/pykan
 
