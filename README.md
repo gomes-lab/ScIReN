@@ -1,7 +1,9 @@
 # ScIReN
 
-This code implements the method and experiments in "Scientifically-Interpretable Reasoning 
-Network (ScIReN): Uncovering the Black Box of Nature".
+This repo contains the code for ["Scientifically-Interpretable Reasoning Network (ScIReN):
+Discovering Hidden Relationships in the Carbon Cycle and Beyond"](https://arxiv.org/pdf/2506.14054) (AAAI 2026).
+
+![alt text](https://github.com/gomes-lab/ScIREN/figures/ScIReN_Structure.png "Logo Title Text 1")
 
 
 ## Dataset download
