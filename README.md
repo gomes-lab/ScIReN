@@ -3,6 +3,7 @@
 This repo contains the code for ["Scientifically-Interpretable Reasoning Network (ScIReN):
 Discovering Hidden Relationships in the Carbon Cycle and Beyond"](https://arxiv.org/pdf/2506.14054) (AAAI 2026).
 
+For more information, see our [slides](http://joshuafan.github.io/files/ScIReN_slides.pdf) or [poster](http://joshuafan.github.io/files/ScIReN_poster.pdf)
 ![alt text](/figures/ScIReN_Structure.png "Logo Title Text 1")
 
 If you find this code helpful, please consider citing the following papers:
